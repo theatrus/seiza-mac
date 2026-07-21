@@ -12,12 +12,27 @@ you ask it to.
 ## Project status
 
 - **Latest public release:** [v0.3.0](https://github.com/theatrus/seiza-mac/releases/tag/v0.3.0), signed and notarized for Apple silicon and Intel.
-- **Current `main`:** unreleased. It adds repaired Finder Quick Look previews, paired histograms, image export, faster catalog installation, direct use of upstream `seiza-cabi`, exact core version reporting, and full-precision stretch stacks with undo/redo, live previews, and optional background-gradient removal.
+- **Current `main`:** unreleased. It adds repaired Finder Quick Look previews, paired histograms, image export, faster catalog installation, direct use of upstream `seiza-cabi`, exact core version reporting, and stackable stretch controls with undo/redo.
+- **In development:** [PR #12](https://github.com/theatrus/seiza-mac/pull/12) adds latest-only live stretch previews, background-gradient removal, in-place stage editing and reordering, and a detachable stretch utility panel.
 - **Next focus:** the serious-inspection work in [the roadmap](docs/ROADMAP.md), starting with a real pixel loupe and measured image-quality overlays.
 
-![Seiza browsing an astronomy-image folder with its thumbnail drawer](docs/images/seiza-gallery.jpg)
+## See what is in the frame
 
-![Seiza displaying a plate-solved FITS image with a WCS grid, field center, and catalog overlays](docs/images/seiza-solved-fits.jpg)
+Press Solve when you want sky context. Seiza draws catalog-colored object
+outlines, names, stars, and a WCS grid over the image, while the inspector keeps
+the input and display histograms and solve quality visible.
+
+![Seiza displaying a solved narrowband FITS image with catalog outlines, named stars, a WCS grid, paired histograms, and solution quality](docs/images/seiza-solved-overlays.png)
+
+## Review a whole night without leaving the viewer
+
+Open a directory, move through hundreds of mixed FITS and raster frames with
+the arrow keys, and use cached thumbnails to keep the sequence moving. Stretch
+controls stay live over the image and can detach into a persistent panel.
+
+![Seiza browsing a 299-frame FITS directory while editing a live stretch](docs/images/seiza-directory-stretch.png)
+
+[Read the practical guide to browsing, stretching, solving, overlays, and export.](docs/USING-SEIZA.md)
 
 Seiza is a real Mac app built with SwiftUI, AppKit, and the
 [Seiza](https://github.com/theatrus/seiza) Rust core. There is no Tauri,
@@ -26,24 +41,26 @@ Electron, web view, or local server.
 ## Feature matrix
 
 The release column describes the downloadable v0.3.0 build. The `main` column
-describes code that has merged but has not been published as a versioned release.
+describes merged but unreleased code. The development column is the open
+[live-processing PR](https://github.com/theatrus/seiza-mac/pull/12) shown in the
+new screenshots above.
 
-| Feature | v0.3.0 release | Current `main` | What you get |
-| --- | --- | --- | --- |
-| FITS and raster viewing | Included | Included | Open FITS, JPEG, PNG, and TIFF files or drop them onto an existing window. |
-| Folder browsing | Included | Included | Browse mixed-format folders with a thumbnail drawer, local thumbnail cache, and arrow-key navigation. |
-| FITS display | Included | Included | View mono, planar RGB, and Bayer/OSC data with fast native rendering. |
-| Stretch controls | Basic RGB modes | Expanded | Add, remove, reorder, and edit automatic or manual stages without intermediate 8-bit quantization; preview changes live in the default popover or a detachable utility panel; undo and redo edits; optionally remove smooth background gradients before stretching; pick GHS symmetry points from the image; and choose linked, per-channel, or luminance-preserving color handling. |
-| Zoom and inspection | Headers and statistics | Expanded | Fit to window, pan, pinch around the pointer, and compare pre- and post-stretch histograms alongside headers and statistics. |
-| Local plate solving | Included | Included | Run a blind solve only when you press Solve. No image is uploaded. |
-| Catalog setup | Included | Faster installation | Download, verify, install, or repair solver catalogs in Settings with visible progress and reuse the verified cache through hard links when possible. |
-| Solver overlays | Included | Included | Toggle named and field stars, individual deep-sky catalogs, transients, comets, asteroids, detections, coordinate grid, and field center. |
-| Object outlines | Included | Included | Draw detailed OpenNGC contours with catalog ellipses as a fallback. |
-| Image export | Not included | Available | Export the displayed image as PNG, JPEG, or TIFF, with or without the currently visible solve overlays. |
-| Finder Quick Look preview | Known Finder issue | Fixed | Select a FITS file in Finder and press Space to see a stretched preview without opening Seiza. |
-| Finder file support | Included | Included | Register `.fits`, `.fit`, and `.fts` files with a dedicated FITS document icon. |
-| Finder icon thumbnails | Planned | Planned | Show image content on FITS file icons. Spacebar previews already work through Quick Look on `main`. |
-| FITS cubes and multiple extensions | Planned | Planned | Navigate image planes and HDUs inside one FITS file. |
+| Feature | v0.3.0 release | Current `main` | Development | What you get |
+| --- | --- | --- | --- | --- |
+| FITS and raster viewing | Included | Included | Same | Open FITS, JPEG, PNG, and TIFF files or drop them onto an existing window. |
+| Folder browsing | Included | Included | Same | Browse mixed-format folders with a thumbnail drawer, local thumbnail cache, and arrow-key navigation. |
+| FITS display | Included | Included | Same | View mono, planar RGB, and Bayer/OSC data with fast native rendering. |
+| Stretch controls | Basic RGB modes | Stackable | Live stack editor | Add, remove, reorder, and edit automatic or manual stages without intermediate 8-bit quantization; preview changes live in the default popover or a detachable utility panel; undo and redo edits; optionally remove smooth background gradients before stretching; pick GHS symmetry points from the image; and choose linked, per-channel, or luminance-preserving color handling. |
+| Zoom and inspection | Headers and statistics | Expanded | Same | Fit to window, pan, pinch around the pointer, and compare pre- and post-stretch histograms alongside headers and statistics. |
+| Local plate solving | Included | Included | Same | Run a blind solve only when you press Solve. No image is uploaded. |
+| Catalog setup | Included | Faster installation | Same | Download, verify, install, or repair solver catalogs in Settings with visible progress and reuse the verified cache through hard links when possible. |
+| Solver overlays | Included | Included | Same | Toggle named and field stars, individual deep-sky catalogs, transients, comets, asteroids, detections, coordinate grid, and field center. |
+| Object outlines | Included | Included | Same | Draw detailed OpenNGC contours with catalog ellipses as a fallback. |
+| Image export | Not included | Available | Same | Export the displayed image as PNG, JPEG, or TIFF, with or without the currently visible solve overlays. |
+| Finder Quick Look preview | Known Finder issue | Fixed | Same | Select a FITS file in Finder and press Space to see a stretched preview without opening Seiza. |
+| Finder file support | Included | Included | Same | Register `.fits`, `.fit`, and `.fts` files with a dedicated FITS document icon. |
+| Finder icon thumbnails | Planned | Planned | Planned | Show image content on FITS file icons. Spacebar previews already work through Quick Look on `main`. |
+| FITS cubes and multiple extensions | Planned | Planned | Planned | Navigate image planes and HDUs inside one FITS file. |
 
 ## Download
 
@@ -168,4 +185,5 @@ Always-visible image thumbnails on Finder file icons require a separate
 `QLThumbnailProvider` extension and are planned for a later release. Quick Look
 previews already work.
 
-See [ARCHITECTURE.md](docs/ARCHITECTURE.md) and [ROADMAP.md](docs/ROADMAP.md).
+See the [usage guide](docs/USING-SEIZA.md),
+[architecture](docs/ARCHITECTURE.md), and [roadmap](docs/ROADMAP.md).

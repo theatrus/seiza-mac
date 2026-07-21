@@ -58,6 +58,14 @@ linked or per-channel data, or stretch luminance while preserving RGB
 chromaticity. An optional background step fits and subtracts a smooth model
 from the linear mono or RGB samples before the first stretch stage.
 
+The Swift editor owns one draft stack independently from its presentation. The
+toolbar opens that editor as a bounded popover by default; a pop-out action
+hosts the same view, bindings, validation, and preview callbacks in a resizable
+AppKit utility panel. Adding, removing, selecting, or reordering a stage mutates
+the shared draft and schedules the same live-preview path. Saving replaces the
+committed stack as one undoable history operation. The panel closes when its
+document changes or disappears, so it cannot keep editing a stale image model.
+
 Interactive controls debounce edits and submit them to a serial latest-only
 preview queue. Pending work is cancelled when a newer edit arrives; a native
 render already inside the C ABI may finish, but its result is discarded. Only
