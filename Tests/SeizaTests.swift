@@ -33,6 +33,27 @@ final class ImageCollectionTests: XCTestCase {
     }
 }
 
+final class DocumentRegistrationTests: XCTestCase {
+    func testFITSRegistrationUsesDedicatedDocumentIcon() throws {
+        let documentTypes = try XCTUnwrap(
+            Bundle.main.infoDictionary?["CFBundleDocumentTypes"]
+                as? [[String: Any]]
+        )
+        let fitsType = try XCTUnwrap(documentTypes.first { declaration in
+            let contentTypes = declaration["LSItemContentTypes"] as? [String]
+            return contentTypes?.contains("fyi.seiza.fits") == true
+        })
+        let imageType = try XCTUnwrap(documentTypes.first { declaration in
+            let contentTypes = declaration["LSItemContentTypes"] as? [String]
+            return contentTypes?.contains("public.jpeg") == true
+        })
+
+        XCTAssertEqual(fitsType["CFBundleTypeIconFile"] as? String, "FITSFile")
+        XCTAssertNil(imageType["CFBundleTypeIconFile"])
+        XCTAssertNotNil(Bundle.main.url(forResource: "FITSFile", withExtension: "icns"))
+    }
+}
+
 final class RGBStretchModeTests: XCTestCase {
     func testCABIValuesAndUserFacingNamesStayStable() {
         XCTAssertEqual(RGBStretchMode.allCases, [.auto, .linkedAuto, .linear])

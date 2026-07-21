@@ -11,7 +11,7 @@
 - catalog-colored, independently toggleable solve overlays for named stars,
   deep-sky catalogs and OpenNGC contours, transients, acquisition-time comets
   and asteroids, field stars, coordinate grid, labels, and field center
-- Quick Look preview extension
+- HIG-style FITS document icon and Quick Look preview extension
 - signed, notarized Apple-silicon development distribution
 
 ## Phase 2 — serious inspection
@@ -25,7 +25,7 @@
 
 ## Phase 3 — system integration
 
-- `QLThumbnailProvider` Finder thumbnails and file-icon badging
+- `QLThumbnailProvider` Finder thumbnails
 - Spotlight metadata importer for selected FITS headers
 - “Open Rendered Image in Preview” TIFF handoff
 - Finder Quick Actions for solve and export
