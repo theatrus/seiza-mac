@@ -35,6 +35,21 @@ enum ImageExportFormat: String, CaseIterable, Identifiable {
         case .tiff: "tiff"
         }
     }
+
+    var supportedBitDepths: [ImageExportBitDepth] {
+        switch self {
+        case .png, .tiff: [.sixteen, .eight]
+        case .jpeg: [.eight]
+        }
+    }
+}
+
+enum ImageExportBitDepth: Int, CaseIterable, Identifiable {
+    case eight = 8
+    case sixteen = 16
+
+    var id: Self { self }
+    var title: String { "\(rawValue) bits per channel" }
 }
 
 final class ImageExportCoordinator: ObservableObject {
@@ -47,7 +62,14 @@ final class ImageExportCoordinator: ObservableObject {
 
 @MainActor
 final class ImageExportOptions: ObservableObject {
-    @Published var format: ImageExportFormat = .png
+    @Published var format: ImageExportFormat = .png {
+        didSet {
+            if !format.supportedBitDepths.contains(bitDepth) {
+                bitDepth = .eight
+            }
+        }
+    }
+    @Published var bitDepth: ImageExportBitDepth = .sixteen
     @Published var includesVisibleOverlays: Bool
 
     init(overlaysAvailable: Bool) {
@@ -69,6 +91,14 @@ struct ImageExportAccessoryView: View {
             }
             .pickerStyle(.menu)
 
+            Picker("Bit Depth", selection: $options.bitDepth) {
+                ForEach(options.format.supportedBitDepths) { bitDepth in
+                    Text(bitDepth.title).tag(bitDepth)
+                }
+            }
+            .pickerStyle(.menu)
+            .disabled(options.format.supportedBitDepths.count == 1)
+
             Toggle(
                 "Include visible overlays",
                 isOn: $options.includesVisibleOverlays
@@ -82,12 +112,15 @@ struct ImageExportAccessoryView: View {
 
 enum ImageExportError: LocalizedError {
     case couldNotCreateDestination
+    case couldNotComposite
     case couldNotEncode
 
     var errorDescription: String? {
         switch self {
         case .couldNotCreateDestination:
             "The destination could not be prepared for writing."
+        case .couldNotComposite:
+            "The visible overlays could not be composited at the requested bit depth."
         case .couldNotEncode:
             "ImageIO could not encode the image in the selected format."
         }
@@ -95,6 +128,55 @@ enum ImageExportError: LocalizedError {
 }
 
 enum ImageFileWriter {
+    static func compositing(_ overlay: CGImage, over image: CGImage) throws -> CGImage {
+        guard image.width == overlay.width, image.height == overlay.height else {
+            throw ImageExportError.couldNotComposite
+        }
+
+        let bitsPerComponent = image.bitsPerComponent
+        let bytesPerPixel: Int
+        var bitmapInfo = CGBitmapInfo(
+            rawValue: CGImageAlphaInfo.premultipliedLast.rawValue
+        )
+        switch bitsPerComponent {
+        case 8:
+            bytesPerPixel = 4
+        case 16:
+            bytesPerPixel = 8
+            #if _endian(little)
+            bitmapInfo.insert(.byteOrder16Little)
+            #else
+            bitmapInfo.insert(.byteOrder16Big)
+            #endif
+        default:
+            throw ImageExportError.couldNotComposite
+        }
+
+        guard
+            let colorSpace = image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB),
+            let context = CGContext(
+                data: nil,
+                width: image.width,
+                height: image.height,
+                bitsPerComponent: bitsPerComponent,
+                bytesPerRow: image.width * bytesPerPixel,
+                space: colorSpace,
+                bitmapInfo: bitmapInfo.rawValue
+            )
+        else {
+            throw ImageExportError.couldNotComposite
+        }
+
+        let bounds = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        context.interpolationQuality = .none
+        context.draw(image, in: bounds)
+        context.draw(overlay, in: bounds)
+        guard let composited = context.makeImage() else {
+            throw ImageExportError.couldNotComposite
+        }
+        return composited
+    }
+
     static func write(
         _ image: CGImage,
         to url: URL,

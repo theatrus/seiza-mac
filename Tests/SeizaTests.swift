@@ -188,6 +188,49 @@ final class ImageExportTests: XCTestCase {
         }
     }
 
+    func testWritesSixteenBitPNGAndTIFFWithoutDownconversion() throws {
+        let image = try makeTestImage16()
+        let overlay = try makeTestImage()
+        let composited = try ImageFileWriter.compositing(overlay, over: image)
+        XCTAssertEqual(composited.bitsPerComponent, 16)
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString,
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        for (name, candidate) in [("plain", image), ("overlays", composited)] {
+            for format in [ImageExportFormat.png, .tiff] {
+                let url = directory.appendingPathComponent(
+                    "\(name)-16.\(format.fileExtension)"
+                )
+                try ImageFileWriter.write(candidate, to: url, format: format)
+
+                let source = try XCTUnwrap(CGImageSourceCreateWithURL(url as CFURL, nil))
+                let decoded = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+                XCTAssertEqual(decoded.bitsPerComponent, 16, "\(name) \(format.title)")
+                XCTAssertEqual(decoded.width, 2)
+                XCTAssertEqual(decoded.height, 2)
+            }
+        }
+    }
+
+    func testJPEGOnlyOffersEightBitExport() {
+        XCTAssertEqual(ImageExportFormat.jpeg.supportedBitDepths, [.eight])
+        XCTAssertEqual(ImageExportFormat.png.supportedBitDepths, [.sixteen, .eight])
+        XCTAssertEqual(ImageExportFormat.tiff.supportedBitDepths, [.sixteen, .eight])
+    }
+
+    @MainActor
+    func testChangingToJPEGForcesEightBitExport() {
+        let options = ImageExportOptions(overlaysAvailable: false)
+        XCTAssertEqual(options.bitDepth, .sixteen)
+        options.format = .jpeg
+        XCTAssertEqual(options.bitDepth, .eight)
+    }
+
     func testPixelSamplerReturnsDisplayedLuminance() throws {
         let image = try makeTestImage()
         XCTAssertEqual(
@@ -240,6 +283,38 @@ final class ImageExportTests: XCTestCase {
             )
         )
     }
+
+    private func makeTestImage16() throws -> CGImage {
+        let samples: [UInt16] = [
+            1, 256, 32_768, 65_535,
+            257, 16_384, 50_000, 65_535,
+            2, 30_000, 60_000, 65_535,
+            123, 32_767, 65_534, 65_535,
+        ]
+        let data = samples.withUnsafeBytes { Data($0) }
+        let provider = try XCTUnwrap(CGDataProvider(data: data as CFData))
+        var bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue)
+        #if _endian(little)
+        bitmapInfo.insert(.byteOrder16Little)
+        #else
+        bitmapInfo.insert(.byteOrder16Big)
+        #endif
+        return try XCTUnwrap(
+            CGImage(
+                width: 2,
+                height: 2,
+                bitsPerComponent: 16,
+                bitsPerPixel: 64,
+                bytesPerRow: 16,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: bitmapInfo,
+                provider: provider,
+                decode: nil,
+                shouldInterpolate: false,
+                intent: .defaultIntent
+            )
+        )
+    }
 }
 
 final class RenderBoundaryTests: XCTestCase {
@@ -272,6 +347,7 @@ final class RenderBoundaryTests: XCTestCase {
         let rendered = try SeizaCore.render(url: url, maxDimension: 4_096)
         XCTAssertEqual(rendered.image.width, 2)
         XCTAssertEqual(rendered.image.height, 2)
+        XCTAssertEqual(rendered.image.bitsPerComponent, 8)
         let histogram = try XCTUnwrap(rendered.metadata.displayHistogram)
         XCTAssertTrue(histogram.isValid)
         XCTAssertEqual(histogram.red.reduce(0, +), 4)
@@ -282,6 +358,23 @@ final class RenderBoundaryTests: XCTestCase {
         XCTAssertEqual(inputHistogram.upperBound, 65_535)
         XCTAssertEqual(inputHistogram.red.reduce(0, +), 4)
         XCTAssertEqual(rendered.metadata.stretchStages, 1)
+
+        let rendered16 = try SeizaCore.render16(url: url, maxDimension: 4_096)
+        XCTAssertEqual(rendered16.image.width, 2)
+        XCTAssertEqual(rendered16.image.height, 2)
+        XCTAssertEqual(rendered16.image.bitsPerComponent, 16)
+        XCTAssertEqual(rendered16.image.bitsPerPixel, 64)
+        XCTAssertEqual(rendered16.metadata.displayHistogram?.upperBound, 65_535)
+        let rgba16Data = try XCTUnwrap(rendered16.image.dataProvider?.data as Data?)
+        let rgba16Samples = rgba16Data.withUnsafeBytes {
+            Array($0.bindMemory(to: UInt16.self))
+        }
+        XCTAssertTrue(
+            rgba16Samples.enumerated().contains { index, sample in
+                index % 4 != 3 && sample % 257 != 0
+            },
+            "The Swift boundary must preserve values finer than replicated RGBA8"
+        )
 
         for stretchType in FITSStretchType.allCases {
             var configuration = FITSStretchConfiguration.default

@@ -804,24 +804,75 @@ private struct ImagePageView: View {
         }
         withExtendedLifetime(formatObserver) {}
 
-        let exportedImage: CGImage
-        if options.includesVisibleOverlays,
-           let solution = solvedSolution,
-           let composited = renderExportImage(image: image, solution: solution) {
-            exportedImage = composited
-        } else {
-            exportedImage = image
+        let format = options.format
+        let bitDepth = format.supportedBitDepths.contains(options.bitDepth)
+            ? options.bitDepth
+            : .eight
+        let includesOverlays = options.includesVisibleOverlays && overlaysAvailable
+        let solution = includesOverlays ? solvedSolution : nil
+        let exportedImage8: CGImage?
+        let overlayImage: CGImage?
+        switch bitDepth {
+        case .eight:
+            if let solution {
+                guard let composited = renderExportImage(image: image, solution: solution) else {
+                    exportError = ImageExportError.couldNotComposite.localizedDescription
+                    return
+                }
+                exportedImage8 = composited
+            } else {
+                exportedImage8 = image
+            }
+            overlayImage = nil
+        case .sixteen:
+            exportedImage8 = nil
+            if let solution {
+                guard let overlay = renderExportOverlay(
+                    sourceSize: CGSize(width: image.width, height: image.height),
+                    solution: solution
+                ) else {
+                    exportError = ImageExportError.couldNotComposite.localizedDescription
+                    return
+                }
+                overlayImage = overlay
+            } else {
+                overlayImage = nil
+            }
         }
 
         isExporting = true
-        let format = options.format
+        let sourceURL = model.url
+        let processing = model.processingConfiguration
         DispatchQueue.global(qos: .userInitiated).async {
             let result = Result {
-                try ImageFileWriter.write(
-                    exportedImage,
-                    to: destinationURL,
-                    format: format
-                )
+                switch bitDepth {
+                case .eight:
+                    guard let exportedImage8 else {
+                        throw ImageExportError.couldNotComposite
+                    }
+                    try ImageFileWriter.write(
+                        exportedImage8,
+                        to: destinationURL,
+                        format: format
+                    )
+                case .sixteen:
+                    let accessing = sourceURL.startAccessingSecurityScopedResource()
+                    defer { if accessing { sourceURL.stopAccessingSecurityScopedResource() } }
+                    let rendered = try SeizaCore.render16(
+                        url: sourceURL,
+                        processing: processing
+                    )
+                    let exportedImage = if let overlayImage {
+                        try ImageFileWriter.compositing(overlayImage, over: rendered.image)
+                    } else {
+                        rendered.image
+                    }
+                    try ImageFileWriter.write(
+                        exportedImage,
+                        to: destinationURL,
+                        format: format
+                    )
+                }
             }
             DispatchQueue.main.async {
                 isExporting = false
@@ -860,6 +911,36 @@ private struct ImagePageView: View {
         renderer.scale = 1
         renderer.isOpaque = true
         renderer.proposedSize = ProposedViewSize(size)
+        return renderer.cgImage
+    }
+
+    @MainActor
+    private func renderExportOverlay(
+        sourceSize: CGSize,
+        solution: SolveResult
+    ) -> CGImage? {
+        let renderer = ImageRenderer(
+            content: SolveOverlayView(
+                solution: solution,
+                sourceSize: sourceSize,
+                showsDeepSky: showDeepSky,
+                showsNamedStars: showNamedStars,
+                showsTransients: showTransients,
+                showsHistoricalTransients: showHistoricalTransients,
+                showsMinorBodies: showMinorBodies,
+                showsCoordinateGrid: showCoordinateGrid,
+                showsCatalogOutlines: showCatalogOutlines,
+                showsObjectLabels: showObjectLabels,
+                showsDetectedStars: showDetectedStars,
+                showsFieldStars: showFieldStars,
+                showsFieldCenter: showFieldCenter,
+                hiddenDeepSkyCatalogs: hiddenDeepSkyCatalogs,
+                rendersAsynchronously: false
+            )
+        )
+        renderer.scale = 1
+        renderer.isOpaque = false
+        renderer.proposedSize = ProposedViewSize(sourceSize)
         return renderer.cgImage
     }
 

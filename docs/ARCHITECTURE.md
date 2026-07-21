@@ -37,7 +37,8 @@ implementation. It also exports the exact Seiza Git commit selected by
 handles, borrowed byte buffers, owned UTF-8 strings, and JSON records. No Rust
 layout, allocator-owned memory, or panic is allowed to cross the ABI:
 
-- rendered RGBA bytes remain owned by an opaque handle until Swift copies them;
+- rendered RGBA8 or native-endian RGBA16 samples remain owned by their distinct
+  opaque handles until Swift copies them;
 - strings returned to Swift have an explicit `seiza_string_free` function;
 - every public operation catches panics and converts failures to an error
   string;
@@ -46,6 +47,16 @@ layout, allocator-owned memory, or panic is allowed to cross the ABI:
 
 JSON is used for metadata and WCS because those records evolve more often than
 the high-volume pixel path. Pixels stay in a direct contiguous buffer.
+
+Display, thumbnail, and Quick Look rendering use only the RGBA8 owner. A 16-bit
+PNG or TIFF export makes a separate full-resolution RGBA16 request, converts
+the native-endian samples to a byte-order-explicit 64-bit `CGImage`, and lets
+ImageIO encode that image without an 8-bit intermediate. JPEG and explicitly
+8-bit exports keep using the committed display image. Solve overlays are
+rendered as a transparent layer and composited in a 16-bit bitmap context, so
+including them does not down-convert the source. This boundary is based on the
+rendered pixels rather than the source extension, allowing another supported
+high-depth input such as XISF to reuse it.
 
 FITS display rendering sends a non-empty, ordered stack of validated stretch
 configurations to the C ABI. Rust keeps intermediate stage data in `f32` and

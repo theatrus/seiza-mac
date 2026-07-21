@@ -11,14 +11,17 @@ installer, reports the exact linked core version, and adds full-precision
 stackable stretch controls with undo/redo, image-picked GHS symmetry points,
 latest-only live previews, optional smooth background-gradient removal,
 in-place add/remove/reorder controls, and a detachable utility panel.
-
-Active [PR #13](https://github.com/theatrus/seiza-mac/pull/13) adds optional
-conservative deconvolution after background correction and before stretching.
-The Mac controls expose measured PSF FWHM,
+Optional conservative deconvolution is now on `main`, after background
+correction and before stretching. The Mac controls expose measured PSF FWHM,
 iterations, amount, noise damping, and correction limits without enabling the
 operation by default. Merged [Seiza PR #76](https://github.com/theatrus/seiza/pull/76)
 composes that step inside the native linear FITS render pipeline and preserves
 the cached background-prepared preview across deconvolution edits.
+
+Current development adds source-resolution 16-bit PNG and TIFF export over the
+native RGBA16 boundary from [Seiza PR #77](https://github.com/theatrus/seiza/pull/77).
+XISF is the next input-format integration; it will reuse the same generic
+high-bit-depth render and export path instead of adding a format-specific writer.
 
 ## Phase 1 — native viewer foundation (complete on `main`)
 
@@ -36,7 +39,7 @@ the cached background-prepared preview across deconvolution edits.
   deep-sky catalogs and OpenNGC contours, transients, acquisition-time comets
   and asteroids, field stars, coordinate grid, labels, and field center
 - HIG-style FITS document icon and Quick Look preview extension
-- source-resolution PNG, JPEG, and TIFF export with optional visible solve overlays
+- source-resolution 8-bit PNG, JPEG, and TIFF export with optional visible solve overlays
 - signed and notarized universal Apple-silicon/Intel distribution with
   protected CI signing
 - managed, retry-safe catalog download and repair UI with readiness checks and
@@ -44,7 +47,9 @@ the cached background-prepared preview across deconvolution edits.
 
 ## Phase 2 — serious inspection (in progress)
 
-- optional conservative stellar deconvolution with live bounded previews
+- source-resolution 16-bit PNG and TIFF export with 16-bit overlay compositing
+- XISF document, directory, rendering, solving, and export input support
+- optional conservative stellar deconvolution with live bounded previews (complete on `main`)
 - pixel loupe, black/midtone controls, and finer stretch controls
 - star-detection overlays and measured HFR/FWHM
 - compass, scale bar, and WCS cursor readout
