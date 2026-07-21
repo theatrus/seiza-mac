@@ -749,11 +749,11 @@ private struct ImagePageView: View {
     @ViewBuilder
     private var imagePane: some View {
         switch model.loadState {
-        case .loading:
+        case .loading, .loaded:
             if let image = model.image {
-                imageCanvas(image: image, showsLoadingIndicator: true)
+                imageCanvas(image: image, showsLoadingIndicator: isLoading)
             } else if let previewImage = model.previewImage {
-                imageCanvas(image: previewImage, showsLoadingIndicator: true)
+                imageCanvas(image: previewImage, showsLoadingIndicator: isLoading)
             } else {
                 ProgressView("Reading image…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -764,11 +764,11 @@ private struct ImagePageView: View {
                 systemImage: "exclamationmark.triangle",
                 description: Text(message)
             )
-        case .loaded:
-            if let image = model.image {
-                imageCanvas(image: image, showsLoadingIndicator: false)
-            }
         }
+    }
+
+    private var isLoading: Bool {
+        if case .loading = model.loadState { true } else { false }
     }
 
     private func imageCanvas(
@@ -875,7 +875,9 @@ private struct ImagePageView: View {
             }
             .onAppear {
                 viewportSize = geometry.size
-                applyFitZoom(image: image, viewport: geometry.size)
+                if isFitToWindow {
+                    applyFitZoom(image: image, viewport: geometry.size)
+                }
             }
             .onChange(of: geometry.size) { _, newSize in
                 viewportSize = newSize
