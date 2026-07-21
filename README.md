@@ -30,10 +30,9 @@ Electron, web view, or local server.
 | Catalog setup | Available | Download, verify, install, or repair solver catalogs in Settings with visible progress. |
 | Solver overlays | Available | Toggle named and field stars, individual deep-sky catalogs, transients, comets, asteroids, detections, coordinate grid, and field center. |
 | Object outlines | Available | Draw detailed OpenNGC contours with catalog ellipses as a fallback. |
-| FITS Quick Look | Available | Press Space in Finder to preview a stretched FITS image without opening Seiza. |
+| Finder Quick Look preview | Available | Select a FITS file in Finder and press Space to see a stretched preview without opening Seiza. |
 | Finder file support | Available | Register `.fits`, `.fit`, and `.fts` files with a dedicated FITS document icon. |
-| Finder thumbnails | Planned | Show rendered FITS thumbnails directly in Finder. |
-| Preview.app handoff | Planned | Open a rendered TIFF or PNG copy in Preview. |
+| Finder icon thumbnails | Planned | Show image content on FITS file icons. Spacebar previews already work through Quick Look. |
 | FITS cubes and multiple extensions | Planned | Navigate image planes and HDUs inside one FITS file. |
 
 ## Download
@@ -145,18 +144,14 @@ only begin when the user presses Solve. If the required star catalog or blind
 index is missing, Solve explains the problem and links back to Catalog Settings.
 Satellite overlays are intentionally deferred.
 
-## Quick Look and Preview.app
+## Finder integration
 
-The bundled Quick Look extension is the supported modern macOS integration
-for custom previews. Once the signed app is installed, it makes stretched FITS
-previews available to system Quick Look clients for the registered FITS type.
-Apple documents Quick Look preview extensions, but does not expose a modern
-third-party decoder plug-in API for Preview.app itself. Direct “Open in
-Preview” handoff can be added by rendering a temporary TIFF or PNG; making
-Preview.app decode the original FITS file in-process is intentionally not part
-of this design.
+Installing Seiza registers FITS files and its Quick Look extension with macOS.
+Select a `.fits`, `.fit`, or `.fts` file in Finder and press Space to see a
+stretched preview without opening the app.
 
-Finder image thumbnails are a separate `QLThumbnailProvider` extension and are
-deliberately left for the next phase.
+Always-visible image thumbnails on Finder file icons require a separate
+`QLThumbnailProvider` extension and are planned for a later release. Quick Look
+previews already work.
 
 See [ARCHITECTURE.md](docs/ARCHITECTURE.md) and [ROADMAP.md](docs/ROADMAP.md).
