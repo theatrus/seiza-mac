@@ -64,7 +64,10 @@ render already inside the C ABI may finish, but its result is discarded. Only
 the newest result can update the document. The preview is bounded to 2048
 pixels while the committed full-resolution render remains separate for export,
 and source dimensions from metadata keep zoom and overlay geometry stable while
-the preview is visible.
+the preview is visible. The C ABI retains the two most recent prepared linear
+preview buffers, keyed by file identity, preview size, and background settings.
+Stretch-only edits therefore reuse the decoded, downsampled, and (when enabled)
+background-corrected pixels instead of refitting the same background.
 
 Raster JPEG, PNG, and TIFF pixels remain color-managed display data and bypass
 the FITS stretch pipeline. Thumbnail-cache and background-render job identities
