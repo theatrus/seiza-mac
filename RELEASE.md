@@ -26,7 +26,7 @@ Confirm that the intended release version has not already been tagged or
 published:
 
 ```sh
-version=0.2.0
+version=0.3.0
 git rev-parse "v${version}" 2>/dev/null && exit 1 || true
 gh release view "v${version}" && exit 1 || true
 ```
@@ -112,7 +112,7 @@ build; the annotated tag still creates the permanent versioned release.
 Create an annotated tag on the verified `main` commit:
 
 ```sh
-version=0.2.0
+version=0.3.0
 test "$(git branch --show-current)" = main
 test -z "$(git status --short)"
 git tag -a "v${version}" -m "Seiza ${version}"
