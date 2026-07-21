@@ -317,8 +317,8 @@ private struct ImagePageView: View {
     @State private var isExporting = false
     @State private var exportError: String?
     @State private var showStretchControls = false
-    @State private var stretchDraft = FITSStretchConfiguration.default
-    @State private var stretchEditMode = FITSStretchEditMode.editCurrent
+    @State private var stretchDraftStages = [FITSStretchConfiguration.default]
+    @State private var selectedStretchStageIndex = 0
     @State private var extractsBackgroundDraft = false
     @State private var isPickingSymmetryPoint = false
 
@@ -397,8 +397,8 @@ private struct ImagePageView: View {
                 .help("Redo Stretch (⇧⌘Z)")
 
                 Button {
-                    stretchDraft = model.stretchConfiguration
-                    stretchEditMode = .editCurrent
+                    stretchDraftStages = model.stretchHistory.appliedStages
+                    selectedStretchStageIndex = stretchDraftStages.count - 1
                     extractsBackgroundDraft = model.extractsBackground
                     showStretchControls.toggle()
                 } label: {
@@ -412,23 +412,24 @@ private struct ImagePageView: View {
                 )
                 .popover(isPresented: $showStretchControls, arrowEdge: .bottom) {
                     FITSStretchControlsView(
-                        configuration: $stretchDraft,
-                        editMode: $stretchEditMode,
+                        stages: $stretchDraftStages,
+                        selectedStageIndex: $selectedStretchStageIndex,
                         extractsBackground: $extractsBackgroundDraft,
                         supportsColor: model.supportsColorStretch,
-                        appliedStages: model.stretchHistory.appliedStages,
                         canUndo: model.stretchHistory.canUndo,
                         canRedo: model.stretchHistory.canRedo,
                         isPreviewRendering: model.isPreviewRendering,
                         previewError: model.previewError,
                         undo: {
                             model.undoStretch()
-                            stretchDraft = model.stretchConfiguration
+                            stretchDraftStages = model.stretchHistory.appliedStages
+                            selectedStretchStageIndex = stretchDraftStages.count - 1
                             extractsBackgroundDraft = model.extractsBackground
                         },
                         redo: {
                             model.redoStretch()
-                            stretchDraft = model.stretchConfiguration
+                            stretchDraftStages = model.stretchHistory.appliedStages
+                            selectedStretchStageIndex = stretchDraftStages.count - 1
                             extractsBackgroundDraft = model.extractsBackground
                         },
                         pickSymmetryPoint: {
@@ -442,19 +443,11 @@ private struct ImagePageView: View {
                             )
                         },
                         clearPreview: model.cancelPreview,
-                        save: { mode in
-                            switch mode {
-                            case .editCurrent:
-                                model.updateCurrentStretch(
-                                    stretchDraft,
-                                    extractsBackground: extractsBackgroundDraft
-                                )
-                            case .addStage:
-                                model.addStretch(
-                                    stretchDraft,
-                                    extractsBackground: extractsBackgroundDraft
-                                )
-                            }
+                        save: { stack, extractsBackground in
+                            model.replaceStretchStack(
+                                with: stack,
+                                extractsBackground: extractsBackground
+                            )
                             showStretchControls = false
                         },
                         cancel: {
@@ -958,10 +951,12 @@ private struct ImagePageView: View {
             return
         }
 
-        stretchDraft.type = .ghs
-        stretchDraft.symmetryPoint = sample
-        stretchDraft.protectShadows = min(stretchDraft.protectShadows, sample)
-        stretchDraft.protectHighlights = max(stretchDraft.protectHighlights, sample)
+        var configuration = stretchDraftStages[selectedStretchStageIndex]
+        configuration.type = .ghs
+        configuration.symmetryPoint = sample
+        configuration.protectShadows = min(configuration.protectShadows, sample)
+        configuration.protectHighlights = max(configuration.protectHighlights, sample)
+        stretchDraftStages[selectedStretchStageIndex] = configuration
         isPickingSymmetryPoint = false
         showStretchControls = true
     }

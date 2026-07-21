@@ -112,13 +112,16 @@ final class ImageDocumentModel: ObservableObject {
     }
 
     func replaceStretchStack(
-        with configuration: FITSStretchConfiguration,
+        with stack: FITSStretchStack,
         extractsBackground: Bool
     ) {
-        guard configuration.validationMessage == nil else { return }
+        guard stack.stages.allSatisfy({ $0.validationMessage == nil }) else { return }
+        let hasChanges = stretchHistory.stack != stack
+            || self.extractsBackground != extractsBackground
         cancelPreview()
+        guard hasChanges else { return }
         var history = stretchHistory
-        history.replace(with: configuration)
+        history.replaceStack(with: stack.stages)
         stretchHistory = history
         self.extractsBackground = extractsBackground
         load()

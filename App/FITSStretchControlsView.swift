@@ -1,32 +1,10 @@
 import SwiftUI
 
-enum FITSStretchEditMode: String, CaseIterable, Identifiable {
-    case editCurrent
-    case addStage
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .editCurrent: "Current Stage"
-        case .addStage: "New Stage"
-        }
-    }
-
-    var actionTitle: String {
-        switch self {
-        case .editCurrent: "Save Changes"
-        case .addStage: "Add Stretch"
-        }
-    }
-}
-
 struct FITSStretchControlsView: View {
-    @Binding var configuration: FITSStretchConfiguration
-    @Binding var editMode: FITSStretchEditMode
+    @Binding var stages: [FITSStretchConfiguration]
+    @Binding var selectedStageIndex: Int
     @Binding var extractsBackground: Bool
     let supportsColor: Bool
-    let appliedStages: [FITSStretchConfiguration]
     let canUndo: Bool
     let canRedo: Bool
     let isPreviewRendering: Bool
@@ -36,7 +14,7 @@ struct FITSStretchControlsView: View {
     let pickSymmetryPoint: () -> Void
     let preview: (FITSStretchStack, Bool) -> Void
     let clearPreview: () -> Void
-    let save: (FITSStretchEditMode) -> Void
+    let save: (FITSStretchStack, Bool) -> Void
     let cancel: () -> Void
 
     @State private var previewTask: Task<Void, Never>?
@@ -48,8 +26,8 @@ struct FITSStretchControlsView: View {
                 Text("FITS Stretch")
                     .font(.headline)
                 Spacer()
-                Button("Reset") {
-                    configuration = .default
+                Button("Reset Stage") {
+                    stages[selectedStageIndex] = .default
                 }
                 .controlSize(.small)
             }
@@ -62,9 +40,13 @@ struct FITSStretchControlsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
-                            Text("Applied Stages")
+                            Text("Stretch Stages")
                                 .font(.subheadline.weight(.semibold))
                             Spacer()
+                            Button(action: addStage) {
+                                Label("Add Stage", systemImage: "plus")
+                            }
+                            .help("Add another stretch stage")
                             Button(action: undo) {
                                 Label("Undo Stretch", systemImage: "arrow.uturn.backward")
                                     .labelStyle(.iconOnly)
@@ -79,23 +61,74 @@ struct FITSStretchControlsView: View {
                             .help("Redo stretch")
                         }
 
-                        ForEach(Array(appliedStages.enumerated()), id: \.offset) { index, stage in
-                            HStack(spacing: 8) {
-                                Image(systemName: index == 0 ? "photo" : "plus.circle.fill")
-                                    .foregroundStyle(
-                                        index == 0 ? Color.secondary : Color.accentColor
+                        ForEach(Array(stages.enumerated()), id: \.offset) { index, stage in
+                            HStack(spacing: 4) {
+                                Button {
+                                    selectedStageIndex = index
+                                } label: {
+                                    HStack(spacing: 8) {
+                                        Text("\(index + 1)")
+                                            .monospacedDigit()
+                                            .foregroundStyle(.secondary)
+                                            .frame(width: 16, alignment: .trailing)
+                                        Text(stage.type.title)
+                                            .lineLimit(1)
+                                        Spacer()
+                                        if index == 0 {
+                                            Text("First")
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .contentShape(Rectangle())
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 5)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .fill(
+                                                index == selectedStageIndex
+                                                    ? Color.accentColor.opacity(0.18)
+                                                    : .clear
+                                            )
                                     )
-                                Text(stage.type.title)
-                                Spacer()
-                                if index == 0 {
-                                    Text("Base")
-                                        .foregroundStyle(.secondary)
                                 }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Stage \(index + 1), \(stage.type.title)")
+                                .accessibilityValue(
+                                    index == selectedStageIndex ? "Selected" : ""
+                                )
+
+                                Button {
+                                    moveStage(at: index, by: -1)
+                                } label: {
+                                    Label("Move Stage Up", systemImage: "chevron.up")
+                                        .labelStyle(.iconOnly)
+                                }
+                                .disabled(index == 0)
+                                .help("Move stage earlier")
+
+                                Button {
+                                    moveStage(at: index, by: 1)
+                                } label: {
+                                    Label("Move Stage Down", systemImage: "chevron.down")
+                                        .labelStyle(.iconOnly)
+                                }
+                                .disabled(index == stages.count - 1)
+                                .help("Move stage later")
+
+                                Button(role: .destructive) {
+                                    removeStage(at: index)
+                                } label: {
+                                    Label("Remove Stage", systemImage: "xmark")
+                                        .labelStyle(.iconOnly)
+                                }
+                                .disabled(stages.count == 1)
+                                .help("Remove stage")
                             }
+                            .controlSize(.small)
                             .font(.caption)
                         }
 
-                        Text("Each new stage operates on the previous stage at full floating-point precision.")
+                        Text("Stages run from top to bottom at full floating-point precision. Select one to edit it; add, remove, or reorder without closing this window.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -113,15 +146,8 @@ struct FITSStretchControlsView: View {
 
                     Divider()
 
-                    Picker("Editing", selection: $editMode) {
-                        ForEach(FITSStretchEditMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-
                     LabeledContent("Method") {
-                        Picker("Method", selection: $configuration.type) {
+                        Picker("Method", selection: configurationBinding.type) {
                             Section("Automatic") {
                                 stretchChoices(FITSStretchType.automatic)
                             }
@@ -154,7 +180,7 @@ struct FITSStretchControlsView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Color")
                                 .font(.subheadline.weight(.semibold))
-                            Picker("Color handling", selection: $configuration.colorStrategy) {
+                            Picker("Color handling", selection: configurationBinding.colorStrategy) {
                                 ForEach(FITSStretchColorStrategy.allCases) { strategy in
                                     Text(strategy.title)
                                         .tag(strategy)
@@ -203,33 +229,24 @@ struct FITSStretchControlsView: View {
                 }
                     .keyboardShortcut(.cancelAction)
                 Spacer()
-                Button(editMode.actionTitle) {
+                Button("Save Changes") {
                     handledDismissal = true
-                    save(editMode)
+                    save(FITSStretchStack(stages: stages), extractsBackground)
                 }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(configuration.validationMessage != nil)
+                    .disabled(stages.contains { $0.validationMessage != nil })
             }
             .padding(12)
         }
         .frame(width: 430)
         .onAppear {
+            selectedStageIndex = min(max(selectedStageIndex, 0), stages.count - 1)
             schedulePreview()
         }
-        .onChange(of: configuration) { _, _ in
+        .onChange(of: stages) { _, _ in
             schedulePreview()
         }
         .onChange(of: extractsBackground) { _, _ in
-            schedulePreview()
-        }
-        .onChange(of: editMode) { oldMode, newMode in
-            guard oldMode != newMode else { return }
-            switch newMode {
-            case .editCurrent:
-                configuration = appliedStages.last ?? .default
-            case .addStage:
-                configuration = .identity
-            }
             schedulePreview()
         }
         .onDisappear {
@@ -255,32 +272,32 @@ struct FITSStretchControlsView: View {
         case .autoMtf:
             StretchParameterRow(
                 title: "Target median",
-                value: $configuration.targetMedian,
+                value: configurationBinding.targetMedian,
                 range: 0.01...0.95,
                 step: 0.01
             )
             StretchParameterRow(
                 title: "Shadows clipping",
-                value: $configuration.shadowsClip,
+                value: configurationBinding.shadowsClip,
                 range: -10...0,
                 step: 0.1
             )
         case .percentileAsinh:
             StretchParameterRow(
                 title: "Black percentile",
-                value: $configuration.blackPercentile,
+                value: configurationBinding.blackPercentile,
                 range: 0...0.99,
                 step: 0.001
             )
             StretchParameterRow(
                 title: "White percentile",
-                value: $configuration.whitePercentile,
+                value: configurationBinding.whitePercentile,
                 range: 0.01...1,
                 step: 0.001
             )
             StretchParameterRow(
                 title: "Strength",
-                value: $configuration.strength,
+                value: configurationBinding.strength,
                 range: 0.1...50,
                 step: 0.1
             )
@@ -290,46 +307,46 @@ struct FITSStretchControlsView: View {
             blackAndWhiteControls
             StretchParameterRow(
                 title: "Strength",
-                value: $configuration.strength,
+                value: configurationBinding.strength,
                 range: 0.1...50,
                 step: 0.1
             )
         case .mtf:
             StretchParameterRow(
                 title: "Shadows",
-                value: $configuration.shadows,
+                value: configurationBinding.shadows,
                 range: 0...0.99,
                 step: 0.001
             )
             StretchParameterRow(
                 title: "Midtone",
-                value: $configuration.midtone,
+                value: configurationBinding.midtone,
                 range: 0.01...0.99,
                 step: 0.001
             )
             StretchParameterRow(
                 title: "Highlights",
-                value: $configuration.highlights,
+                value: configurationBinding.highlights,
                 range: 0.01...1,
                 step: 0.001
             )
         case .ghs:
             StretchParameterRow(
                 title: "Stretch factor",
-                value: $configuration.stretchFactor,
+                value: configurationBinding.stretchFactor,
                 range: 0...20,
                 step: 0.1
             )
             StretchParameterRow(
                 title: "Local intensity",
-                value: $configuration.localIntensity,
+                value: configurationBinding.localIntensity,
                 range: -5...15,
                 step: 0.1
             )
             VStack(alignment: .trailing, spacing: 6) {
                 StretchParameterRow(
                     title: "Symmetry point",
-                    value: $configuration.symmetryPoint,
+                    value: configurationBinding.symmetryPoint,
                     range: 0...1,
                     step: 0.001
                 )
@@ -338,13 +355,13 @@ struct FITSStretchControlsView: View {
             }
             StretchParameterRow(
                 title: "Shadow protection",
-                value: $configuration.protectShadows,
+                value: configurationBinding.protectShadows,
                 range: 0...max(configuration.symmetryPoint, 0.001),
                 step: 0.001
             )
             StretchParameterRow(
                 title: "Highlight protection",
-                value: $configuration.protectHighlights,
+                value: configurationBinding.protectHighlights,
                 range: min(configuration.symmetryPoint, 0.999)...1,
                 step: 0.001
             )
@@ -360,36 +377,62 @@ struct FITSStretchControlsView: View {
     private var blackAndWhiteControls: some View {
         StretchParameterRow(
             title: "Black point",
-            value: $configuration.black,
+            value: configurationBinding.black,
             range: 0...0.99,
             step: 0.001
         )
         StretchParameterRow(
             title: "White point",
-            value: $configuration.white,
+            value: configurationBinding.white,
             range: 0.01...1,
             step: 0.001
         )
     }
 
-    private var previewStack: FITSStretchStack {
-        var stages = appliedStages
-        switch editMode {
-        case .editCurrent:
-            stages[stages.count - 1] = configuration
-        case .addStage:
-            stages.append(configuration)
+    private var configuration: FITSStretchConfiguration {
+        stages[selectedStageIndex]
+    }
+
+    private var configurationBinding: Binding<FITSStretchConfiguration> {
+        Binding(
+            get: { stages[selectedStageIndex] },
+            set: { stages[selectedStageIndex] = $0 }
+        )
+    }
+
+    private func addStage() {
+        stages.append(.identity)
+        selectedStageIndex = stages.count - 1
+    }
+
+    private func removeStage(at index: Int) {
+        guard stages.count > 1, stages.indices.contains(index) else { return }
+        stages.remove(at: index)
+        if selectedStageIndex > index {
+            selectedStageIndex -= 1
+        } else if selectedStageIndex == index {
+            selectedStageIndex = min(index, stages.count - 1)
         }
-        return FITSStretchStack(stages: stages)
+    }
+
+    private func moveStage(at index: Int, by offset: Int) {
+        let destination = index + offset
+        guard stages.indices.contains(index), stages.indices.contains(destination) else { return }
+        stages.swapAt(index, destination)
+        if selectedStageIndex == index {
+            selectedStageIndex = destination
+        } else if selectedStageIndex == destination {
+            selectedStageIndex = index
+        }
     }
 
     private func schedulePreview() {
         previewTask?.cancel()
-        guard configuration.validationMessage == nil else {
+        guard stages.allSatisfy({ $0.validationMessage == nil }) else {
             clearPreview()
             return
         }
-        let stack = previewStack
+        let stack = FITSStretchStack(stages: stages)
         let background = extractsBackground
         previewTask = Task {
             do {

@@ -429,6 +429,15 @@ struct FITSStretchHistory: Equatable {
         redoStacks.removeAll()
     }
 
+    mutating func replaceStack(with stages: [FITSStretchConfiguration]) {
+        precondition(!stages.isEmpty)
+        precondition(stages.allSatisfy { $0.validationMessage == nil })
+        guard stages != appliedStages else { return }
+        undoStacks.append(appliedStages)
+        appliedStages = stages
+        redoStacks.removeAll()
+    }
+
     @discardableResult
     mutating func undo() -> Bool {
         guard let previous = undoStacks.popLast() else { return false }

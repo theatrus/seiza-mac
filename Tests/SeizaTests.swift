@@ -625,6 +625,25 @@ final class FITSStretchConfigurationTests: XCTestCase {
         XCTAssertTrue(history.undo())
         XCTAssertEqual(history.appliedStages.map(\.type), [.autoMtf, .linear, .autoMtf])
     }
+
+    func testStretchHistoryCommitsRemovedAndReorderedStagesAsOneUndoStep() {
+        var history = FITSStretchHistory()
+        var linear = FITSStretchConfiguration.default
+        linear.type = .linear
+        var asinh = FITSStretchConfiguration.default
+        asinh.type = .asinh
+        history.apply(linear)
+        history.apply(asinh)
+
+        history.replaceStack(with: [asinh, .default])
+        XCTAssertEqual(history.appliedStages.map(\.type), [.asinh, .autoMtf])
+
+        history.replaceStack(with: history.appliedStages)
+        XCTAssertTrue(history.undo())
+        XCTAssertEqual(history.appliedStages.map(\.type), [.autoMtf, .linear, .asinh])
+        XCTAssertTrue(history.redo())
+        XCTAssertEqual(history.appliedStages.map(\.type), [.asinh, .autoMtf])
+    }
 }
 
 final class OverlayCatalogTests: XCTestCase {
