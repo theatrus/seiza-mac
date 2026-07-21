@@ -22,7 +22,14 @@ final class ImageDocumentModel: ObservableObject {
     @Published private(set) var image: CGImage?
     @Published private(set) var metadata: ImageMetadata?
     @Published private(set) var stretchHistory: FITSStretchHistory
+    @Published private(set) var extractsBackground = false
+    @Published private(set) var isPreviewRendering = false
+    @Published private(set) var previewError: String?
     private var loadGeneration = 0
+    private var previewGeneration = 0
+    private var committedImage: CGImage?
+    private var committedMetadata: ImageMetadata?
+    private let previewRenderer = LatestImagePreviewRenderer()
 
     init(
         url: URL,
@@ -30,22 +37,22 @@ final class ImageDocumentModel: ObservableObject {
     ) {
         self.url = url
         stretchHistory = FITSStretchHistory(base: stretchConfiguration)
-        let stretchStack = stretchHistory.stack
+        let processing = processingConfiguration
         previewImage = ImageThumbnailCache.memoryImage(
             for: url,
-            stretchStack: stretchStack
+            processing: processing
         )
         if previewImage == nil {
             ImageThumbnailCache.load(
                 for: url,
-                stretchStack: stretchStack
+                processing: processing
             ) { [weak self] image in
                 guard let image else { return }
                 DispatchQueue.main.async {
                     guard
                         let self,
                         self.image == nil,
-                        self.stretchHistory.stack == stretchStack
+                        self.processingConfiguration == processing
                     else { return }
                     self.previewImage = image
                 }
@@ -67,23 +74,58 @@ final class ImageDocumentModel: ObservableObject {
         stretchHistory.current
     }
 
-    func addStretch(_ configuration: FITSStretchConfiguration) {
+    var processingConfiguration: FITSImageProcessingConfiguration {
+        FITSImageProcessingConfiguration(
+            stretchStack: stretchHistory.stack,
+            extractsBackground: extractsBackground
+        )
+    }
+
+    var exportImage: CGImage? {
+        committedImage ?? image
+    }
+
+    func addStretch(
+        _ configuration: FITSStretchConfiguration,
+        extractsBackground: Bool
+    ) {
         guard configuration.validationMessage == nil else { return }
+        cancelPreview()
         var history = stretchHistory
         history.apply(configuration)
         stretchHistory = history
+        self.extractsBackground = extractsBackground
         load()
     }
 
-    func replaceStretchStack(with configuration: FITSStretchConfiguration) {
+    func updateCurrentStretch(
+        _ configuration: FITSStretchConfiguration,
+        extractsBackground: Bool
+    ) {
         guard configuration.validationMessage == nil else { return }
+        cancelPreview()
+        var history = stretchHistory
+        history.updateCurrent(configuration)
+        stretchHistory = history
+        self.extractsBackground = extractsBackground
+        load()
+    }
+
+    func replaceStretchStack(
+        with configuration: FITSStretchConfiguration,
+        extractsBackground: Bool
+    ) {
+        guard configuration.validationMessage == nil else { return }
+        cancelPreview()
         var history = stretchHistory
         history.replace(with: configuration)
         stretchHistory = history
+        self.extractsBackground = extractsBackground
         load()
     }
 
     func undoStretch() {
+        cancelPreview()
         var history = stretchHistory
         guard history.undo() else { return }
         stretchHistory = history
@@ -91,28 +133,91 @@ final class ImageDocumentModel: ObservableObject {
     }
 
     func redoStretch() {
+        cancelPreview()
         var history = stretchHistory
         guard history.redo() else { return }
         stretchHistory = history
         load()
     }
 
+    func preview(
+        stretchStack: FITSStretchStack,
+        extractsBackground: Bool
+    ) {
+        guard stretchStack.stages.allSatisfy({ $0.validationMessage == nil }) else {
+            cancelPreview()
+            return
+        }
+        let requestedProcessing = FITSImageProcessingConfiguration(
+            stretchStack: stretchStack,
+            extractsBackground: extractsBackground
+        )
+        guard requestedProcessing != processingConfiguration else {
+            cancelPreview()
+            return
+        }
+        let processing = FITSImageProcessingConfiguration(
+            stretchStack: stretchStack,
+            extractsBackground: extractsBackground,
+            interactivePreview: true
+        )
+
+        previewGeneration &+= 1
+        let generation = previewGeneration
+        isPreviewRendering = true
+        previewError = nil
+        previewRenderer.render(
+            url: url,
+            processing: processing,
+            maxDimension: 2_048
+        ) { [weak self] result in
+            guard let self, self.previewGeneration == generation else { return }
+            self.isPreviewRendering = false
+            switch result {
+            case .success(let rendered):
+                self.image = rendered.image
+                self.metadata = rendered.metadata
+                self.loadState = .loaded
+            case .failure(let error):
+                self.previewError = error.localizedDescription
+            }
+        }
+    }
+
+    func cancelPreview() {
+        previewGeneration &+= 1
+        previewRenderer.cancel()
+        isPreviewRendering = false
+        previewError = nil
+        if let committedImage {
+            image = committedImage
+            metadata = committedMetadata
+            loadState = .loaded
+        }
+    }
+
     func load() {
+        previewGeneration &+= 1
+        previewRenderer.cancel()
+        isPreviewRendering = false
+        previewError = nil
         loadGeneration &+= 1
         let generation = loadGeneration
         loadState = .loading
         let url = url
-        let stretchStack = stretchHistory.stack
+        let processing = processingConfiguration
         ImageRenderQueue.renderFull(
             url: url,
-            stretchStack: stretchStack
+            processing: processing
         ) { [weak self] result in
             guard let self, self.loadGeneration == generation else { return }
             switch result {
             case .success(let rendered):
                 self.image = rendered.image
+                self.committedImage = rendered.image
                 self.previewImage = nil
                 self.metadata = rendered.metadata
+                self.committedMetadata = rendered.metadata
                 self.loadState = .loaded
             case .failure(let error):
                 self.loadState = .failed(error.localizedDescription)

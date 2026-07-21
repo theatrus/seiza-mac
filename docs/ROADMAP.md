@@ -8,7 +8,8 @@ catalog overlays, document icons, and the first Quick Look extension. Feature
 work merged after v0.3.0 repairs Finder Quick Look, adds paired histograms and
 image export, adopts the upstream `seiza-cabi` crate and faster catalog
 installer, reports the exact linked core version, and adds full-precision
-stackable stretch controls with undo/redo and image-picked GHS symmetry points.
+stackable stretch controls with undo/redo, latest-only live previews, optional
+smooth background-gradient removal, and image-picked GHS symmetry points.
 
 That post-v0.3.0 work is on `main`, has passed unsigned PR CI and universal DMG
 packaging, and is not yet a versioned public release. Phase 2 is the next product
@@ -21,7 +22,8 @@ focus.
 - parameterized Auto MTF, percentile Asinh, Linear, Asinh, MTF, GHS, and
   identity display modes with linked, per-channel, and luminance-preserving
   color handling for planar-RGB and OSC/Bayer images; additive stage history,
-  undo/redo, and image-picked GHS symmetry points
+  undo/redo, latest-only live previews, optional linear background-gradient
+  removal, and image-picked GHS symmetry points
 - header/statistics inspector with paired pre- and post-stretch RGB or luminance histograms
 - blind solve action with security-scoped catalog selection
 - catalog-colored, independently toggleable solve overlays for named stars,

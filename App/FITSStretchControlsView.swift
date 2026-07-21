@@ -1,17 +1,46 @@
 import SwiftUI
 
+enum FITSStretchEditMode: String, CaseIterable, Identifiable {
+    case editCurrent
+    case addStage
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .editCurrent: "Current Stage"
+        case .addStage: "New Stage"
+        }
+    }
+
+    var actionTitle: String {
+        switch self {
+        case .editCurrent: "Save Changes"
+        case .addStage: "Add Stretch"
+        }
+    }
+}
+
 struct FITSStretchControlsView: View {
     @Binding var configuration: FITSStretchConfiguration
+    @Binding var editMode: FITSStretchEditMode
+    @Binding var extractsBackground: Bool
     let supportsColor: Bool
     let appliedStages: [FITSStretchConfiguration]
     let canUndo: Bool
     let canRedo: Bool
+    let isPreviewRendering: Bool
+    let previewError: String?
     let undo: () -> Void
     let redo: () -> Void
     let pickSymmetryPoint: () -> Void
-    let replace: () -> Void
-    let apply: () -> Void
+    let preview: (FITSStretchStack, Bool) -> Void
+    let clearPreview: () -> Void
+    let save: (FITSStretchEditMode) -> Void
     let cancel: () -> Void
+
+    @State private var previewTask: Task<Void, Never>?
+    @State private var handledDismissal = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -74,6 +103,23 @@ struct FITSStretchControlsView: View {
 
                     Divider()
 
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Remove background gradient", isOn: $extractsBackground)
+                        Text("Fit and subtract a smooth background from linear FITS samples before the first stretch stage.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Divider()
+
+                    Picker("Editing", selection: $editMode) {
+                        ForEach(FITSStretchEditMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
                     LabeledContent("Method") {
                         Picker("Method", selection: $configuration.type) {
                             Section("Automatic") {
@@ -128,6 +174,21 @@ struct FITSStretchControlsView: View {
                             .foregroundStyle(.red)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+
+                    if isPreviewRendering {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Updating live preview…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if let previewError {
+                        Label(previewError, systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .padding(16)
             }
@@ -136,19 +197,47 @@ struct FITSStretchControlsView: View {
             Divider()
 
             HStack {
-                Button("Replace Stack", action: replace)
-                    .help("Discard the current stages and use this stretch as the new base")
-                    .disabled(configuration.validationMessage != nil)
-                Spacer()
-                Button("Cancel", action: cancel)
+                Button("Cancel") {
+                    handledDismissal = true
+                    cancel()
+                }
                     .keyboardShortcut(.cancelAction)
-                Button("Add Stretch", action: apply)
+                Spacer()
+                Button(editMode.actionTitle) {
+                    handledDismissal = true
+                    save(editMode)
+                }
                     .keyboardShortcut(.defaultAction)
                     .disabled(configuration.validationMessage != nil)
             }
             .padding(12)
         }
         .frame(width: 430)
+        .onAppear {
+            schedulePreview()
+        }
+        .onChange(of: configuration) { _, _ in
+            schedulePreview()
+        }
+        .onChange(of: extractsBackground) { _, _ in
+            schedulePreview()
+        }
+        .onChange(of: editMode) { oldMode, newMode in
+            guard oldMode != newMode else { return }
+            switch newMode {
+            case .editCurrent:
+                configuration = appliedStages.last ?? .default
+            case .addStage:
+                configuration = .identity
+            }
+            schedulePreview()
+        }
+        .onDisappear {
+            previewTask?.cancel()
+            if !handledDismissal {
+                clearPreview()
+            }
+        }
     }
 
     @ViewBuilder
@@ -281,6 +370,38 @@ struct FITSStretchControlsView: View {
             range: 0.01...1,
             step: 0.001
         )
+    }
+
+    private var previewStack: FITSStretchStack {
+        var stages = appliedStages
+        switch editMode {
+        case .editCurrent:
+            stages[stages.count - 1] = configuration
+        case .addStage:
+            stages.append(configuration)
+        }
+        return FITSStretchStack(stages: stages)
+    }
+
+    private func schedulePreview() {
+        previewTask?.cancel()
+        guard configuration.validationMessage == nil else {
+            clearPreview()
+            return
+        }
+        let stack = previewStack
+        let background = extractsBackground
+        previewTask = Task {
+            do {
+                try await Task.sleep(for: .milliseconds(140))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                preview(stack, background)
+            }
+        }
     }
 }
 

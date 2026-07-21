@@ -318,6 +318,8 @@ private struct ImagePageView: View {
     @State private var exportError: String?
     @State private var showStretchControls = false
     @State private var stretchDraft = FITSStretchConfiguration.default
+    @State private var stretchEditMode = FITSStretchEditMode.editCurrent
+    @State private var extractsBackgroundDraft = false
     @State private var isPickingSymmetryPoint = false
 
     init(
@@ -396,6 +398,8 @@ private struct ImagePageView: View {
 
                 Button {
                     stretchDraft = model.stretchConfiguration
+                    stretchEditMode = .editCurrent
+                    extractsBackgroundDraft = model.extractsBackground
                     showStretchControls.toggle()
                 } label: {
                     Label("Stretch", systemImage: "slider.horizontal.3")
@@ -409,31 +413,52 @@ private struct ImagePageView: View {
                 .popover(isPresented: $showStretchControls, arrowEdge: .bottom) {
                     FITSStretchControlsView(
                         configuration: $stretchDraft,
+                        editMode: $stretchEditMode,
+                        extractsBackground: $extractsBackgroundDraft,
                         supportsColor: model.supportsColorStretch,
                         appliedStages: model.stretchHistory.appliedStages,
                         canUndo: model.stretchHistory.canUndo,
                         canRedo: model.stretchHistory.canRedo,
+                        isPreviewRendering: model.isPreviewRendering,
+                        previewError: model.previewError,
                         undo: {
                             model.undoStretch()
                             stretchDraft = model.stretchConfiguration
+                            extractsBackgroundDraft = model.extractsBackground
                         },
                         redo: {
                             model.redoStretch()
                             stretchDraft = model.stretchConfiguration
+                            extractsBackgroundDraft = model.extractsBackground
                         },
                         pickSymmetryPoint: {
                             showStretchControls = false
                             isPickingSymmetryPoint = true
                         },
-                        replace: {
-                            model.replaceStretchStack(with: stretchDraft)
-                            showStretchControls = false
+                        preview: { stack, extractsBackground in
+                            model.preview(
+                                stretchStack: stack,
+                                extractsBackground: extractsBackground
+                            )
                         },
-                        apply: {
-                            model.addStretch(stretchDraft)
+                        clearPreview: model.cancelPreview,
+                        save: { mode in
+                            switch mode {
+                            case .editCurrent:
+                                model.updateCurrentStretch(
+                                    stretchDraft,
+                                    extractsBackground: extractsBackgroundDraft
+                                )
+                            case .addStage:
+                                model.addStretch(
+                                    stretchDraft,
+                                    extractsBackground: extractsBackgroundDraft
+                                )
+                            }
                             showStretchControls = false
                         },
                         cancel: {
+                            model.cancelPreview()
                             showStretchControls = false
                         }
                     )
@@ -621,7 +646,7 @@ private struct ImagePageView: View {
 
     @MainActor
     private func presentExportPanel() {
-        guard let image = model.image else {
+        guard let image = model.exportImage else {
             NSSound.beep()
             return
         }
@@ -770,7 +795,7 @@ private struct ImagePageView: View {
                         if let solution = solvedSolution, hasVisibleOverlays {
                             SolveOverlayView(
                                 solution: solution,
-                                sourceSize: CGSize(width: image.width, height: image.height),
+                                sourceSize: sourceSize(for: image),
                                 showsDeepSky: showDeepSky,
                                 showsNamedStars: showNamedStars,
                                 showsTransients: showTransients,
@@ -858,7 +883,7 @@ private struct ImagePageView: View {
                     applyFitZoom(image: image, viewport: newSize)
                 }
             }
-            .onChange(of: CGSize(width: image.width, height: image.height)) { _, _ in
+            .onChange(of: sourceSize(for: image)) { _, _ in
                 if isFitToWindow {
                     applyFitZoom(image: image, viewport: geometry.size)
                 }
@@ -974,8 +999,9 @@ private struct ImagePageView: View {
 
     private func applyFitZoom(image: CGImage, viewport: CGSize) {
         guard viewport.width > 0, viewport.height > 0 else { return }
-        let horizontalScale = viewport.width / CGFloat(image.width)
-        let verticalScale = viewport.height / CGFloat(image.height)
+        let sourceSize = sourceSize(for: image)
+        let horizontalScale = viewport.width / sourceSize.width
+        let verticalScale = viewport.height / sourceSize.height
         zoom = clampedZoom(Double(min(horizontalScale, verticalScale)))
         scrollToOrigin()
     }
@@ -1056,10 +1082,18 @@ private struct ImagePageView: View {
     }
 
     private func displayedSize(for image: CGImage, zoom: Double) -> CGSize {
-        CGSize(
-            width: pixelAlignedLength(CGFloat(image.width) * zoom),
-            height: pixelAlignedLength(CGFloat(image.height) * zoom)
+        let sourceSize = sourceSize(for: image)
+        return CGSize(
+            width: pixelAlignedLength(sourceSize.width * zoom),
+            height: pixelAlignedLength(sourceSize.height * zoom)
         )
+    }
+
+    private func sourceSize(for image: CGImage) -> CGSize {
+        guard let metadata = model.metadata, metadata.width > 0, metadata.height > 0 else {
+            return CGSize(width: image.width, height: image.height)
+        }
+        return CGSize(width: metadata.width, height: metadata.height)
     }
 
     private func pixelAlignedLength(_ value: CGFloat) -> CGFloat {

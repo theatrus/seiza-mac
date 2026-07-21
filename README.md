@@ -12,7 +12,7 @@ you ask it to.
 ## Project status
 
 - **Latest public release:** [v0.3.0](https://github.com/theatrus/seiza-mac/releases/tag/v0.3.0), signed and notarized for Apple silicon and Intel.
-- **Current `main`:** unreleased. It adds repaired Finder Quick Look previews, paired histograms, image export, faster catalog installation, direct use of upstream `seiza-cabi`, exact core version reporting, and stackable stretch controls with undo/redo.
+- **Current `main`:** unreleased. It adds repaired Finder Quick Look previews, paired histograms, image export, faster catalog installation, direct use of upstream `seiza-cabi`, exact core version reporting, and full-precision stretch stacks with undo/redo, live previews, and optional background-gradient removal.
 - **Next focus:** the serious-inspection work in [the roadmap](docs/ROADMAP.md), starting with a real pixel loupe and measured image-quality overlays.
 
 ![Seiza browsing an astronomy-image folder with its thumbnail drawer](docs/images/seiza-gallery.jpg)
@@ -33,7 +33,7 @@ describes code that has merged but has not been published as a versioned release
 | FITS and raster viewing | Included | Included | Open FITS, JPEG, PNG, and TIFF files or drop them onto an existing window. |
 | Folder browsing | Included | Included | Browse mixed-format folders with a thumbnail drawer, local thumbnail cache, and arrow-key navigation. |
 | FITS display | Included | Included | View mono, planar RGB, and Bayer/OSC data with fast native rendering. |
-| Stretch controls | Basic RGB modes | Expanded | Stack or replace automatic and manual stretches without intermediate 8-bit quantization; undo and redo edits; pick GHS symmetry points from the image; and choose linked, per-channel, or luminance-preserving color handling. |
+| Stretch controls | Basic RGB modes | Expanded | Edit or add automatic and manual stages without intermediate 8-bit quantization; preview changes live; undo and redo edits; optionally remove smooth background gradients before stretching; pick GHS symmetry points from the image; and choose linked, per-channel, or luminance-preserving color handling. |
 | Zoom and inspection | Headers and statistics | Expanded | Fit to window, pan, pinch around the pointer, and compare pre- and post-stretch histograms alongside headers and statistics. |
 | Local plate solving | Included | Included | Run a blind solve only when you press Solve. No image is uploaded. |
 | Catalog setup | Included | Faster installation | Download, verify, install, or repair solver catalogs in Settings with visible progress and reuse the verified cache through hard links when possible. |
