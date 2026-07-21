@@ -37,8 +37,10 @@ Create a release branch and update all version surfaces:
 
 - `MARKETING_VERSION` for the app and Quick Look extension;
 - `CURRENT_PROJECT_VERSION` for the app and extension;
-- `Rust/seiza-cabi/Cargo.toml`, its exported version in
-  `Rust/seiza-cabi/src/lib.rs`, and `Cargo.lock`;
+- `Rust/seiza-mac-core/Cargo.toml` and `Cargo.lock`;
+- the pinned upstream `seiza-cabi` revision when the release intentionally
+  adopts a newer Seiza core (the About panel reads its version and exact commit
+  from the linked code and lockfile);
 - the current-version DMG link and screenshots in `README.md`; and
 - release notes or workflow behavior when the release format changes.
 

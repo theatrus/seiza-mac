@@ -23,18 +23,18 @@ for architecture in $architectures; do
   cargo_arguments=(
     build
     --manifest-path "$repository_root/Cargo.toml"
-    --package seiza-cabi
+    --package seiza-mac-core
     --target "$rust_target"
   )
   if [[ "$configuration" != "Debug" ]]; then
     cargo_arguments+=(--release)
   fi
   cargo "${cargo_arguments[@]}"
-  slices+=("$repository_root/target/$rust_target/$profile_directory/libseiza_cabi.a")
+  slices+=("$repository_root/target/$rust_target/$profile_directory/libseiza_mac_core.a")
 done
 
 if [[ "${#slices[@]}" -eq 1 ]]; then
-  cp "${slices[0]}" "$output_directory/libseiza_cabi.a"
+  cp "${slices[0]}" "$output_directory/libseiza_mac_core.a"
 else
-  xcrun lipo -create "${slices[@]}" -output "$output_directory/libseiza_cabi.a"
+  xcrun lipo -create "${slices[@]}" -output "$output_directory/libseiza_mac_core.a"
 fi

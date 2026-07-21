@@ -1,16 +1,18 @@
 #ifndef SEIZA_CABI_H
 #define SEIZA_CABI_H
 
+/* Client declarations for the upstream seiza-cabi crate linked by seiza-mac. */
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
+typedef struct SeizaRenderedImage SeizaRenderedImage;
+typedef void (*SeizaCatalogSetupProgressCallback)(const char *, void *);
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-typedef struct SeizaRenderedImage SeizaRenderedImage;
-typedef void (*SeizaCatalogSetupProgressCallback)(const char *json, void *context);
 
 const char *seiza_core_version(void);
 
@@ -40,10 +42,18 @@ SeizaRenderedImage *seiza_rendered_image_open_with_rgb_stretch(
     uint32_t rgb_stretch_mode,
     char **error_out);
 
+SeizaRenderedImage *seiza_rendered_image_open_with_stretch_config(
+    const char *path,
+    const char *config_json,
+    uint32_t max_dimension,
+    char **error_out);
+
 uint32_t seiza_rendered_image_width(const SeizaRenderedImage *image);
 uint32_t seiza_rendered_image_height(const SeizaRenderedImage *image);
 const uint8_t *seiza_rendered_image_rgba(const SeizaRenderedImage *image);
 size_t seiza_rendered_image_rgba_length(const SeizaRenderedImage *image);
+const uint8_t *seiza_rendered_image_bgra(const SeizaRenderedImage *image);
+size_t seiza_rendered_image_bgra_length(const SeizaRenderedImage *image);
 const char *seiza_rendered_image_metadata_json(const SeizaRenderedImage *image);
 void seiza_rendered_image_free(SeizaRenderedImage *image);
 

@@ -23,6 +23,11 @@ struct SeizaApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About Seiza") {
+                    appDelegate.showAboutPanel(nil)
+                }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Open…") {
                     appDelegate.openDocument(nil)
@@ -109,6 +114,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         session.exportCoordinator.requestExport()
+    }
+
+    @objc func showAboutPanel(_ sender: Any?) {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = .center
+        let credits = NSAttributedString(
+            string: AboutDetails.seizaCoreDescription,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+                .foregroundColor: NSColor.secondaryLabelColor,
+                .paragraphStyle: paragraphStyle,
+            ]
+        )
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func open(_ url: URL) {
@@ -271,5 +291,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func closeWelcomeWindow() {
         welcomeWindow?.close()
         welcomeWindow = nil
+    }
+}
+
+enum AboutDetails {
+    static var seizaCoreDescription: String {
+        "Seiza Core \(SeizaCore.version)\nCommit \(SeizaCore.gitCommit)"
     }
 }

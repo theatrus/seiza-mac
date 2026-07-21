@@ -1,0 +1,13 @@
+[package]
+name = "seiza-mac-core"
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.89"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+seiza-cabi = { git = "https://github.com/theatrus/seiza.git", rev = "82b7cfeed5e277994cbae46bab60ab6333bbdafd" }
