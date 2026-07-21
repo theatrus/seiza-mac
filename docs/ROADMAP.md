@@ -29,7 +29,6 @@
 
 - `QLThumbnailProvider` Finder thumbnails
 - Spotlight metadata importer for selected FITS headers
-- “Open Rendered Image in Preview” TIFF handoff
 - Finder Quick Actions for solve and export
 
 ## Phase 4 — the whole works
@@ -38,6 +37,7 @@
 - blink/difference views and registration
 - satellite overlays with shutter-open time, observer, element epoch, and
   explicit prediction provenance
-- multi-extension FITS and cube navigation
+- multi-extension FITS image-HDU navigation
+- lazy FITS cube slice navigation with neighboring-slice preloading
 - catalog bundle update discovery and selective dataset management
 - universal signed releases, updater, crash reporting, and performance corpus
