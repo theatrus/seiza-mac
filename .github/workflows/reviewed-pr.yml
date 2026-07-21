@@ -250,7 +250,12 @@ jobs:
             --context context:primary-signature \
             --verbose=4 \
             "$dmg_path"
-          shasum -a 256 "$dmg_path" > "${dmg_path}.sha256"
+          dmg_directory="$(dirname "$dmg_path")"
+          dmg_name="$(basename "$dmg_path")"
+          (
+            cd "$dmg_directory"
+            shasum -a 256 "$dmg_name" > "${dmg_name}.sha256"
+          )
 
       - name: Upload signed reviewed DMG
         uses: actions/upload-artifact@v7
