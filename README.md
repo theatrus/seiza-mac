@@ -58,11 +58,12 @@ Open `Seiza.xcodeproj` to run and sign it with a local development team.
 ## Tests and continuous integration
 
 The repository exercises the Rust rendering/C ABI with unit tests and the
-native application with XCTest. Trusted-repository CI checks Rust formatting
-and Clippy warnings, runs both test suites, validates the app and extension
-property lists, builds a universal Release application, packages an unsigned
-development DMG, and asks macOS to verify the resulting disk image. CI is
-deliberately skipped for pull requests from forks.
+native application with XCTest. Main-branch CI checks Rust formatting and
+Clippy warnings, runs both test suites, validates the app and extension property
+lists, builds a universal Release application, packages an unsigned development
+DMG, and asks macOS to verify the resulting disk image. Pull requests do not run
+automatically; after owner review, an owner-dispatched workflow builds a signed,
+notarized DMG from the exact approved commit for iteration.
 
 ```sh
 cargo test --workspace --locked
@@ -74,7 +75,7 @@ xcodebuild test \
   CODE_SIGNING_ALLOWED=NO
 ```
 
-Tags matching `vMAJOR.MINOR.PATCH` enter the protected `release` environment,
+Tags matching `vMAJOR.MINOR.PATCH` enter the protected `signing` environment,
 Developer ID sign and notarize the app and DMG, and publish the universal DMG
 and zipped app to GitHub Releases. See [docs/RELEASING.md](docs/RELEASING.md)
 for the credential and environment setup.

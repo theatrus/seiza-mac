@@ -14,7 +14,7 @@ concurrency:
 jobs:
   dmg:
     if: github.repository == 'theatrus/seiza-mac' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    environment: release
+    environment: signing
     runs-on: macos-15
     timeout-minutes: 90
     steps:

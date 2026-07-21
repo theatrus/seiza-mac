@@ -1,0 +1,272 @@
+name: Reviewed PR DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number whose current head was reviewed
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: reviewed-pr-${{ inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  authorize:
+    if: github.ref == 'refs/heads/main' && github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      head_repository: ${{ steps.pr.outputs.head_repository }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      short_sha: ${{ steps.pr.outputs.short_sha }}
+      pr_number: ${{ steps.pr.outputs.pr_number }}
+    steps:
+      - name: Resolve exact owner-approved commit
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          REPOSITORY: ${{ github.repository }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
+          pr_api="repos/${REPOSITORY}/pulls/${PR_NUMBER}"
+          test "$(gh api "$pr_api" --jq '.state')" = "open"
+          test "$(gh api "$pr_api" --jq '.base.ref')" = "main"
+
+          head_sha="$(gh api "$pr_api" --jq '.head.sha')"
+          head_repository="$(gh api "$pr_api" --jq '.head.repo.full_name')"
+          author="$(gh api "$pr_api" --jq '.user.login')"
+          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
+          test -n "$head_repository"
+
+          if [[ "$author" != "$REPOSITORY_OWNER" ]]; then
+            reviews="$(gh api "${pr_api}/reviews?per_page=100")"
+            review_state="$(
+              jq -r \
+                --arg owner "$REPOSITORY_OWNER" \
+                --arg sha "$head_sha" \
+                '[.[] | select(.user.login == $owner and .commit_id == $sha and .state != "COMMENTED")] | last | .state // "NONE"' \
+                <<< "$reviews"
+            )"
+            test "$review_state" = "APPROVED"
+          fi
+
+          printf 'head_repository=%s\n' "$head_repository" >> "$GITHUB_OUTPUT"
+          printf 'head_sha=%s\n' "$head_sha" >> "$GITHUB_OUTPUT"
+          printf 'short_sha=%s\n' "${head_sha:0:12}" >> "$GITHUB_OUTPUT"
+          printf 'pr_number=%s\n' "$PR_NUMBER" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: authorize
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      REVIEWED_SHA: ${{ needs.authorize.outputs.head_sha }}
+    steps:
+      - name: Check out exact reviewed commit without credentials
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ needs.authorize.outputs.head_repository }}
+          ref: ${{ needs.authorize.outputs.head_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify checkout identity
+        run: test "$(git rev-parse HEAD)" = "$REVIEWED_SHA"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - name: Validate and test reviewed source
+        run: |
+          plutil -lint App/Info.plist App/Seiza.entitlements
+          plutil -lint QuickLook/Info.plist QuickLook/SeizaQuickLook.entitlements
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo test --workspace --locked
+          xcodebuild test \
+            -project Seiza.xcodeproj \
+            -scheme Seiza \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath DerivedData \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Build universal unsigned Release app
+        run: |
+          xcodebuild build \
+            -project Seiza.xcodeproj \
+            -scheme Seiza \
+            -configuration Release \
+            -derivedDataPath DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=NO \
+            'ARCHS=arm64 x86_64'
+          file DerivedData/Build/Products/Release/Seiza.app/Contents/MacOS/Seiza \
+            | grep -q 'universal binary with 2 architectures'
+          ditto -c -k --sequesterRsrc --keepParent \
+            DerivedData/Build/Products/Release/Seiza.app \
+            "$RUNNER_TEMP/Seiza-unsigned.zip"
+
+      - name: Upload unsigned app for isolated signing job
+        uses: actions/upload-artifact@v7
+        with:
+          name: Seiza-unsigned-pr-${{ needs.authorize.outputs.pr_number }}-${{ needs.authorize.outputs.short_sha }}
+          path: ${{ runner.temp }}/Seiza-unsigned.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  sign-dmg:
+    needs: [authorize, build]
+    environment: signing
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      PR_NUMBER: ${{ needs.authorize.outputs.pr_number }}
+      REVIEWED_SHA: ${{ needs.authorize.outputs.head_sha }}
+      SHORT_SHA: ${{ needs.authorize.outputs.short_sha }}
+    steps:
+      - name: Check out trusted signing inputs from main
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository }}
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+          path: trusted
+
+      - name: Download unsigned reviewed app
+        uses: actions/download-artifact@v7
+        with:
+          name: Seiza-unsigned-pr-${{ needs.authorize.outputs.pr_number }}-${{ needs.authorize.outputs.short_sha }}
+          path: unsigned
+
+      - name: Validate unsigned bundle as data
+        run: |
+          mkdir -p work
+          ditto -x -k unsigned/Seiza-unsigned.zip work
+          app_path="work/Seiza.app"
+          quicklook_path="$app_path/Contents/PlugIns/SeizaQuickLook.appex"
+          test -d "$quicklook_path"
+          test -z "$(find "$app_path" -type l -print -quit)"
+          test "$(plutil -extract CFBundleIdentifier raw "$app_path/Contents/Info.plist")" = "fyi.seiza.mac"
+          test "$(plutil -extract CFBundleIdentifier raw "$quicklook_path/Contents/Info.plist")" = "fyi.seiza.mac.quicklook"
+          file "$app_path/Contents/MacOS/Seiza" \
+            | grep -q 'universal binary with 2 architectures'
+
+      - name: Import Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_BUILD_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_BUILD_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          test -n "$APPLE_CERTIFICATE"
+          test -n "$APPLE_CERTIFICATE_PASSWORD"
+          test -n "$KEYCHAIN_PASSWORD"
+
+          certificate_path="$RUNNER_TEMP/certificate.p12"
+          keychain_path="$RUNNER_TEMP/seiza-signing.keychain-db"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 -D > "$certificate_path"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 3600 "$keychain_path"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+
+          certificate_identity="$(
+            security find-identity -v -p codesigning "$keychain_path" \
+              | awk -F'"' '/Developer ID Application/ { print $2; exit }'
+          )"
+          test -n "$certificate_identity"
+          printf 'CERT_ID=%s\n' "$certificate_identity" >> "$GITHUB_ENV"
+
+      - name: Sign application and Quick Look extension
+        run: |
+          app_path="work/Seiza.app"
+          quicklook_path="$app_path/Contents/PlugIns/SeizaQuickLook.appex"
+
+          codesign \
+            --force \
+            --options runtime \
+            --timestamp \
+            --entitlements trusted/QuickLook/SeizaQuickLook.entitlements \
+            --sign "$CERT_ID" \
+            "$quicklook_path"
+          codesign \
+            --force \
+            --options runtime \
+            --timestamp \
+            --entitlements trusted/App/Seiza.entitlements \
+            --sign "$CERT_ID" \
+            "$app_path"
+          codesign --verify --deep --strict --verbose=4 "$app_path"
+
+      - name: Package, notarize, and verify reviewed DMG
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PRIVATE: ${{ secrets.APPLE_API_KEY_PRIVATE }}
+        run: |
+          test -n "$APPLE_API_ISSUER"
+          test -n "$APPLE_API_KEY"
+          test -n "$APPLE_API_KEY_PRIVATE"
+
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          dmg_path="dist/Seiza-pr-${PR_NUMBER}-${SHORT_SHA}.dmg"
+          printf '%s' "$APPLE_API_KEY_PRIVATE" | base64 -D > "$key_path"
+          chmod 600 "$key_path"
+          trusted/scripts/package-dmg.sh work/Seiza.app "$dmg_path" "PR ${PR_NUMBER}"
+          codesign --force --timestamp --sign "$CERT_ID" "$dmg_path"
+          xcrun notarytool submit "$dmg_path" \
+            --key "$key_path" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait \
+            --timeout 30m
+          xcrun stapler staple "$dmg_path"
+          xcrun stapler validate "$dmg_path"
+          hdiutil verify "$dmg_path"
+          codesign --verify --verbose=4 "$dmg_path"
+          spctl --assess \
+            --type open \
+            --context context:primary-signature \
+            --verbose=4 \
+            "$dmg_path"
+          shasum -a 256 "$dmg_path" > "${dmg_path}.sha256"
+
+      - name: Upload signed reviewed DMG
+        uses: actions/upload-artifact@v7
+        with:
+          name: Seiza-pr-${{ needs.authorize.outputs.pr_number }}-${{ needs.authorize.outputs.short_sha }}
+          path: |
+            dist/Seiza-pr-*.dmg
+            dist/Seiza-pr-*.dmg.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove signing material
+        if: always()
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          security delete-keychain "$RUNNER_TEMP/seiza-signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          rm -f "$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"

@@ -4,11 +4,15 @@ Tags matching `vMAJOR.MINOR.PATCH` build a universal macOS application, package
 it as a DMG and ZIP, verify the disk image, produce SHA-256 checksums, and create
 a GitHub release. The tag must match the Xcode `MARKETING_VERSION`. The release
 job only runs in `theatrus/seiza-mac` for a trusted tag push and enters the
-protected GitHub `release` environment before it can read credentials.
+protected GitHub `signing` environment before it can read credentials.
 
-Normal CI is unsigned. Pull requests whose head repository is not
-`theatrus/seiza-mac` are deliberately skipped, so untrusted fork code is never
-executed on the hosted macOS runner.
+Normal CI is unsigned and runs on pushes to `main`. Opening or updating a pull
+request does not start CI. A signed PR build only starts when the repository
+owner explicitly dispatches the reviewed-PR workflow, which validates that the
+current head commit is the exact commit the owner approved before it checks out
+or executes PR code. For owner-authored PRs, the owner's manual dispatch is the
+explicit authorization because GitHub does not allow authors to approve their
+own pull requests.
 
 ## Apple credentials
 
@@ -38,12 +42,28 @@ Users and Access → Integrations → Team Keys** and downloads its `.p8` exactl
 once. The existing PSF Guard certificate and team API key may be reused when
 both applications are distributed by the same Apple Developer team.
 
+### Quick Look extension
+
+The Quick Look extension does not need another certificate, API key, secret, or
+installer certificate. It is the nested bundle
+`Seiza.app/Contents/PlugIns/SeizaQuickLook.appex` with bundle identifier
+`fyi.seiza.mac.quicklook`. CI signs it first with the same Developer ID
+Application identity and `QuickLook/SeizaQuickLook.entitlements`, then signs the
+containing `fyi.seiza.mac` application with `App/Seiza.entitlements`.
+
+The current entitlements only enable the App Sandbox and user-selected
+read-only files, so this Developer ID distribution does not require a separate
+provisioning profile. If the extension later adopts a restricted capability
+such as iCloud, push notifications, or an application group, add the matching
+App ID/capability and Developer ID provisioning profile at that time.
+
 ## GitHub environment and secrets
 
 In GitHub, open **Settings → Environments**, create an environment named
-`release`, and restrict its deployment branches and tags to the `v*.*.*` tag
-pattern. A required reviewer is recommended. Add these six **environment
-secrets** to that environment, not to a checked-in file:
+`signing`, and select **Selected branches and tags**. Allow the `main` branch
+for owner-dispatched reviewed PR builds and the `v*.*.*` tag pattern for
+releases. A required reviewer is recommended as an additional gate. Add these
+six **environment secrets** to that environment, not to a checked-in file:
 
 - `APPLE_BUILD_CERTIFICATE`: base64-encoded Developer ID Application `.p12`;
 - `APPLE_BUILD_CERTIFICATE_PASSWORD`: password chosen when exporting the `.p12`;
@@ -70,12 +90,12 @@ in a secure credential store.
 The same secrets can be installed with GitHub CLI after the environment exists:
 
 ```sh
-gh secret set APPLE_BUILD_CERTIFICATE --env release < certificate.base64
-gh secret set APPLE_BUILD_CERTIFICATE_PASSWORD --env release
-gh secret set KEYCHAIN_PASSWORD --env release
-gh secret set APPLE_API_ISSUER --env release
-gh secret set APPLE_API_KEY --env release
-gh secret set APPLE_API_KEY_PRIVATE --env release < api-key.base64
+gh secret set APPLE_BUILD_CERTIFICATE --env signing < certificate.base64
+gh secret set APPLE_BUILD_CERTIFICATE_PASSWORD --env signing
+gh secret set KEYCHAIN_PASSWORD --env signing
+gh secret set APPLE_API_ISSUER --env signing
+gh secret set APPLE_API_KEY --env signing
+gh secret set APPLE_API_KEY_PRIVATE --env signing < api-key.base64
 ```
 
 The workflow then:
@@ -89,6 +109,30 @@ The workflow then:
 7. submit, staple, validate, and Gatekeeper-assess the DMG;
 8. create checksums only after stapling, then publish the exact verified files.
 
+## Reviewed pull-request builds
+
+For a contributor PR, review the current head commit and submit an **Approve**
+review as `@theatrus`. Then open **Actions → Reviewed PR DMG → Run workflow**
+on `main` and enter the PR number. For an owner-authored PR, use the same manual
+dispatch after reviewing the diff.
+
+The authorization job refuses to continue unless:
+
+- the dispatcher is the repository owner;
+- the workflow itself is running from `main`;
+- the pull request is open and targets `main`;
+- the requested commit is still the current PR head; and
+- for a non-owner author, the owner's latest review on that exact commit is
+  `APPROVED`.
+
+An unsigned macOS job tests and builds the exact reviewed SHA without secrets.
+A separate job enters the protected `signing` environment, treats that app as
+data, rejects symlinks or unexpected bundle identifiers, signs the Quick Look
+extension before its containing app using trusted inputs from `main`, notarizes
+and staples a DMG, and uploads it as a 14-day Actions artifact. A new push
+changes the head SHA, so the previous approval cannot authorize the new code;
+review and dispatch again.
+
 ## Publishing
 
 Before tagging, update `MARKETING_VERSION`, commit it to `main`, and make sure
@@ -99,7 +143,7 @@ git tag -a v0.2.0 -m "Seiza 0.2.0"
 git push origin v0.2.0
 ```
 
-The protected `release` environment may pause the job for reviewer approval.
+The protected `signing` environment may pause the job for reviewer approval.
 The API key and Developer ID certificate are only made available after that
 gate. The job deletes its temporary keychain, `.p12`, `.p8`, and notarization
 archive even when an earlier step fails.
