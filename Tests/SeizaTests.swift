@@ -351,6 +351,113 @@ final class RenderBoundaryTests: XCTestCase {
         )
     }
 
+    func testInteractivePreviewCacheReappliesEveryStretchEdit() throws {
+        let width = 96
+        let height = 72
+        var values = [Int16]()
+        values.reserveCapacity(width * height)
+        for y in 0..<height {
+            for x in 0..<width {
+                values.append(Int16(2_000 + x * 120 + y * 45))
+            }
+        }
+        let url = try writeSyntheticFITS(width: width, height: height, values: values)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        var firstStretch = FITSStretchConfiguration.default
+        firstStretch.targetMedian = 0.21
+        let first = try SeizaCore.render(
+            url: url,
+            maxDimension: 2_048,
+            processing: FITSImageProcessingConfiguration(
+                stretchStack: FITSStretchStack(stages: [firstStretch]),
+                extractsBackground: false,
+                interactivePreview: true
+            )
+        )
+
+        var secondStretch = firstStretch
+        secondStretch.targetMedian = 0.27
+        let second = try SeizaCore.render(
+            url: url,
+            maxDimension: 2_048,
+            processing: FITSImageProcessingConfiguration(
+                stretchStack: FITSStretchStack(stages: [secondStretch]),
+                extractsBackground: false,
+                interactivePreview: true
+            )
+        )
+
+        XCTAssertNotEqual(
+            first.image.dataProvider?.data as Data?,
+            second.image.dataProvider?.data as Data?
+        )
+    }
+
+    @MainActor
+    func testLatestInteractivePreviewWinsAfterRapidEdits() async throws {
+        let width = 96
+        let height = 72
+        var values = [Int16]()
+        values.reserveCapacity(width * height)
+        for y in 0..<height {
+            for x in 0..<width {
+                values.append(Int16(2_000 + x * 120 + y * 45))
+            }
+        }
+        let url = try writeSyntheticFITS(width: width, height: height, values: values)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let model = ImageDocumentModel(url: url)
+        try await waitUntil("initial FITS render") {
+            if case .loaded = model.loadState { true } else { false }
+        }
+
+        var latestStretch = FITSStretchConfiguration.default
+        latestStretch.targetMedian = 0.27
+        let expected = try SeizaCore.render(
+            url: url,
+            maxDimension: 2_048,
+            processing: FITSImageProcessingConfiguration(
+                stretchStack: FITSStretchStack(stages: [latestStretch]),
+                extractsBackground: false,
+                interactivePreview: true
+            )
+        )
+
+        for targetMedian in [0.21, 0.23, 0.27] {
+            var stretch = FITSStretchConfiguration.default
+            stretch.targetMedian = targetMedian
+            model.preview(
+                stretchStack: FITSStretchStack(stages: [stretch]),
+                extractsBackground: false
+            )
+        }
+
+        let expectedPixels = expected.image.dataProvider?.data as Data?
+        try await waitUntil("latest interactive preview") {
+            !model.isPreviewRendering
+                && model.image?.dataProvider?.data as Data? == expectedPixels
+        }
+    }
+
+    @MainActor
+    private func waitUntil(
+        _ description: String,
+        timeout: Duration = .seconds(5),
+        condition: () -> Bool
+    ) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !condition() {
+            guard clock.now < deadline else {
+                XCTFail("Timed out waiting for \(description)")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
     private func writeSyntheticFITS(
         width: Int,
         height: Int,

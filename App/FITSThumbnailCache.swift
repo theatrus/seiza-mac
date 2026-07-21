@@ -506,8 +506,8 @@ private final class ImagePreviewOperation: Operation, @unchecked Sendable {
             )
         }
         guard !isCancelled else { return }
-        OperationQueue.main.addOperation { [weak self] in
-            guard let self, !self.isCancelled else { return }
+        OperationQueue.main.addOperation { [self] in
+            guard !isCancelled else { return }
             self.completion(result)
         }
     }
