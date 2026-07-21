@@ -56,7 +56,10 @@ Hyperbolic Stretch controls, with an identity option for normalized data. GHS
 can sample its symmetry point from the displayed image. Color FITS can analyze
 linked or per-channel data, or stretch luminance while preserving RGB
 chromaticity. An optional background step fits and subtracts a smooth model
-from the linear mono or RGB samples before the first stretch stage.
+from the linear mono or RGB samples. Optional deconvolution then applies
+conservative damped Richardson–Lucy restoration with a caller-supplied stellar
+PSF FWHM before the first stretch stage. Both operations remain on linear `f32`
+pixels inside Seiza; Swift never round-trips them through an 8-bit display image.
 
 The Swift editor owns one draft stack independently from its presentation. The
 toolbar opens that editor as a bounded popover by default; a pop-out action
@@ -74,13 +77,17 @@ pixels while the committed full-resolution render remains separate for export,
 and source dimensions from metadata keep zoom and overlay geometry stable while
 the preview is visible. The C ABI retains the two most recent prepared linear
 preview buffers, keyed by file identity, preview size, and background settings.
-Stretch-only edits therefore reuse the decoded, downsampled, and (when enabled)
-background-corrected pixels instead of refitting the same background.
+Stretch and deconvolution edits therefore reuse the decoded, downsampled, and
+(when enabled) background-corrected pixels instead of refitting the same
+background. Deconvolution reruns from that cached linear base when its controls
+change. Its source-pixel PSF FWHM is scaled to the bounded preview dimensions;
+the committed render uses the original value at full resolution.
 
 Raster JPEG, PNG, and TIFF pixels remain color-managed display data and bypass
 the FITS stretch pipeline. Thumbnail-cache and background-render job identities
 include the complete, deterministically encoded processing request, so only
-truly identical stretch and background renders share work or cached pixels.
+truly identical stretch, background, and deconvolution renders share work or
+cached pixels.
 
 The ABI supplies exact 256-bin channel counts for input and rendered pixels.
 The inspector plots those counts on a linear vertical scale capped at the 98th

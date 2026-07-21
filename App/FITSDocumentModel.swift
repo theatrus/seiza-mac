@@ -23,6 +23,7 @@ final class ImageDocumentModel: ObservableObject {
     @Published private(set) var metadata: ImageMetadata?
     @Published private(set) var stretchHistory: FITSStretchHistory
     @Published private(set) var extractsBackground = false
+    @Published private(set) var deconvolutionConfiguration: FITSDeconvolutionConfiguration?
     @Published private(set) var isPreviewRendering = false
     @Published private(set) var previewError: String?
     private var loadGeneration = 0
@@ -77,7 +78,8 @@ final class ImageDocumentModel: ObservableObject {
     var processingConfiguration: FITSImageProcessingConfiguration {
         FITSImageProcessingConfiguration(
             stretchStack: stretchHistory.stack,
-            extractsBackground: extractsBackground
+            extractsBackground: extractsBackground,
+            deconvolution: deconvolutionConfiguration
         )
     }
 
@@ -87,43 +89,59 @@ final class ImageDocumentModel: ObservableObject {
 
     func addStretch(
         _ configuration: FITSStretchConfiguration,
-        extractsBackground: Bool
+        extractsBackground: Bool,
+        deconvolution: FITSDeconvolutionConfiguration? = nil
     ) {
-        guard configuration.validationMessage == nil else { return }
+        guard
+            configuration.validationMessage == nil,
+            deconvolution?.validationMessage == nil
+        else { return }
         cancelPreview()
         var history = stretchHistory
         history.apply(configuration)
         stretchHistory = history
         self.extractsBackground = extractsBackground
+        deconvolutionConfiguration = deconvolution
         load()
     }
 
     func updateCurrentStretch(
         _ configuration: FITSStretchConfiguration,
-        extractsBackground: Bool
+        extractsBackground: Bool,
+        deconvolution: FITSDeconvolutionConfiguration? = nil
     ) {
-        guard configuration.validationMessage == nil else { return }
+        guard
+            configuration.validationMessage == nil,
+            deconvolution?.validationMessage == nil
+        else { return }
         cancelPreview()
         var history = stretchHistory
         history.updateCurrent(configuration)
         stretchHistory = history
         self.extractsBackground = extractsBackground
+        deconvolutionConfiguration = deconvolution
         load()
     }
 
     func replaceStretchStack(
         with stack: FITSStretchStack,
-        extractsBackground: Bool
+        extractsBackground: Bool,
+        deconvolution: FITSDeconvolutionConfiguration? = nil
     ) {
-        guard stack.stages.allSatisfy({ $0.validationMessage == nil }) else { return }
+        guard
+            stack.stages.allSatisfy({ $0.validationMessage == nil }),
+            deconvolution?.validationMessage == nil
+        else { return }
         let hasChanges = stretchHistory.stack != stack
             || self.extractsBackground != extractsBackground
+            || deconvolutionConfiguration != deconvolution
         cancelPreview()
         guard hasChanges else { return }
         var history = stretchHistory
         history.replaceStack(with: stack.stages)
         stretchHistory = history
         self.extractsBackground = extractsBackground
+        deconvolutionConfiguration = deconvolution
         load()
     }
 
@@ -145,15 +163,20 @@ final class ImageDocumentModel: ObservableObject {
 
     func preview(
         stretchStack: FITSStretchStack,
-        extractsBackground: Bool
+        extractsBackground: Bool,
+        deconvolution: FITSDeconvolutionConfiguration? = nil
     ) {
-        guard stretchStack.stages.allSatisfy({ $0.validationMessage == nil }) else {
+        guard
+            stretchStack.stages.allSatisfy({ $0.validationMessage == nil }),
+            deconvolution?.validationMessage == nil
+        else {
             cancelPreview()
             return
         }
         let requestedProcessing = FITSImageProcessingConfiguration(
             stretchStack: stretchStack,
-            extractsBackground: extractsBackground
+            extractsBackground: extractsBackground,
+            deconvolution: deconvolution
         )
         guard requestedProcessing != processingConfiguration else {
             cancelPreview()
@@ -162,6 +185,7 @@ final class ImageDocumentModel: ObservableObject {
         let processing = FITSImageProcessingConfiguration(
             stretchStack: stretchStack,
             extractsBackground: extractsBackground,
+            deconvolution: deconvolution,
             interactivePreview: true
         )
 

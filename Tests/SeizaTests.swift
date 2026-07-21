@@ -351,6 +351,43 @@ final class RenderBoundaryTests: XCTestCase {
         )
     }
 
+    func testDeconvolutionRunsOnLinearPixelsBeforeStretchingThroughSwiftBoundary() throws {
+        let size = 41
+        let center = size / 2
+        var values = [Int16](repeating: 500, count: size * size)
+        values[center * size + center] = 20_000
+        values[center * size + center - 1] = 10_000
+        values[center * size + center + 1] = 10_000
+        values[(center - 1) * size + center] = 10_000
+        values[(center + 1) * size + center] = 10_000
+        let url = try writeSyntheticFITS(width: size, height: size, values: values)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let stack = FITSStretchStack(stages: [.identity])
+        let plain = try SeizaCore.render(
+            url: url,
+            processing: FITSImageProcessingConfiguration(
+                stretchStack: stack,
+                extractsBackground: false
+            )
+        )
+        let restored = try SeizaCore.render(
+            url: url,
+            processing: FITSImageProcessingConfiguration(
+                stretchStack: stack,
+                extractsBackground: false,
+                deconvolution: .default
+            )
+        )
+
+        XCTAssertEqual(restored.image.width, size)
+        XCTAssertEqual(restored.image.height, size)
+        XCTAssertNotEqual(
+            plain.image.dataProvider?.data as Data?,
+            restored.image.dataProvider?.data as Data?
+        )
+    }
+
     func testInteractivePreviewCacheReappliesEveryStretchEdit() throws {
         let width = 96
         let height = 72
@@ -384,6 +421,50 @@ final class RenderBoundaryTests: XCTestCase {
             processing: FITSImageProcessingConfiguration(
                 stretchStack: FITSStretchStack(stages: [secondStretch]),
                 extractsBackground: false,
+                interactivePreview: true
+            )
+        )
+
+        XCTAssertNotEqual(
+            first.image.dataProvider?.data as Data?,
+            second.image.dataProvider?.data as Data?
+        )
+    }
+
+    func testInteractivePreviewReappliesEveryDeconvolutionEdit() throws {
+        let size = 81
+        let center = size / 2
+        var values = [Int16](repeating: 500, count: size * size)
+        values[center * size + center] = 20_000
+        for offset in [-2, -1, 1, 2] {
+            values[center * size + center + offset] = 8_000
+            values[(center + offset) * size + center] = 8_000
+        }
+        let url = try writeSyntheticFITS(width: size, height: size, values: values)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        var firstDeconvolution = FITSDeconvolutionConfiguration.default
+        firstDeconvolution.psfFWHMPixels = 2.0
+        let first = try SeizaCore.render(
+            url: url,
+            maxDimension: 2_048,
+            processing: FITSImageProcessingConfiguration(
+                stretchStack: FITSStretchStack(stages: [.identity]),
+                extractsBackground: false,
+                deconvolution: firstDeconvolution,
+                interactivePreview: true
+            )
+        )
+
+        var secondDeconvolution = firstDeconvolution
+        secondDeconvolution.psfFWHMPixels = 4.0
+        let second = try SeizaCore.render(
+            url: url,
+            maxDimension: 2_048,
+            processing: FITSImageProcessingConfiguration(
+                stretchStack: FITSStretchStack(stages: [.identity]),
+                extractsBackground: false,
+                deconvolution: secondDeconvolution,
                 interactivePreview: true
             )
         )
@@ -555,7 +636,7 @@ final class FITSStretchConfigurationTests: XCTestCase {
         XCTAssertEqual((json[1]["model"] as? [String: Any])?["type"] as? String, "linear")
     }
 
-    func testProcessingConfigurationWrapsTheStackAndOptionalBackgroundStep() throws {
+    func testProcessingConfigurationWrapsTheStackAndOptionalLinearSteps() throws {
         let withoutBackground = FITSImageProcessingConfiguration(
             stretchStack: FITSStretchStack(stages: [.default, .identity]),
             extractsBackground: false
@@ -565,21 +646,34 @@ final class FITSStretchConfigurationTests: XCTestCase {
         )
         XCTAssertEqual((plainJSON["stretch"] as? [Any])?.count, 2)
         XCTAssertNil(plainJSON["background"])
+        XCTAssertNil(plainJSON["deconvolution"])
 
+        var deconvolution = FITSDeconvolutionConfiguration.default
+        deconvolution.psfFWHMPixels = 2.8
         let withBackground = FITSImageProcessingConfiguration(
             stretchStack: .default,
-            extractsBackground: true
+            extractsBackground: true,
+            deconvolution: deconvolution
         )
         let processedJSON = try XCTUnwrap(
             JSONSerialization.jsonObject(with: withBackground.jsonData) as? [String: Any]
         )
         let background = try XCTUnwrap(processedJSON["background"] as? [String: Any])
         XCTAssertEqual(background["mode"] as? String, "subtract")
+        let deconvolutionJSON = try XCTUnwrap(
+            processedJSON["deconvolution"] as? [String: Any]
+        )
+        XCTAssertEqual(deconvolutionJSON["psf_fwhm_pixels"] as? Double, 2.8)
+        XCTAssertEqual(deconvolutionJSON["iterations"] as? Int, 4)
+        XCTAssertEqual(deconvolutionJSON["amount"] as? Double, 0.35)
+        XCTAssertEqual(deconvolutionJSON["noise_fraction"] as? Double, 0.001)
+        XCTAssertEqual(deconvolutionJSON["max_correction"] as? Double, 2.0)
         XCTAssertNotEqual(withBackground.cacheIdentifier, withoutBackground.cacheIdentifier)
 
         let interactivePreview = FITSImageProcessingConfiguration(
             stretchStack: .default,
             extractsBackground: true,
+            deconvolution: deconvolution,
             interactivePreview: true
         )
         let previewJSON = try XCTUnwrap(
@@ -587,6 +681,20 @@ final class FITSStretchConfigurationTests: XCTestCase {
         )
         XCTAssertEqual(previewJSON["interactive_preview"] as? Bool, true)
         XCTAssertNotEqual(interactivePreview.cacheIdentifier, withBackground.cacheIdentifier)
+    }
+
+    func testDeconvolutionConfigurationRejectsUnsafeOrInvalidValues() {
+        var configuration = FITSDeconvolutionConfiguration.default
+        XCTAssertNil(configuration.validationMessage)
+
+        configuration.iterations = 0
+        XCTAssertNotNil(configuration.validationMessage)
+        configuration = .default
+        configuration.psfFWHMPixels = .nan
+        XCTAssertNotNil(configuration.validationMessage)
+        configuration = .default
+        configuration.amount = 1.1
+        XCTAssertNotNil(configuration.validationMessage)
     }
 
     func testStretchHistorySupportsUndoRedoAndClearsDivergentRedo() {
