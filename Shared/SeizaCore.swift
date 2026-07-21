@@ -175,7 +175,7 @@ enum FITSStretchType: String, CaseIterable, Identifiable {
     }
 }
 
-enum FITSStretchColorStrategy: String, CaseIterable, Identifiable, Encodable {
+enum FITSStretchColorStrategy: String, CaseIterable, Identifiable, Codable {
     case linked
     case unlinked
     case luminancePreserving = "luminance-preserving"
@@ -202,8 +202,10 @@ enum FITSStretchColorStrategy: String, CaseIterable, Identifiable, Encodable {
     }
 }
 
-struct FITSStretchConfiguration: Equatable, Encodable {
+struct FITSStretchConfiguration: Equatable, Codable {
     static let `default` = Self()
+
+    init() {}
 
     static var identity: Self {
         var configuration = Self.default
@@ -316,6 +318,80 @@ struct FITSStretchConfiguration: Equatable, Encodable {
         try container.encode(colorStrategy, forKey: .colorStrategy)
         try container.encode(maxAnalysisSamples, forKey: .maxAnalysisSamples)
     }
+
+    init(from decoder: Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        colorStrategy = try container.decodeIfPresent(
+            FITSStretchColorStrategy.self,
+            forKey: .colorStrategy
+        ) ?? colorStrategy
+        maxAnalysisSamples = try container.decodeIfPresent(
+            Int.self,
+            forKey: .maxAnalysisSamples
+        ) ?? maxAnalysisSamples
+
+        let model = try container.decode(StretchModelDecodingPayload.self, forKey: .model)
+        switch model.type {
+        case "auto-mtf":
+            type = .autoMtf
+            targetMedian = try model.required(model.targetMedian, named: "target_median")
+            shadowsClip = try model.required(model.shadowsClip, named: "shadows_clip")
+        case "percentile-asinh":
+            type = .percentileAsinh
+            blackPercentile = try model.required(
+                model.blackPercentile,
+                named: "black_percentile"
+            )
+            whitePercentile = try model.required(
+                model.whitePercentile,
+                named: "white_percentile"
+            )
+            strength = try model.required(model.strength, named: "strength")
+        case "linear":
+            type = .linear
+            black = try model.required(model.black, named: "black")
+            white = try model.required(model.white, named: "white")
+        case "asinh":
+            type = .asinh
+            black = try model.required(model.black, named: "black")
+            white = try model.required(model.white, named: "white")
+            strength = try model.required(model.strength, named: "strength")
+        case "mtf":
+            type = .mtf
+            shadows = try model.required(model.shadows, named: "shadows")
+            midtone = try model.required(model.midtone, named: "midtone")
+            highlights = try model.required(model.highlights, named: "highlights")
+        case "ghs":
+            type = .ghs
+            stretchFactor = try model.required(model.stretchFactor, named: "stretch_factor")
+            localIntensity = try model.required(model.localIntensity, named: "local_intensity")
+            symmetryPoint = try model.required(model.symmetryPoint, named: "symmetry_point")
+            protectShadows = try model.required(model.protectShadows, named: "protect_shadows")
+            protectHighlights = try model.required(
+                model.protectHighlights,
+                named: "protect_highlights"
+            )
+            black = try model.required(model.black, named: "black")
+            white = try model.required(model.white, named: "white")
+        case "identity":
+            type = .identity
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .model,
+                in: container,
+                debugDescription: "Unknown stretch model \(model.type)."
+            )
+        }
+
+        if let validationMessage {
+            throw DecodingError.dataCorruptedError(
+                forKey: .model,
+                in: container,
+                debugDescription: validationMessage
+            )
+        }
+    }
 }
 
 struct FITSStretchStack: Equatable, Encodable {
@@ -342,7 +418,7 @@ struct FITSStretchStack: Equatable, Encodable {
     }
 }
 
-struct FITSDeconvolutionConfiguration: Equatable, Encodable {
+struct FITSDeconvolutionConfiguration: Equatable, Codable {
     static let `default` = Self()
 
     var psfFWHMPixels = 3.0
@@ -383,7 +459,7 @@ struct FITSDeconvolutionConfiguration: Equatable, Encodable {
     }
 }
 
-struct FITSImageProcessingConfiguration: Equatable, Encodable {
+struct FITSImageProcessingConfiguration: Equatable, Codable {
     static let `default` = Self(
         stretchStack: .default,
         extractsBackground: false,
@@ -427,8 +503,12 @@ struct FITSImageProcessingConfiguration: Equatable, Encodable {
         case interactivePreview = "interactive_preview"
     }
 
-    private struct BackgroundPayload: Encodable {
-        let mode = "subtract"
+    private struct BackgroundPayload: Codable {
+        let mode: String
+
+        init(mode: String = "subtract") {
+            self.mode = mode
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -444,6 +524,51 @@ struct FITSImageProcessingConfiguration: Equatable, Encodable {
             try container.encode(true, forKey: .interactivePreview)
         }
     }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let stages = try container.decode(
+            [FITSStretchConfiguration].self,
+            forKey: .stretch
+        )
+        guard !stages.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .stretch,
+                in: container,
+                debugDescription: "A processing recipe needs at least one stretch stage."
+            )
+        }
+        let background = try container.decodeIfPresent(
+            BackgroundPayload.self,
+            forKey: .background
+        )
+        if let background, background.mode != "subtract" {
+            throw DecodingError.dataCorruptedError(
+                forKey: .background,
+                in: container,
+                debugDescription: "Unknown background operation \(background.mode)."
+            )
+        }
+        self.init(
+            stretchStack: FITSStretchStack(stages: stages),
+            extractsBackground: background != nil,
+            deconvolution: try container.decodeIfPresent(
+                FITSDeconvolutionConfiguration.self,
+                forKey: .deconvolution
+            ),
+            interactivePreview: try container.decodeIfPresent(
+                Bool.self,
+                forKey: .interactivePreview
+            ) ?? false
+        )
+        if let validationMessage = deconvolution?.validationMessage {
+            throw DecodingError.dataCorruptedError(
+                forKey: .deconvolution,
+                in: container,
+                debugDescription: validationMessage
+            )
+        }
+    }
 }
 
 struct FITSStretchHistory: Equatable {
@@ -453,6 +578,12 @@ struct FITSStretchHistory: Equatable {
 
     init(base: FITSStretchConfiguration = .default) {
         appliedStages = [base]
+    }
+
+    init(stack: FITSStretchStack) {
+        precondition(!stack.stages.isEmpty)
+        precondition(stack.stages.allSatisfy { $0.validationMessage == nil })
+        appliedStages = stack.stages
     }
 
     var stack: FITSStretchStack { FITSStretchStack(stages: appliedStages) }
@@ -568,6 +699,56 @@ private struct StretchModelPayload: Encodable {
         case .identity:
             try container.encode("identity", forKey: .type)
         }
+    }
+}
+
+private struct StretchModelDecodingPayload: Decodable {
+    let type: String
+    let targetMedian: Double?
+    let shadowsClip: Double?
+    let blackPercentile: Double?
+    let whitePercentile: Double?
+    let strength: Double?
+    let black: Double?
+    let white: Double?
+    let shadows: Double?
+    let midtone: Double?
+    let highlights: Double?
+    let stretchFactor: Double?
+    let localIntensity: Double?
+    let symmetryPoint: Double?
+    let protectShadows: Double?
+    let protectHighlights: Double?
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case targetMedian = "target_median"
+        case shadowsClip = "shadows_clip"
+        case blackPercentile = "black_percentile"
+        case whitePercentile = "white_percentile"
+        case strength
+        case black
+        case white
+        case shadows
+        case midtone
+        case highlights
+        case stretchFactor = "stretch_factor"
+        case localIntensity = "local_intensity"
+        case symmetryPoint = "symmetry_point"
+        case protectShadows = "protect_shadows"
+        case protectHighlights = "protect_highlights"
+    }
+
+    func required(_ value: Double?, named name: String) throws -> Double {
+        guard let value else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: [],
+                    debugDescription: "Stretch model is missing \(name)."
+                )
+            )
+        }
+        return value
     }
 }
 

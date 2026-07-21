@@ -40,6 +40,17 @@ struct SeizaApp: App {
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
             }
+            CommandGroup(after: .pasteboard) {
+                Button("Copy Adjustments") {
+                    appDelegate.copyImageAdjustments(nil)
+                }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+
+                Button("Paste Adjustments") {
+                    appDelegate.pasteImageAdjustments(nil)
+                }
+                .keyboardShortcut("v", modifiers: [.command, .shift])
+            }
         }
 
         Settings {
@@ -52,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private final class DocumentWindowSession {
         var controller: NSWindowController?
         let exportCoordinator = ImageExportCoordinator()
+        let processingClipboardCoordinator = ImageProcessingClipboardCoordinator()
         private var accessedURLs: [URL] = []
 
         init(accessURLs: [URL]) {
@@ -104,16 +116,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func exportDocument(_ sender: Any?) {
-        guard
-            let window = NSApp.keyWindow ?? NSApp.mainWindow,
-            let session = documentWindows.values.first(where: {
-                $0.controller?.window === window
-            })
-        else {
+        guard let session = activeDocumentSession else {
             NSSound.beep()
             return
         }
         session.exportCoordinator.requestExport()
+    }
+
+    @objc func copyImageAdjustments(_ sender: Any?) {
+        guard let session = activeDocumentSession else {
+            NSSound.beep()
+            return
+        }
+        session.processingClipboardCoordinator.requestCopy()
+    }
+
+    @objc func pasteImageAdjustments(_ sender: Any?) {
+        guard let session = activeDocumentSession else {
+            NSSound.beep()
+            return
+        }
+        session.processingClipboardCoordinator.requestPaste()
     }
 
     @objc func showAboutPanel(_ sender: Any?) {
@@ -161,6 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             imageURLs: imageURLs,
             openedDirectory: containsDirectory(request.roots),
             exportCoordinator: session.exportCoordinator,
+            processingClipboardCoordinator: session.processingClipboardCoordinator,
             in: window
         )
         window.setContentSize(NSSize(width: 1120, height: 760))
@@ -216,6 +240,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             imageURLs: imageURLs,
             openedDirectory: containsDirectory(request.roots),
             exportCoordinator: replacement.exportCoordinator,
+            processingClipboardCoordinator: replacement.processingClipboardCoordinator,
             in: window
         )
         window.makeKeyAndOrderFront(nil)
@@ -229,12 +254,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         imageURLs: [URL],
         openedDirectory: Bool,
         exportCoordinator: ImageExportCoordinator,
+        processingClipboardCoordinator: ImageProcessingClipboardCoordinator,
         in window: NSWindow
     ) {
         let view = ViewerView(
             urls: imageURLs,
             showsImageBrowser: openedDirectory,
             exportCoordinator: exportCoordinator,
+            processingClipboardCoordinator: processingClipboardCoordinator,
             onSelectionChange: { [weak window] selectedURL in
                 window?.title = selectedURL.lastPathComponent
             },
@@ -250,6 +277,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.contentViewController = NSHostingController(rootView: view)
         }
         window.title = imageURLs[0].lastPathComponent
+    }
+
+    private var activeDocumentSession: DocumentWindowSession? {
+        guard let window = NSApp.keyWindow ?? NSApp.mainWindow else { return nil }
+        return documentWindows.values.first { $0.controller?.window === window }
     }
 
     private func normalizedRoots(from urls: [URL]) -> (roots: [URL], accessURLs: [URL]) {
