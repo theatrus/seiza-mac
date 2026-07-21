@@ -6,6 +6,95 @@ struct RenderedImage {
     let metadata: ImageMetadata
 }
 
+struct CatalogComponentStatus: Decodable, Equatable {
+    let available: Bool
+    let path: String?
+}
+
+struct CatalogStatus: Decodable, Equatable {
+    let directory: String
+    let readyForSolving: Bool
+    let readyForOverlays: Bool
+    let starCatalog: CatalogComponentStatus
+    let blindIndex: CatalogComponentStatus
+    let objects: CatalogComponentStatus
+    let transients: CatalogComponentStatus
+    let minorBodies: CatalogComponentStatus
+}
+
+enum CatalogSetupPreset: UInt32, CaseIterable, Identifiable {
+    case standardBlind = 0
+    case deepestBlind = 1
+    case all = 2
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .standardBlind: "Standard blind solving"
+        case .deepestBlind: "Deepest blind solving"
+        case .all: "Everything"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .standardBlind:
+            "Recommended. G≤17 Gaia stars, blind index, named stars, deep-sky objects, transients, and Solar System bodies."
+        case .deepestBlind:
+            "For the faintest crowded fields. Replaces the standard star catalog with the optional G≤20 catalog (about 9 GB larger)."
+        case .all:
+            "Every published solver and overlay catalog, including both standard and G≤20 data. Intended for development and offline use."
+        }
+    }
+}
+
+struct CatalogSetupProgress: Decodable, Equatable {
+    enum Phase: String, Decodable {
+        case preparing
+        case manifest
+        case downloading
+        case verifying
+        case installing
+        case complete
+    }
+
+    let phase: Phase
+    let message: String
+    let fileName: String?
+    let filesCompleted: Int
+    let filesTotal: Int
+    let bytesCompleted: UInt64?
+    let bytesTotal: UInt64?
+    let writtenBytes: UInt64?
+
+    var fractionCompleted: Double? {
+        guard let bytesCompleted, let bytesTotal, bytesTotal > 0 else { return nil }
+        return min(max(Double(bytesCompleted) / Double(bytesTotal), 0), 1)
+    }
+}
+
+private final class CatalogSetupProgressSink {
+    let handler: (CatalogSetupProgress) -> Void
+
+    init(handler: @escaping (CatalogSetupProgress) -> Void) {
+        self.handler = handler
+    }
+}
+
+private let catalogSetupProgressCallback: @convention(c) (
+    UnsafePointer<CChar>?,
+    UnsafeMutableRawPointer?
+) -> Void = { jsonPointer, context in
+    guard let jsonPointer, let context else { return }
+    let data = Data(bytes: jsonPointer, count: strlen(jsonPointer))
+    guard let progress = try? JSONDecoder().decode(CatalogSetupProgress.self, from: data) else {
+        return
+    }
+    let sink = Unmanaged<CatalogSetupProgressSink>.fromOpaque(context).takeUnretainedValue()
+    sink.handler(progress)
+}
+
 struct ImageMetadata: Decodable {
     let width: Int
     let height: Int
@@ -245,6 +334,51 @@ enum SeizaCore {
     static var version: String {
         guard let pointer = seiza_core_version() else { return "unknown" }
         return String(cString: pointer)
+    }
+
+    static func catalogStatus(catalogDirectory: URL?) throws -> CatalogStatus {
+        var errorPointer: UnsafeMutablePointer<CChar>?
+        let resultPointer: UnsafeMutablePointer<CChar>? = if let catalogDirectory {
+            catalogDirectory.path.withCString { path in
+                seiza_catalog_status_json(path, &errorPointer)
+            }
+        } else {
+            seiza_catalog_status_json(nil, &errorPointer)
+        }
+        guard let resultPointer else { throw cabiError(&errorPointer) }
+        defer { seiza_string_free(resultPointer) }
+        let data = Data(bytes: resultPointer, count: strlen(resultPointer))
+        return try JSONDecoder().decode(CatalogStatus.self, from: data)
+    }
+
+    static func setupCatalogs(
+        catalogDirectory: URL?,
+        preset: CatalogSetupPreset,
+        onProgress: @escaping (CatalogSetupProgress) -> Void
+    ) throws {
+        let sink = Unmanaged.passRetained(CatalogSetupProgressSink(handler: onProgress))
+        defer { sink.release() }
+        var errorPointer: UnsafeMutablePointer<CChar>?
+        let succeeded: Bool = if let catalogDirectory {
+            catalogDirectory.path.withCString { path in
+                seiza_catalog_setup(
+                    path,
+                    preset.rawValue,
+                    catalogSetupProgressCallback,
+                    sink.toOpaque(),
+                    &errorPointer
+                )
+            }
+        } else {
+            seiza_catalog_setup(
+                nil,
+                preset.rawValue,
+                catalogSetupProgressCallback,
+                sink.toOpaque(),
+                &errorPointer
+            )
+        }
+        guard succeeded else { throw cabiError(&errorPointer) }
     }
 
     static func render(

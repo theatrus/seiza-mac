@@ -31,6 +31,8 @@ The initial app already provides:
   MTF for automatic stretches;
 - FITS header and image-statistics inspection;
 - asynchronous, explicitly requested blind solving through Seiza 0.11.2;
+- in-app catalog download, installation, repair, and readiness checks with
+  byte-level progress through the complete SHA-256 verification phase;
 - Seiza Server-parity solve overlays for named stars, individually toggleable
   deep-sky catalogs, current and historical transients, acquisition-time
   comets and asteroids, field stars, a coordinate grid, field center, and
@@ -102,10 +104,24 @@ environment setup.
 
 ## Catalogs and solving
 
-Previewing images does not require catalog data. Blind solving any supported
-FITS or raster image requires a
-complete Seiza catalog directory containing a star catalog and blind index.
-Create one with either:
+Previewing images does not require catalog data, and Seiza never starts a solve
+until you press Solve. Blind solving any supported FITS or raster image requires
+a complete Seiza catalog directory containing a star catalog and blind index.
+
+Open **Seiza > Settings** (`Command-,`), leave **Standard blind solving**
+selected, and click **Download and Install Catalogs**. You can use Seiza's
+default data location or choose another writable directory. The Settings pane
+reports download, installation, and verification progress and may be closed
+while setup continues.
+
+![Seiza catalog download and verification controls in Settings](docs/images/seiza-catalog-setup.jpg)
+
+After the transfer finishes, Seiza reads every large catalog from beginning to
+end to verify its SHA-256 digest. This phase can take several minutes, but its
+byte counter continues to report progress. Setup is safe to retry and will
+reuse already verified downloads.
+
+The equivalent command-line setup is:
 
 ```sh
 seiza setup
@@ -117,13 +133,15 @@ or:
 seiza download-data prebuilt --output /path/to/catalogs
 ```
 
-Choose that directory in Seiza's Settings. The sandbox permission is retained
-as a security-scoped bookmark; the app does not copy the catalog. The main
-object catalog supplies named-star and deep-sky overlays, `transients.bin`
+If you created a catalog directory on the command line, choose that directory
+in Seiza's Settings. The sandbox permission is retained as a security-scoped
+bookmark. The main object catalog supplies named-star and deep-sky overlays,
+`transients.bin`
 supplies dated transient overlays, and `minor-bodies.bin` supplies comet and
 asteroid positions at the FITS acquisition time. Solving and catalog loading
-only begin when the user presses Solve. Satellite overlays are intentionally
-deferred.
+only begin when the user presses Solve. If the required star catalog or blind
+index is missing, Solve explains the problem and links back to Catalog Settings.
+Satellite overlays are intentionally deferred.
 
 ## Quick Look and Preview.app
 

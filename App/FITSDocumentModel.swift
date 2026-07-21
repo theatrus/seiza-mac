@@ -95,7 +95,20 @@ final class ImageDocumentModel: ObservableObject {
                 if accessingFile { url.stopAccessingSecurityScopedResource() }
                 if accessingCatalog { catalogDirectory?.stopAccessingSecurityScopedResource() }
             }
-            let result = Result { try SeizaCore.solve(url: url, catalogDirectory: catalogDirectory) }
+            let result = Result {
+                let catalogStatus = try SeizaCore.catalogStatus(
+                    catalogDirectory: catalogDirectory
+                )
+                guard catalogStatus.readyForSolving else {
+                    throw SeizaCoreError.message(
+                        "Catalog setup is required before plate solving. Open Catalog Settings to download and verify the standard blind-solving package in \(catalogStatus.directory)."
+                    )
+                }
+                return try SeizaCore.solve(
+                    url: url,
+                    catalogDirectory: catalogDirectory
+                )
+            }
             DispatchQueue.main.async {
                 guard let self else { return }
                 switch result {
