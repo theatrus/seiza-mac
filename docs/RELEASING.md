@@ -1,5 +1,10 @@
 # Releasing Seiza for macOS
 
+This document covers signing credentials and workflow security. Follow the
+operational checklist in [`RELEASE.md`](../RELEASE.md) for every release,
+including the release PR, exact-head merge, annotated tag, artifact checks,
+download links, and screenshots.
+
 Tags matching `vMAJOR.MINOR.PATCH` build a universal macOS application, package
 it as a DMG and ZIP, verify the disk image, produce SHA-256 checksums, and create
 a GitHub release. The tag must match the Xcode `MARKETING_VERSION`. The release

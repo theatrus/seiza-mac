@@ -183,15 +183,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          version="${GITHUB_REF_NAME#v}"
+          release_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          screenshot_base="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/docs/images"
           printf '%s\n' \
             '## Seiza for macOS' \
             '' \
             'This universal application and disk image are Developer ID signed, notarized by Apple, and stapled for normal Gatekeeper installation.' \
             '' \
+            "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
+            "- [Download the zipped application](${release_base}/Seiza-${version}-universal.zip)" \
+            "- [Verify SHA-256 checksums](${release_base}/SHA256SUMS.txt)" \
+            '' \
             '- Universal macOS 15+ application (Apple silicon and Intel)' \
             '- FITS, JPEG, PNG, and TIFF viewing' \
             '- Explicit Seiza plate solving and catalog-aware overlays' \
             '- Quick Look FITS preview extension' \
+            '- Native folder browsing with cached thumbnails' \
+            '' \
+            "![Seiza folder browser](${screenshot_base}/seiza-gallery.jpg)" \
+            '' \
+            "![Seiza plate-solved FITS view](${screenshot_base}/seiza-solved-fits.jpg)" \
             > release-notes.md
           gh release create "$GITHUB_REF_NAME" \
             --verify-tag \

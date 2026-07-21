@@ -2,6 +2,15 @@
 
 [![CI](https://github.com/theatrus/seiza-mac/actions/workflows/ci.yml/badge.svg)](https://github.com/theatrus/seiza-mac/actions/workflows/ci.yml)
 
+[**Download Seiza 0.2.0 for macOS**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.2.0-universal.dmg) · [Release notes, ZIP, and checksums](https://github.com/theatrus/seiza-mac/releases/latest)
+
+Universal for Apple silicon and Intel. Requires macOS 15 or later. Developer ID
+signed, notarized by Apple, and bundled with a FITS Quick Look extension.
+
+![Seiza browsing an astronomy-image folder with its thumbnail drawer](docs/images/seiza-gallery.jpg)
+
+![Seiza displaying a plate-solved FITS image with a WCS grid, field center, and catalog overlays](docs/images/seiza-solved-fits.jpg)
+
 A fast, native macOS astronomy-image viewer and plate-solving app powered by the
 [Seiza](https://github.com/theatrus/seiza) Rust libraries. There is no Tauri,
 web view, or local server in the application path: SwiftUI and AppKit own the
@@ -87,8 +96,9 @@ xcodebuild test \
 
 Tags matching `vMAJOR.MINOR.PATCH` enter the protected `signing` environment,
 Developer ID sign and notarize the app and DMG, and publish the universal DMG
-and zipped app to GitHub Releases. See [docs/RELEASING.md](docs/RELEASING.md)
-for the credential and environment setup.
+and zipped app to GitHub Releases. See [RELEASE.md](RELEASE.md) for the complete
+release runbook and [docs/RELEASING.md](docs/RELEASING.md) for credential and
+environment setup.
 
 ## Catalogs and solving
 
