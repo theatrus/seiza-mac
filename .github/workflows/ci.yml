@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  pull_request:
   push:
     branches: [main]
 
@@ -17,6 +18,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -68,3 +71,194 @@ jobs:
             dist/Seiza-development.dmg \
             development
           hdiutil verify dist/Seiza-development.dmg
+
+      - name: Stage unsigned app for trusted main signing
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'theatrus/seiza-mac'
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            DerivedData/Build/Products/Release/Seiza.app \
+            "$RUNNER_TEMP/Seiza-unsigned.zip"
+
+      - name: Upload unsigned app for isolated main signing job
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'theatrus/seiza-mac'
+        uses: actions/upload-artifact@v7
+        with:
+          name: Seiza-unsigned-main-${{ github.sha }}
+          path: ${{ runner.temp }}/Seiza-unsigned.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  sign-main:
+    name: Sign latest main DMG
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'theatrus/seiza-mac'
+    needs: macos
+    environment: signing
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      MAIN_SHA: ${{ github.sha }}
+    steps:
+      - name: Check out trusted signing inputs at the validated commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: trusted
+
+      - name: Verify trusted checkout identity
+        run: |
+          test "$(git -C trusted rev-parse HEAD)" = "$MAIN_SHA"
+          printf 'SHORT_SHA=%s\n' "${MAIN_SHA:0:12}" >> "$GITHUB_ENV"
+
+      - name: Download validated unsigned app
+        uses: actions/download-artifact@v7
+        with:
+          name: Seiza-unsigned-main-${{ github.sha }}
+          path: unsigned
+
+      - name: Validate unsigned bundle as data
+        run: |
+          mkdir -p work
+          ditto -x -k unsigned/Seiza-unsigned.zip work
+          app_path="work/Seiza.app"
+          quicklook_path="$app_path/Contents/PlugIns/SeizaQuickLook.appex"
+          test -d "$quicklook_path"
+          test -z "$(find "$app_path" -type l -print -quit)"
+          test "$(plutil -extract CFBundleIdentifier raw "$app_path/Contents/Info.plist")" = "fyi.seiza.mac"
+          test "$(plutil -extract CFBundleIdentifier raw "$quicklook_path/Contents/Info.plist")" = "fyi.seiza.mac.quicklook"
+          file "$app_path/Contents/MacOS/Seiza" \
+            | grep -q 'universal binary with 2 architectures'
+
+      - name: Import Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_BUILD_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_BUILD_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          test -n "$APPLE_CERTIFICATE"
+          test -n "$APPLE_CERTIFICATE_PASSWORD"
+          test -n "$KEYCHAIN_PASSWORD"
+
+          certificate_path="$RUNNER_TEMP/certificate.p12"
+          keychain_path="$RUNNER_TEMP/seiza-signing.keychain-db"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 -D > "$certificate_path"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 3600 "$keychain_path"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+
+          certificate_identity="$(
+            security find-identity -v -p codesigning "$keychain_path" \
+              | awk -F'"' '/Developer ID Application/ { print $2; exit }'
+          )"
+          test -n "$certificate_identity"
+          printf 'CERT_ID=%s\n' "$certificate_identity" >> "$GITHUB_ENV"
+
+      - name: Sign application and Quick Look extension
+        run: |
+          app_path="work/Seiza.app"
+          quicklook_path="$app_path/Contents/PlugIns/SeizaQuickLook.appex"
+
+          codesign \
+            --force \
+            --options runtime \
+            --timestamp \
+            --entitlements trusted/QuickLook/SeizaQuickLook.entitlements \
+            --sign "$CERT_ID" \
+            "$quicklook_path"
+          codesign \
+            --force \
+            --options runtime \
+            --timestamp \
+            --entitlements trusted/App/Seiza.entitlements \
+            --sign "$CERT_ID" \
+            "$app_path"
+          codesign --verify --deep --strict --verbose=4 "$app_path"
+
+      - name: Notarize and staple application
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PRIVATE: ${{ secrets.APPLE_API_KEY_PRIVATE }}
+        run: |
+          test -n "$APPLE_API_ISSUER"
+          test -n "$APPLE_API_KEY"
+          test -n "$APPLE_API_KEY_PRIVATE"
+
+          app_path="work/Seiza.app"
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          submission_path="$RUNNER_TEMP/Seiza-notarization.zip"
+          printf '%s' "$APPLE_API_KEY_PRIVATE" | base64 -D > "$key_path"
+          chmod 600 "$key_path"
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "$submission_path"
+          xcrun notarytool submit "$submission_path" \
+            --key "$key_path" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait \
+            --timeout 30m
+          xcrun stapler staple "$app_path"
+          xcrun stapler validate "$app_path"
+          spctl --assess --type execute --verbose=4 "$app_path"
+
+      - name: Package, sign, notarize, and verify latest main DMG
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          dmg_path="dist/Seiza-main-${SHORT_SHA}.dmg"
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+
+          trusted/scripts/package-dmg.sh work/Seiza.app "$dmg_path" "main ${SHORT_SHA}"
+          codesign --force --timestamp --sign "$CERT_ID" "$dmg_path"
+          xcrun notarytool submit "$dmg_path" \
+            --key "$key_path" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait \
+            --timeout 30m
+          xcrun stapler staple "$dmg_path"
+          xcrun stapler validate "$dmg_path"
+          hdiutil verify "$dmg_path"
+          codesign --verify --verbose=4 "$dmg_path"
+          spctl --assess \
+            --type open \
+            --context context:primary-signature \
+            --verbose=4 \
+            "$dmg_path"
+          (
+            cd dist
+            shasum -a 256 "Seiza-main-${SHORT_SHA}.dmg" \
+              > "Seiza-main-${SHORT_SHA}.dmg.sha256"
+          )
+
+      - name: Upload signed latest main DMG
+        uses: actions/upload-artifact@v7
+        with:
+          name: Seiza-latest-main
+          path: |
+            dist/Seiza-main-*.dmg
+            dist/Seiza-main-*.dmg.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove signing material
+        if: always()
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          security delete-keychain "$RUNNER_TEMP/seiza-signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          rm -f "$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          rm -f "$RUNNER_TEMP/Seiza-notarization.zip"
