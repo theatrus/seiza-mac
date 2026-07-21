@@ -13,7 +13,7 @@ you ask it to.
 
 - **Latest public release:** [v0.3.0](https://github.com/theatrus/seiza-mac/releases/tag/v0.3.0), signed and notarized for Apple silicon and Intel.
 - **Current `main`:** unreleased. It adds repaired Finder Quick Look previews, paired histograms, image export, faster catalog installation, exact core version reporting, and a live full-precision stretch editor with background-gradient removal, stage reordering, undo/redo, and a detachable utility panel.
-- **In development:** [PR #13](https://github.com/theatrus/seiza-mac/pull/13) adds optional conservative stellar deconvolution on linear FITS pixels, with live controls for measured PSF FWHM, iterations, amount, noise damping, and correction limits. It uses the render composition in [Seiza PR #76](https://github.com/theatrus/seiza/pull/76).
+- **In development:** [PR #13](https://github.com/theatrus/seiza-mac/pull/13) adds optional conservative stellar deconvolution on linear FITS pixels, with live controls for measured PSF FWHM, iterations, amount, noise damping, and correction limits. It uses the render composition merged in [Seiza PR #76](https://github.com/theatrus/seiza/pull/76).
 - **Next focus:** the serious-inspection work in [the roadmap](docs/ROADMAP.md), starting with a real pixel loupe and measured image-quality overlays.
 
 ## See what is in the frame

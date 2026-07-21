@@ -16,7 +16,7 @@ Active [PR #13](https://github.com/theatrus/seiza-mac/pull/13) adds optional
 conservative deconvolution after background correction and before stretching.
 The Mac controls expose measured PSF FWHM,
 iterations, amount, noise damping, and correction limits without enabling the
-operation by default. The companion [Seiza PR #76](https://github.com/theatrus/seiza/pull/76)
+operation by default. Merged [Seiza PR #76](https://github.com/theatrus/seiza/pull/76)
 composes that step inside the native linear FITS render pipeline and preserves
 the cached background-prepared preview across deconvolution edits.
 
