@@ -9,6 +9,12 @@ you ask it to.
 
 [**Download Seiza 0.3.0**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.3.0-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
+## Project status
+
+- **Latest public release:** [v0.3.0](https://github.com/theatrus/seiza-mac/releases/tag/v0.3.0), signed and notarized for Apple silicon and Intel.
+- **Current `main`:** unreleased. It adds repaired Finder Quick Look previews, paired histograms, image export, faster catalog installation, direct use of upstream `seiza-cabi`, exact core version reporting, and stackable stretch controls with undo/redo.
+- **Next focus:** the serious-inspection work in [the roadmap](docs/ROADMAP.md), starting with a real pixel loupe and measured image-quality overlays.
+
 ![Seiza browsing an astronomy-image folder with its thumbnail drawer](docs/images/seiza-gallery.jpg)
 
 ![Seiza displaying a plate-solved FITS image with a WCS grid, field center, and catalog overlays](docs/images/seiza-solved-fits.jpg)
@@ -19,22 +25,25 @@ Electron, web view, or local server.
 
 ## Feature matrix
 
-| Feature | Status | What you get |
-| --- | --- | --- |
-| FITS and raster viewing | Available | Open FITS, JPEG, PNG, and TIFF files or drop them onto an existing window. |
-| Folder browsing | Available | Browse mixed-format folders with a thumbnail drawer, local thumbnail cache, and arrow-key navigation. |
-| FITS display | Available | View mono, planar RGB, and Bayer/OSC data with fast native rendering. |
-| Stretch controls | Available | Stack or replace automatic and manual stretches without intermediate 8-bit quantization; undo and redo edits; pick GHS symmetry points from the image; and choose linked, per-channel, or luminance-preserving color handling. |
-| Zoom and inspection | Available | Fit to window, pan, pinch around the pointer, and compare pre- and post-stretch histograms alongside headers and statistics. |
-| Local plate solving | Available | Run a blind solve only when you press Solve. No image is uploaded. |
-| Catalog setup | Available | Download, verify, install, or repair solver catalogs in Settings with visible progress. |
-| Solver overlays | Available | Toggle named and field stars, individual deep-sky catalogs, transients, comets, asteroids, detections, coordinate grid, and field center. |
-| Object outlines | Available | Draw detailed OpenNGC contours with catalog ellipses as a fallback. |
-| Image export | Available | Export the displayed image as PNG, JPEG, or TIFF, with or without the currently visible solve overlays. |
-| Finder Quick Look preview | Available | Select a FITS file in Finder and press Space to see a stretched preview without opening Seiza. |
-| Finder file support | Available | Register `.fits`, `.fit`, and `.fts` files with a dedicated FITS document icon. |
-| Finder icon thumbnails | Planned | Show image content on FITS file icons. Spacebar previews already work through Quick Look. |
-| FITS cubes and multiple extensions | Planned | Navigate image planes and HDUs inside one FITS file. |
+The release column describes the downloadable v0.3.0 build. The `main` column
+describes code that has merged but has not been published as a versioned release.
+
+| Feature | v0.3.0 release | Current `main` | What you get |
+| --- | --- | --- | --- |
+| FITS and raster viewing | Included | Included | Open FITS, JPEG, PNG, and TIFF files or drop them onto an existing window. |
+| Folder browsing | Included | Included | Browse mixed-format folders with a thumbnail drawer, local thumbnail cache, and arrow-key navigation. |
+| FITS display | Included | Included | View mono, planar RGB, and Bayer/OSC data with fast native rendering. |
+| Stretch controls | Basic RGB modes | Expanded | Stack or replace automatic and manual stretches without intermediate 8-bit quantization; undo and redo edits; pick GHS symmetry points from the image; and choose linked, per-channel, or luminance-preserving color handling. |
+| Zoom and inspection | Headers and statistics | Expanded | Fit to window, pan, pinch around the pointer, and compare pre- and post-stretch histograms alongside headers and statistics. |
+| Local plate solving | Included | Included | Run a blind solve only when you press Solve. No image is uploaded. |
+| Catalog setup | Included | Faster installation | Download, verify, install, or repair solver catalogs in Settings with visible progress and reuse the verified cache through hard links when possible. |
+| Solver overlays | Included | Included | Toggle named and field stars, individual deep-sky catalogs, transients, comets, asteroids, detections, coordinate grid, and field center. |
+| Object outlines | Included | Included | Draw detailed OpenNGC contours with catalog ellipses as a fallback. |
+| Image export | Not included | Available | Export the displayed image as PNG, JPEG, or TIFF, with or without the currently visible solve overlays. |
+| Finder Quick Look preview | Known Finder issue | Fixed | Select a FITS file in Finder and press Space to see a stretched preview without opening Seiza. |
+| Finder file support | Included | Included | Register `.fits`, `.fit`, and `.fts` files with a dedicated FITS document icon. |
+| Finder icon thumbnails | Planned | Planned | Show image content on FITS file icons. Spacebar previews already work through Quick Look on `main`. |
+| FITS cubes and multiple extensions | Planned | Planned | Navigate image planes and HDUs inside one FITS file. |
 
 ## Download
 
