@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 use std::time::Instant;
 
-const VERSION: &CStr = c"0.1.0";
+const VERSION: &CStr = c"0.2.0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
