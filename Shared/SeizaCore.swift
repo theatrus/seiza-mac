@@ -342,20 +342,68 @@ struct FITSStretchStack: Equatable, Encodable {
     }
 }
 
+struct FITSDeconvolutionConfiguration: Equatable, Encodable {
+    static let `default` = Self()
+
+    var psfFWHMPixels = 3.0
+    var iterations = 4
+    var amount = 0.35
+    var noiseFraction = 0.001
+    var maxCorrection = 2.0
+
+    var validationMessage: String? {
+        let finiteValues = [psfFWHMPixels, amount, noiseFraction, maxCorrection]
+        guard finiteValues.allSatisfy(\.isFinite) else {
+            return "Deconvolution parameters must be finite numbers."
+        }
+        guard (0.25...100.0).contains(psfFWHMPixels) else {
+            return "PSF FWHM must be between 0.25 and 100 pixels."
+        }
+        guard (1...50).contains(iterations) else {
+            return "Iterations must be between 1 and 50."
+        }
+        guard (0.0...1.0).contains(amount) else {
+            return "Amount must be between 0 and 1."
+        }
+        guard (0.0...0.25).contains(noiseFraction) else {
+            return "Noise damping must be between 0 and 0.25."
+        }
+        guard (1.0...100.0).contains(maxCorrection) else {
+            return "Correction limit must be between 1 and 100."
+        }
+        return nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case psfFWHMPixels = "psf_fwhm_pixels"
+        case iterations
+        case amount
+        case noiseFraction = "noise_fraction"
+        case maxCorrection = "max_correction"
+    }
+}
+
 struct FITSImageProcessingConfiguration: Equatable, Encodable {
-    static let `default` = Self(stretchStack: .default, extractsBackground: false)
+    static let `default` = Self(
+        stretchStack: .default,
+        extractsBackground: false,
+        deconvolution: nil
+    )
 
     let stretchStack: FITSStretchStack
     let extractsBackground: Bool
+    let deconvolution: FITSDeconvolutionConfiguration?
     let interactivePreview: Bool
 
     init(
         stretchStack: FITSStretchStack,
         extractsBackground: Bool,
+        deconvolution: FITSDeconvolutionConfiguration? = nil,
         interactivePreview: Bool = false
     ) {
         self.stretchStack = stretchStack
         self.extractsBackground = extractsBackground
+        self.deconvolution = deconvolution
         self.interactivePreview = interactivePreview
     }
 
@@ -375,6 +423,7 @@ struct FITSImageProcessingConfiguration: Equatable, Encodable {
     private enum CodingKeys: String, CodingKey {
         case stretch
         case background
+        case deconvolution
         case interactivePreview = "interactive_preview"
     }
 
@@ -387,6 +436,9 @@ struct FITSImageProcessingConfiguration: Equatable, Encodable {
         try container.encode(stretchStack.stages, forKey: .stretch)
         if extractsBackground {
             try container.encode(BackgroundPayload(), forKey: .background)
+        }
+        if let deconvolution {
+            try container.encode(deconvolution, forKey: .deconvolution)
         }
         if interactivePreview {
             try container.encode(true, forKey: .interactivePreview)

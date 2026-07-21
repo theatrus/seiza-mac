@@ -12,8 +12,8 @@ you ask it to.
 ## Project status
 
 - **Latest public release:** [v0.3.0](https://github.com/theatrus/seiza-mac/releases/tag/v0.3.0), signed and notarized for Apple silicon and Intel.
-- **Current `main`:** unreleased. It adds repaired Finder Quick Look previews, paired histograms, image export, faster catalog installation, direct use of upstream `seiza-cabi`, exact core version reporting, and stackable stretch controls with undo/redo.
-- **In development:** [PR #12](https://github.com/theatrus/seiza-mac/pull/12) adds latest-only live stretch previews, background-gradient removal, in-place stage editing and reordering, and a detachable stretch utility panel.
+- **Current `main`:** unreleased. It adds repaired Finder Quick Look previews, paired histograms, image export, faster catalog installation, exact core version reporting, and a live full-precision stretch editor with background-gradient removal, stage reordering, undo/redo, and a detachable utility panel.
+- **In development:** [PR #13](https://github.com/theatrus/seiza-mac/pull/13) adds optional conservative stellar deconvolution on linear FITS pixels, with live controls for measured PSF FWHM, iterations, amount, noise damping, and correction limits. It uses the render composition merged in [Seiza PR #76](https://github.com/theatrus/seiza/pull/76).
 - **Next focus:** the serious-inspection work in [the roadmap](docs/ROADMAP.md), starting with a real pixel loupe and measured image-quality overlays.
 
 ## See what is in the frame
@@ -41,16 +41,18 @@ Electron, web view, or local server.
 ## Feature matrix
 
 The release column describes the downloadable v0.3.0 build. The `main` column
-describes merged but unreleased code. The development column is the open
-[live-processing PR](https://github.com/theatrus/seiza-mac/pull/12) shown in the
-new screenshots above.
+describes merged but unreleased code, including the live-processing UI shown in
+the screenshots above. The development column describes the active
+[deconvolution PR](https://github.com/theatrus/seiza-mac/pull/13).
 
 | Feature | v0.3.0 release | Current `main` | Development | What you get |
 | --- | --- | --- | --- | --- |
 | FITS and raster viewing | Included | Included | Same | Open FITS, JPEG, PNG, and TIFF files or drop them onto an existing window. |
 | Folder browsing | Included | Included | Same | Browse mixed-format folders with a thumbnail drawer, local thumbnail cache, and arrow-key navigation. |
 | FITS display | Included | Included | Same | View mono, planar RGB, and Bayer/OSC data with fast native rendering. |
-| Stretch controls | Basic RGB modes | Stackable | Live stack editor | Add, remove, reorder, and edit automatic or manual stages without intermediate 8-bit quantization; preview changes live in the default popover or a detachable utility panel; undo and redo edits; optionally remove smooth background gradients before stretching; pick GHS symmetry points from the image; and choose linked, per-channel, or luminance-preserving color handling. |
+| Stretch controls | Basic RGB modes | Live stack editor | Same | Add, remove, reorder, and edit automatic or manual stages without intermediate 8-bit quantization; preview changes live in the default popover or a detachable utility panel; undo and redo edits; pick GHS symmetry points from the image; and choose linked, per-channel, or luminance-preserving color handling. |
+| Background extraction | Not included | Available | Same | Fit and subtract a smooth gradient from linear mono or RGB samples before display stretching, while reusing the corrected preview as stretch controls change. |
+| Light deconvolution | Not included | Not included | Available | Apply conservative damped Richardson–Lucy restoration to linear mono or RGB FITS data before stretching, using a measured stellar PSF FWHM and guarded noise/ringing controls. Nothing runs unless you enable it. |
 | Zoom and inspection | Headers and statistics | Expanded | Same | Fit to window, pan, pinch around the pointer, and compare pre- and post-stretch histograms alongside headers and statistics. |
 | Local plate solving | Included | Included | Same | Run a blind solve only when you press Solve. No image is uploaded. |
 | Catalog setup | Included | Faster installation | Same | Download, verify, install, or repair solver catalogs in Settings with visible progress and reuse the verified cache through hard links when possible. |

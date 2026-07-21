@@ -400,6 +400,7 @@ private struct ImagePageView: View {
     @State private var stretchDraftStages = [FITSStretchConfiguration.default]
     @State private var selectedStretchStageIndex = 0
     @State private var extractsBackgroundDraft = false
+    @State private var deconvolutionDraft: FITSDeconvolutionConfiguration?
     @State private var isPickingSymmetryPoint = false
     @State private var returnsToStretchPanelAfterPicking = false
     @StateObject private var stretchPanelPresenter = StretchPanelPresenter()
@@ -689,6 +690,7 @@ private struct ImagePageView: View {
         stretchDraftStages = model.stretchHistory.appliedStages
         selectedStretchStageIndex = stretchDraftStages.count - 1
         extractsBackgroundDraft = model.extractsBackground
+        deconvolutionDraft = model.deconvolutionConfiguration
     }
 
     private func stretchEditor(
@@ -699,6 +701,7 @@ private struct ImagePageView: View {
             stages: $stretchDraftStages,
             selectedStageIndex: $selectedStretchStageIndex,
             extractsBackground: $extractsBackgroundDraft,
+            deconvolution: $deconvolutionDraft,
             undo: {
                 model.undoStretch()
                 beginStretchEditing()
@@ -714,17 +717,19 @@ private struct ImagePageView: View {
             },
             popOut: presentation == .popover ? { presentStretchPanel() } : nil,
             contentMaxHeight: presentation == .popover ? 520 : nil,
-            preview: { stack, extractsBackground in
+            preview: { stack, extractsBackground, deconvolution in
                 model.preview(
                     stretchStack: stack,
-                    extractsBackground: extractsBackground
+                    extractsBackground: extractsBackground,
+                    deconvolution: deconvolution
                 )
             },
             clearPreview: model.cancelPreview,
-            save: { stack, extractsBackground in
+            save: { stack, extractsBackground, deconvolution in
                 model.replaceStretchStack(
                     with: stack,
-                    extractsBackground: extractsBackground
+                    extractsBackground: extractsBackground,
+                    deconvolution: deconvolution
                 )
                 dismissStretchEditor(presentation)
             },

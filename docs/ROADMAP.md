@@ -8,14 +8,17 @@ catalog overlays, document icons, and the first Quick Look extension. Feature
 work merged after v0.3.0 repairs Finder Quick Look, adds paired histograms and
 image export, adopts the upstream `seiza-cabi` crate and faster catalog
 installer, reports the exact linked core version, and adds full-precision
-stackable stretch controls with undo/redo and image-picked GHS symmetry points.
+stackable stretch controls with undo/redo, image-picked GHS symmetry points,
+latest-only live previews, optional smooth background-gradient removal,
+in-place add/remove/reorder controls, and a detachable utility panel.
 
-The open [live-processing PR](https://github.com/theatrus/seiza-mac/pull/12)
-adds latest-only live previews, optional smooth background-gradient removal,
-in-place add/remove/reorder controls, and a detachable utility panel backed by
-the same draft stack. That work has passed local tests and universal Release
-builds but is not on `main` or in a versioned public release yet. Phase 2 is the
-next product focus after it lands.
+Active [PR #13](https://github.com/theatrus/seiza-mac/pull/13) adds optional
+conservative deconvolution after background correction and before stretching.
+The Mac controls expose measured PSF FWHM,
+iterations, amount, noise damping, and correction limits without enabling the
+operation by default. Merged [Seiza PR #76](https://github.com/theatrus/seiza/pull/76)
+composes that step inside the native linear FITS render pipeline and preserves
+the cached background-prepared preview across deconvolution edits.
 
 ## Phase 1 — native viewer foundation (complete on `main`)
 
@@ -24,9 +27,9 @@ next product focus after it lands.
 - parameterized Auto MTF, percentile Asinh, Linear, Asinh, MTF, GHS, and
   identity display modes with linked, per-channel, and luminance-preserving
   color handling for planar-RGB and OSC/Bayer images; additive stage history,
-  undo/redo, and image-picked GHS symmetry points; PR #12 adds live draft-stack
-  editing, stage removal/reordering, latest-only previews, optional linear
-  background-gradient removal, and a detachable utility panel
+  undo/redo, image-picked GHS symmetry points, live draft-stack editing, stage
+  removal/reordering, latest-only previews, optional linear background-gradient
+  removal, and a detachable utility panel
 - header/statistics inspector with paired pre- and post-stretch RGB or luminance histograms
 - blind solve action with security-scoped catalog selection
 - catalog-colored, independently toggleable solve overlays for named stars,
@@ -39,8 +42,9 @@ next product focus after it lands.
 - managed, retry-safe catalog download and repair UI with readiness checks and
   verified-cache, hard-link-aware installation progress
 
-## Phase 2 — serious inspection (next)
+## Phase 2 — serious inspection (in progress)
 
+- optional conservative stellar deconvolution with live bounded previews
 - pixel loupe, black/midtone controls, and finer stretch controls
 - star-detection overlays and measured HFR/FWHM
 - compass, scale bar, and WCS cursor readout

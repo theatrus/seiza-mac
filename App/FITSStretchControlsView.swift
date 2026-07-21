@@ -5,14 +5,15 @@ struct FITSStretchControlsView: View {
     @Binding var stages: [FITSStretchConfiguration]
     @Binding var selectedStageIndex: Int
     @Binding var extractsBackground: Bool
+    @Binding var deconvolution: FITSDeconvolutionConfiguration?
     let undo: () -> Void
     let redo: () -> Void
     let pickSymmetryPoint: () -> Void
     let popOut: (() -> Void)?
     let contentMaxHeight: CGFloat?
-    let preview: (FITSStretchStack, Bool) -> Void
+    let preview: (FITSStretchStack, Bool, FITSDeconvolutionConfiguration?) -> Void
     let clearPreview: () -> Void
-    let save: (FITSStretchStack, Bool) -> Void
+    let save: (FITSStretchStack, Bool, FITSDeconvolutionConfiguration?) -> Void
     let cancel: () -> Void
 
     @State private var previewTask: Task<Void, Never>?
@@ -145,12 +146,25 @@ struct FITSStretchControlsView: View {
 
                     Divider()
 
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Linear Processing")
+                            .font(.subheadline.weight(.semibold))
                         Toggle("Remove background gradient", isOn: $extractsBackground)
                         Text("Fit and subtract a smooth background from linear FITS samples before the first stretch stage.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+
+                        Toggle("Apply light deconvolution", isOn: deconvolutionEnabledBinding)
+                        Text("Restore stellar detail with a measured Gaussian PSF after background correction and before display stretching. Conservative defaults reduce, but cannot eliminate, noise amplification and ringing.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        if deconvolution != nil {
+                            deconvolutionParameterControls
+                                .padding(.top, 2)
+                        }
                     }
 
                     Divider()
@@ -240,10 +254,17 @@ struct FITSStretchControlsView: View {
                 Spacer()
                 Button("Save Changes") {
                     handledDismissal = true
-                    save(FITSStretchStack(stages: stages), extractsBackground)
+                    save(
+                        FITSStretchStack(stages: stages),
+                        extractsBackground,
+                        deconvolution
+                    )
                 }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(stages.contains { $0.validationMessage != nil })
+                    .disabled(
+                        stages.contains { $0.validationMessage != nil }
+                            || deconvolution?.validationMessage != nil
+                    )
             }
             .padding(12)
         }
@@ -256,6 +277,9 @@ struct FITSStretchControlsView: View {
             schedulePreview()
         }
         .onChange(of: extractsBackground) { _, _ in
+            schedulePreview()
+        }
+        .onChange(of: deconvolution) { _, _ in
             schedulePreview()
         }
         .onDisappear {
@@ -398,6 +422,46 @@ struct FITSStretchControlsView: View {
         )
     }
 
+    @ViewBuilder
+    private var deconvolutionParameterControls: some View {
+        StretchParameterRow(
+            title: "PSF FWHM",
+            value: deconvolutionBinding.psfFWHMPixels,
+            range: 0.25...15,
+            step: 0.05
+        )
+        DeconvolutionIntegerParameterRow(
+            title: "Iterations",
+            value: deconvolutionBinding.iterations,
+            range: 1...50
+        )
+        StretchParameterRow(
+            title: "Amount",
+            value: deconvolutionBinding.amount,
+            range: 0...1,
+            step: 0.01
+        )
+        StretchParameterRow(
+            title: "Noise damping",
+            value: deconvolutionBinding.noiseFraction,
+            range: 0...0.05,
+            step: 0.0005
+        )
+        StretchParameterRow(
+            title: "Correction limit",
+            value: deconvolutionBinding.maxCorrection,
+            range: 1...10,
+            step: 0.1
+        )
+
+        if let validationMessage = deconvolution?.validationMessage {
+            Label(validationMessage, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private var configuration: FITSStretchConfiguration {
         stages[selectedStageIndex]
     }
@@ -406,6 +470,22 @@ struct FITSStretchControlsView: View {
         Binding(
             get: { stages[selectedStageIndex] },
             set: { stages[selectedStageIndex] = $0 }
+        )
+    }
+
+    private var deconvolutionEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { deconvolution != nil },
+            set: { isEnabled in
+                deconvolution = isEnabled ? (deconvolution ?? .default) : nil
+            }
+        )
+    }
+
+    private var deconvolutionBinding: Binding<FITSDeconvolutionConfiguration> {
+        Binding(
+            get: { deconvolution ?? .default },
+            set: { deconvolution = $0 }
         )
     }
 
@@ -437,12 +517,16 @@ struct FITSStretchControlsView: View {
 
     private func schedulePreview() {
         previewTask?.cancel()
-        guard stages.allSatisfy({ $0.validationMessage == nil }) else {
+        guard
+            stages.allSatisfy({ $0.validationMessage == nil }),
+            deconvolution?.validationMessage == nil
+        else {
             clearPreview()
             return
         }
         let stack = FITSStretchStack(stages: stages)
         let background = extractsBackground
+        let deconvolution = deconvolution
         previewTask = Task {
             do {
                 try await Task.sleep(for: .milliseconds(140))
@@ -451,7 +535,7 @@ struct FITSStretchControlsView: View {
             }
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                preview(stack, background)
+                preview(stack, background, deconvolution)
             }
         }
     }
@@ -476,6 +560,28 @@ private struct StretchParameterRow: View {
             .labelsHidden()
             .multilineTextAlignment(.trailing)
             .frame(width: 68)
+        }
+        .controlSize(.small)
+    }
+}
+
+private struct DeconvolutionIntegerParameterRow: View {
+    let title: String
+    @Binding var value: Int
+    let range: ClosedRange<Int>
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(title)
+                .frame(width: 118, alignment: .leading)
+            Spacer()
+            Stepper(value: $value, in: range) {
+                TextField(title, value: $value, format: .number)
+                    .labelsHidden()
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 68)
+            }
+            .fixedSize()
         }
         .controlSize(.small)
     }

@@ -4,9 +4,8 @@ Seiza is built for two jobs: moving quickly through real observing data and
 getting trustworthy sky context when you ask for it. Image loading, stretching,
 catalog access, and solving all stay on the Mac.
 
-The screenshots in this guide show the current development build in
-[PR #12](https://github.com/theatrus/seiza-mac/pull/12). The downloadable v0.3.0
-release and current `main` are compared in the
+The screenshots in this guide show the current unreleased `main` build. The
+downloadable v0.3.0 release, current `main`, and active development work are compared in the
 [README feature matrix](../README.md#feature-matrix).
 
 ## Open one image or a directory
@@ -54,6 +53,16 @@ Edits are debounced and rendered on a bounded preview away from the main thread.
 Newer edits replace obsolete preview work. **Save Changes** commits the complete
 draft stack as one undoable operation and restores the full-resolution render;
 **Cancel** returns to the committed image.
+
+The development build in [PR #13](https://github.com/theatrus/seiza-mac/pull/13)
+also offers **Apply light deconvolution** in the same linear-processing
+section. Enable it only when you have measured the FWHM of
+unsaturated stars in source-image pixels. Seiza applies background correction
+first, then conservative damped Richardson–Lucy restoration, then the display
+stretch. The default four iterations and 35% amount are deliberately light;
+larger values can amplify noise or draw dark rings around stars. Live previews
+scale the PSF for their bounded resolution, while **Save Changes** renders the
+source at full resolution. Deconvolution never runs unless the toggle is on.
 
 ## Read the image before and after stretching
 
