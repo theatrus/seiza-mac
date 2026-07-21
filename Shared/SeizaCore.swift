@@ -357,6 +357,11 @@ enum SeizaCore {
         return String(cString: pointer)
     }
 
+    static var gitCommit: String {
+        guard let pointer = seiza_mac_core_git_commit() else { return "unknown" }
+        return String(cString: pointer)
+    }
+
     static func catalogStatus(catalogDirectory: URL?) throws -> CatalogStatus {
         var errorPointer: UnsafeMutablePointer<CChar>?
         let resultPointer: UnsafeMutablePointer<CChar>? = if let catalogDirectory {

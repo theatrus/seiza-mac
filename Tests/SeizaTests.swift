@@ -5,6 +5,29 @@ import UniformTypeIdentifiers
 import XCTest
 @testable import Seiza
 
+final class SeizaBuildInfoTests: XCTestCase {
+    func testAboutDetailsReportTheLockedUpstreamCore() throws {
+        let commit = SeizaCore.gitCommit
+        XCTAssertNotEqual(SeizaCore.version, "unknown")
+        XCTAssertEqual(commit.count, 40)
+        XCTAssertTrue(commit.allSatisfy(\.isHexDigit))
+
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let lock = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("Cargo.lock"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(lock.contains("name = \"seiza-cabi\""))
+        XCTAssertTrue(lock.contains("#\(commit)"))
+        XCTAssertEqual(
+            AboutDetails.seizaCoreDescription,
+            "Seiza Core \(SeizaCore.version)\nCommit \(commit)"
+        )
+    }
+}
+
 final class ImageCollectionTests: XCTestCase {
     func testMixedDirectoryFiltersAndNaturallySortsSupportedImages() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(

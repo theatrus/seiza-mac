@@ -11,10 +11,10 @@ compile the same Swift wrapper and statically link the same Rust C ABI.
 
 ```text
 Seiza.app ───────────────┐
-                        ├─ Swift SeizaCore ─ C ABI ─ seiza-cabi
-SeizaQuickLook.appex ────┘                         ├─ seiza-fits
-                                                   ├─ image
-                                                   └─ seiza
+                        ├─ Swift SeizaCore ─ C ABI ─ upstream seiza-cabi
+SeizaQuickLook.appex ────┘                                  ├─ seiza-fits
+                                                            ├─ image
+                                                            └─ seiza
 ```
 
 The Quick Look extension only decodes FITS, stretches it, and bounds the output
@@ -30,9 +30,12 @@ roots to the new ones.
 
 ## C ABI
 
-`Rust/seiza-cabi` produces `libseiza_cabi.a` and exports opaque image handles,
-borrowed byte buffers, owned UTF-8 strings, and JSON records. No Rust layout,
-allocator-owned memory, or panic is allowed to cross the ABI:
+The app depends on `seiza-cabi` directly from the main Seiza repository.
+`Rust/seiza-mac-core` is only a static-link host; it does not copy the C ABI
+implementation. It also exports the exact Seiza Git commit selected by
+`Cargo.lock` for the About panel. The upstream C ABI exports opaque image
+handles, borrowed byte buffers, owned UTF-8 strings, and JSON records. No Rust
+layout, allocator-owned memory, or panic is allowed to cross the ABI:
 
 - rendered RGBA bytes remain owned by an opaque handle until Swift copies them;
 - strings returned to Swift have an explicit `seiza_string_free` function;
@@ -96,6 +99,5 @@ Debug builds compile the host architecture. Release builds can pass both
 `arm64 x86_64` in `ARCHS`; `scripts/build-rust.sh` creates the two Rust slices
 and combines them with `lipo`. The resulting app and embedded extension need a
 single signing team, hardened runtime, notarization, and normal macOS app
-distribution. An XCFramework is unnecessary while the C ABI is private to this
-repository, but is the clean next step if `seiza-cabi` becomes a separately
-distributed SDK.
+distribution. Cargo builds the pinned upstream ABI directly, so an XCFramework
+is unnecessary for the current source-based integration.
