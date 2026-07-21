@@ -62,7 +62,10 @@ jobs:
             DerivedData/Build/Products/Release/Seiza.app \
             "dist/Seiza-${version}-universal.zip"
           hdiutil verify "dist/Seiza-${version}-universal.dmg"
-          shasum -a 256 dist/Seiza-* > dist/SHA256SUMS.txt
+          (
+            cd dist
+            shasum -a 256 Seiza-* > SHA256SUMS.txt
+          )
 
       - name: Publish GitHub release
         env:
