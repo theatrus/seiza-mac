@@ -198,6 +198,7 @@ jobs:
             '- Universal macOS 15+ application (Apple silicon and Intel)' \
             '- FITS, JPEG, PNG, and TIFF viewing' \
             '- Explicit Seiza plate solving and catalog-aware overlays' \
+            '- Managed catalog download, verification, installation, and repair in Settings' \
             '- Quick Look FITS preview extension' \
             '- Native folder browsing with cached thumbnails' \
             '' \

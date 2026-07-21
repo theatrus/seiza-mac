@@ -164,8 +164,8 @@ Before tagging, update `MARKETING_VERSION`, commit it to `main`, and make sure
 CI is green. Create and push an annotated tag with the same version:
 
 ```sh
-git tag -a v0.2.0 -m "Seiza 0.2.0"
-git push origin v0.2.0
+git tag -a v0.3.0 -m "Seiza 0.3.0"
+git push origin v0.3.0
 ```
 
 The protected `signing` environment may pause the job for reviewer approval.

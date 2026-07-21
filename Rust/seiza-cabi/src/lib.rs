@@ -25,7 +25,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-const VERSION: &CStr = c"0.2.0";
+const VERSION: &CStr = c"0.3.0";
 const COPY_BUFFER_BYTES: usize = 1024 * 1024;
 const PROGRESS_INTERVAL_BYTES: u64 = 16 * 1024 * 1024;
 static SETUP_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);

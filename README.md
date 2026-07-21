@@ -7,7 +7,7 @@ FITS data, inspect headers, plate-solve a frame, and see the stars and deep-sky
 objects in it. Everything runs locally, and Seiza never solves an image until
 you ask it to.
 
-[**Download Seiza 0.2.0**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.2.0-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
+[**Download Seiza 0.3.0**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.3.0-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
 ![Seiza browsing an astronomy-image folder with its thumbnail drawer](docs/images/seiza-gallery.jpg)
 
@@ -37,7 +37,7 @@ Electron, web view, or local server.
 
 ## Download
 
-[**Download the current DMG**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.2.0-universal.dmg), open it, and drag Seiza to Applications.
+[**Download the current DMG**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.3.0-universal.dmg), open it, and drag Seiza to Applications.
 
 Seiza requires macOS 15 or newer. The same download runs natively on Apple
 silicon and Intel Macs. Release builds are signed with Developer ID and
