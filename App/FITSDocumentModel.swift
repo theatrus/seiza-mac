@@ -21,15 +21,28 @@ final class ImageDocumentModel: ObservableObject {
     @Published private(set) var previewImage: CGImage?
     @Published private(set) var image: CGImage?
     @Published private(set) var metadata: ImageMetadata?
+    @Published private(set) var rgbStretchMode: RGBStretchMode
+    private var loadGeneration = 0
 
-    init(url: URL) {
+    init(url: URL, rgbStretchMode: RGBStretchMode = .auto) {
         self.url = url
-        previewImage = ImageThumbnailCache.memoryImage(for: url)
+        self.rgbStretchMode = rgbStretchMode
+        previewImage = ImageThumbnailCache.memoryImage(
+            for: url,
+            rgbStretchMode: rgbStretchMode
+        )
         if previewImage == nil {
-            ImageThumbnailCache.load(for: url) { [weak self] image in
+            ImageThumbnailCache.load(
+                for: url,
+                rgbStretchMode: rgbStretchMode
+            ) { [weak self] image in
                 guard let image else { return }
                 DispatchQueue.main.async {
-                    guard let self, self.image == nil else { return }
+                    guard
+                        let self,
+                        self.image == nil,
+                        self.rgbStretchMode == rgbStretchMode
+                    else { return }
                     self.previewImage = image
                 }
             }
@@ -37,14 +50,29 @@ final class ImageDocumentModel: ObservableObject {
         load()
     }
 
+    var supportsRGBStretch: Bool {
+        guard let colorKind = metadata?.colorKind else { return false }
+        return colorKind == "planar-rgb" || colorKind == "bayer"
+    }
+
+    func setRGBStretchMode(_ mode: RGBStretchMode) {
+        guard mode != rgbStretchMode else { return }
+        rgbStretchMode = mode
+        load()
+    }
+
     func load(targetMedian: Double = 0.2) {
+        loadGeneration &+= 1
+        let generation = loadGeneration
         loadState = .loading
         let url = url
+        let rgbStretchMode = rgbStretchMode
         ImageRenderQueue.renderFull(
             url: url,
-            targetMedian: targetMedian
+            targetMedian: targetMedian,
+            rgbStretchMode: rgbStretchMode
         ) { [weak self] result in
-            guard let self else { return }
+            guard let self, self.loadGeneration == generation else { return }
             switch result {
             case .success(let rendered):
                 self.image = rendered.image

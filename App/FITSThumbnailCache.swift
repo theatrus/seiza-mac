@@ -49,15 +49,21 @@ enum ImageThumbnailCache {
         return directory
     }()
 
-    static func memoryImage(for url: URL) -> CGImage? {
-        memory.object(forKey: cacheKey(for: url) as NSString)?.image
+    static func memoryImage(
+        for url: URL,
+        rgbStretchMode: RGBStretchMode = .auto
+    ) -> CGImage? {
+        memory.object(
+            forKey: cacheKey(for: url, rgbStretchMode: rgbStretchMode) as NSString
+        )?.image
     }
 
     static func load(
         for url: URL,
+        rgbStretchMode: RGBStretchMode = .auto,
         completion: @escaping (CGImage?) -> Void
     ) {
-        let key = cacheKey(for: url)
+        let key = cacheKey(for: url, rgbStretchMode: rgbStretchMode)
         if let image = memory.object(forKey: key as NSString)?.image {
             completion(image)
             return
@@ -91,24 +97,36 @@ enum ImageThumbnailCache {
 
     static func render(
         for url: URL,
+        rgbStretchMode: RGBStretchMode = .auto,
         completion: @escaping (CGImage?) -> Void
     ) {
-        ImageRenderQueue.renderThumbnail(url: url, completion: completion)
+        ImageRenderQueue.renderThumbnail(
+            url: url,
+            rgbStretchMode: rgbStretchMode,
+            completion: completion
+        )
     }
 
-    static func prefetch(_ urls: [URL]) {
-        for url in urls where memoryImage(for: url) == nil {
-            load(for: url) { cached in
+    static func prefetch(
+        _ urls: [URL],
+        rgbStretchMode: RGBStretchMode = .auto
+    ) {
+        for url in urls where memoryImage(for: url, rgbStretchMode: rgbStretchMode) == nil {
+            load(for: url, rgbStretchMode: rgbStretchMode) { cached in
                 guard cached == nil else { return }
-                render(for: url) { _ in }
+                render(for: url, rgbStretchMode: rgbStretchMode) { _ in }
             }
         }
     }
 
     @discardableResult
-    static func storeThumbnail(from image: CGImage, for url: URL) -> CGImage {
+    static func storeThumbnail(
+        from image: CGImage,
+        for url: URL,
+        rgbStretchMode: RGBStretchMode = .auto
+    ) -> CGImage {
         let thumbnail = resized(image, maximumDimension: maximumDimension)
-        let key = cacheKey(for: url)
+        let key = cacheKey(for: url, rgbStretchMode: rgbStretchMode)
         memory.setObject(
             ImageThumbnailBox(thumbnail),
             forKey: key as NSString,
@@ -173,7 +191,10 @@ enum ImageThumbnailCache {
         return context.makeImage() ?? image
     }
 
-    private static func cacheKey(for url: URL) -> String {
+    private static func cacheKey(
+        for url: URL,
+        rgbStretchMode: RGBStretchMode
+    ) -> String {
         let canonicalURL = url.resolvingSymlinksInPath().standardizedFileURL
         let values = try? canonicalURL.resourceValues(forKeys: [
             .fileSizeKey,
@@ -184,6 +205,7 @@ enum ImageThumbnailCache {
             canonicalURL.path,
             String(values?.fileSize ?? 0),
             String(values?.contentModificationDate?.timeIntervalSince1970 ?? 0),
+            "rgb-stretch:\(rgbStretchMode.rawValue)",
         ].joined(separator: "\n")
         let digest = SHA256.hash(data: Data(signature.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
@@ -266,28 +288,33 @@ enum ImageRenderQueue {
 
     static func renderThumbnail(
         url: URL,
+        rgbStretchMode: RGBStretchMode = .auto,
         completion: @escaping ThumbnailCompletion
     ) {
-        let key = jobKey(for: url)
+        let key = jobKey(for: url, rgbStretchMode: rgbStretchMode)
         let shouldSchedule = stateQueue.sync {
             if var job = jobs[key] {
                 job.thumbnailCompletions.append(completion)
                 jobs[key] = job
                 return false
             }
-            jobs[key] = Job(kind: .thumbnail, thumbnailCompletions: [completion])
+            jobs[key] = Job(
+                kind: .thumbnail,
+                thumbnailCompletions: [completion]
+            )
             return true
         }
         guard shouldSchedule else { return }
-        scheduleThumbnail(url: url, key: key)
+        scheduleThumbnail(url: url, key: key, rgbStretchMode: rgbStretchMode)
     }
 
     static func renderFull(
         url: URL,
         targetMedian: Double,
+        rgbStretchMode: RGBStretchMode,
         completion: @escaping FullCompletion
     ) {
-        let key = jobKey(for: url)
+        let key = jobKey(for: url, rgbStretchMode: rgbStretchMode)
         let shouldSchedule = stateQueue.sync {
             if var job = jobs[key] {
                 job.fullCompletions.append(completion)
@@ -303,20 +330,34 @@ enum ImageRenderQueue {
             return true
         }
         guard shouldSchedule else { return }
-        scheduleFull(url: url, key: key, targetMedian: targetMedian)
+        scheduleFull(
+            url: url,
+            key: key,
+            targetMedian: targetMedian,
+            rgbStretchMode: rgbStretchMode
+        )
     }
 
-    private static func scheduleThumbnail(url: URL, key: String) {
+    private static func scheduleThumbnail(
+        url: URL,
+        key: String,
+        rgbStretchMode: RGBStretchMode
+    ) {
         thumbnailOperations.addOperation {
             let accessing = url.startAccessingSecurityScopedResource()
             defer { if accessing { url.stopAccessingSecurityScopedResource() } }
 
             let thumbnail = try? SeizaCore.render(
                 url: url,
-                maxDimension: UInt32(ImageThumbnailCache.maximumDimension)
+                maxDimension: UInt32(ImageThumbnailCache.maximumDimension),
+                rgbStretchMode: rgbStretchMode
             ).image
             if let thumbnail {
-                ImageThumbnailCache.storeThumbnail(from: thumbnail, for: url)
+                ImageThumbnailCache.storeThumbnail(
+                    from: thumbnail,
+                    for: url,
+                    rgbStretchMode: rgbStretchMode
+                )
             }
 
             let outcome = stateQueue.sync { () -> ([ThumbnailCompletion], Double?) in
@@ -335,7 +376,12 @@ enum ImageRenderQueue {
                 outcome.0.forEach { $0(thumbnail) }
             }
             if let targetMedian = outcome.1 {
-                scheduleFull(url: url, key: key, targetMedian: targetMedian)
+                scheduleFull(
+                    url: url,
+                    key: key,
+                    targetMedian: targetMedian,
+                    rgbStretchMode: rgbStretchMode
+                )
             }
         }
     }
@@ -343,21 +389,27 @@ enum ImageRenderQueue {
     private static func scheduleFull(
         url: URL,
         key: String,
-        targetMedian: Double
+        targetMedian: Double,
+        rgbStretchMode: RGBStretchMode
     ) {
         fullOperations.addOperation {
             let accessing = url.startAccessingSecurityScopedResource()
             defer { if accessing { url.stopAccessingSecurityScopedResource() } }
 
             let result = Result {
-                try SeizaCore.render(url: url, targetMedian: targetMedian)
+                try SeizaCore.render(
+                    url: url,
+                    targetMedian: targetMedian,
+                    rgbStretchMode: rgbStretchMode
+                )
             }
             let thumbnail: CGImage?
             switch result {
             case .success(let rendered):
                 thumbnail = ImageThumbnailCache.storeThumbnail(
                     from: rendered.image,
-                    for: url
+                    for: url,
+                    rgbStretchMode: rgbStretchMode
                 )
             case .failure:
                 thumbnail = nil
@@ -377,7 +429,10 @@ enum ImageRenderQueue {
         }
     }
 
-    private static func jobKey(for url: URL) -> String {
-        url.resolvingSymlinksInPath().standardizedFileURL.path
+    private static func jobKey(
+        for url: URL,
+        rgbStretchMode: RGBStretchMode
+    ) -> String {
+        "\(url.resolvingSymlinksInPath().standardizedFileURL.path)\n\(rgbStretchMode.rawValue)"
     }
 }

@@ -21,7 +21,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            Text("Use a complete directory installed by `seiza setup` or `seiza download-data prebuilt`. Solving uses the star catalog and blind index; deep-sky overlays use `objects.bin` from the same directory.")
+            Text("Use a complete directory installed by `seiza setup` or `seiza download-data prebuilt`. Solving uses the star catalog and blind index. Named stars, deep-sky objects, transients, and acquisition-time solar-system overlays use `objects.bin`, `transients.bin`, and `minor-bodies.bin` from the same directory.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             if let errorMessage {

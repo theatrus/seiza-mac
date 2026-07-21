@@ -22,6 +22,12 @@ to a 4096-pixel maximum dimension. It does not open catalogs or plate-solve.
 That keeps system previews responsive and isolates catalog access to the main
 app. macOS continues to provide its built-in previews for raster formats.
 
+Document-window sessions are owned by the application delegate. Dropping a new
+image or directory on an existing viewer replaces that session in place,
+retains the window and its normal macOS identity, rekeys duplicate-open
+tracking to the new root, and transfers security-scoped access from the old
+roots to the new ones.
+
 ## C ABI
 
 `Rust/seiza-cabi` produces `libseiza_cabi.a` and exports opaque image handles,
@@ -38,6 +44,14 @@ allocator-owned memory, or panic is allowed to cross the ABI:
 JSON is used for metadata and WCS because those records evolve more often than
 the high-volume pixel path. Pixels stay in a direct contiguous buffer.
 
+RGB FITS display rendering exposes three explicit C-ABI modes: per-channel
+Auto, Linked Auto with one shared transfer function derived from the average
+channel medians and MADs, and Linear native-range mapping. Raster JPEG, PNG,
+and TIFF pixels remain color-managed linear display data and are not passed
+through the FITS autostretch. Thumbnail cache and background-render job
+identities include the RGB stretch mode, so results from different transforms
+cannot be accidentally shared.
+
 ## Data and provenance
 
 The app keeps these values distinct:
@@ -46,11 +60,23 @@ The app keeps these values distinct:
 - derived display pixels and stretch settings;
 - detected image stars;
 - a solved WCS with solver quality and elapsed time;
-- future coordinate-only catalog associations and overlays.
+- coordinate-only catalog associations and overlay availability, counts, and
+  unavailable reasons;
+- acquisition timestamps used to classify transients and calculate minor-body
+  positions.
 
-A catalog association will never be represented as proof that an object is
-visible in the pixels. Future saved sidecars should include input file identity,
-Seiza version, catalog/index identity, solve parameters, and WCS/SIP output.
+A catalog association is never represented as proof that an object is visible
+in the pixels. The solve response preserves stable object identity, catalog
+source, sky coordinates, transient discovery date/proximity, and minor-body
+distance and motion independently from pixel detections. Future saved sidecars
+should include input file identity, Seiza version, catalog/index identity,
+solve parameters, and WCS/SIP output.
+
+The main catalog supplies deep-sky objects and named stars. Transients and
+minor bodies are opened from their dedicated catalog files only after an
+explicit solve. Minor-body coordinates are calculated for the FITS acquisition
+time and are unavailable when no usable timestamp exists. Satellite prediction
+is outside the current application boundary.
 
 ## Distribution
 

@@ -20,6 +20,14 @@ SeizaRenderedImage *seiza_rendered_image_open(
     uint32_t max_dimension,
     char **error_out);
 
+SeizaRenderedImage *seiza_rendered_image_open_with_rgb_stretch(
+    const char *path,
+    double target_median,
+    double shadows_clip,
+    uint32_t max_dimension,
+    uint32_t rgb_stretch_mode,
+    char **error_out);
+
 uint32_t seiza_rendered_image_width(const SeizaRenderedImage *image);
 uint32_t seiza_rendered_image_height(const SeizaRenderedImage *image);
 const uint8_t *seiza_rendered_image_rgba(const SeizaRenderedImage *image);

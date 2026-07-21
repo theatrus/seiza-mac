@@ -13,8 +13,10 @@ concurrency:
 
 jobs:
   dmg:
+    if: github.repository == 'theatrus/seiza-mac' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    environment: release
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
 
@@ -50,7 +52,89 @@ jobs:
             ONLY_ACTIVE_ARCH=NO \
             'ARCHS=arm64 x86_64'
 
-      - name: Package unsigned development preview
+      - name: Import Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_BUILD_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_BUILD_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          test -n "$APPLE_CERTIFICATE"
+          test -n "$APPLE_CERTIFICATE_PASSWORD"
+          test -n "$KEYCHAIN_PASSWORD"
+
+          certificate_path="$RUNNER_TEMP/certificate.p12"
+          keychain_path="$RUNNER_TEMP/seiza-signing.keychain-db"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 -D > "$certificate_path"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 3600 "$keychain_path"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+
+          certificate_identity="$(
+            security find-identity -v -p codesigning "$keychain_path" \
+              | awk -F'"' '/Developer ID Application/ { print $2; exit }'
+          )"
+          test -n "$certificate_identity"
+          printf 'CERT_ID=%s\n' "$certificate_identity" >> "$GITHUB_ENV"
+
+      - name: Sign application and Quick Look extension
+        run: |
+          app_path="DerivedData/Build/Products/Release/Seiza.app"
+          quicklook_path="$app_path/Contents/PlugIns/SeizaQuickLook.appex"
+
+          codesign \
+            --force \
+            --options runtime \
+            --timestamp \
+            --entitlements QuickLook/SeizaQuickLook.entitlements \
+            --sign "$CERT_ID" \
+            "$quicklook_path"
+          codesign \
+            --force \
+            --options runtime \
+            --timestamp \
+            --entitlements App/Seiza.entitlements \
+            --sign "$CERT_ID" \
+            "$app_path"
+          codesign --verify --deep --strict --verbose=4 "$app_path"
+
+      - name: Notarize and staple application
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PRIVATE: ${{ secrets.APPLE_API_KEY_PRIVATE }}
+        run: |
+          test -n "$APPLE_API_ISSUER"
+          test -n "$APPLE_API_KEY"
+          test -n "$APPLE_API_KEY_PRIVATE"
+
+          app_path="DerivedData/Build/Products/Release/Seiza.app"
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          submission_path="$RUNNER_TEMP/Seiza-notarization.zip"
+          printf '%s' "$APPLE_API_KEY_PRIVATE" | base64 -D > "$key_path"
+          chmod 600 "$key_path"
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "$submission_path"
+          xcrun notarytool submit "$submission_path" \
+            --key "$key_path" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait \
+            --timeout 30m
+          xcrun stapler staple "$app_path"
+          xcrun stapler validate "$app_path"
+          spctl --assess --type execute --verbose=4 "$app_path"
+
+      - name: Package signed release
         run: |
           version="${GITHUB_REF_NAME#v}"
           mkdir -p dist
@@ -61,7 +145,35 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent \
             DerivedData/Build/Products/Release/Seiza.app \
             "dist/Seiza-${version}-universal.zip"
+
+      - name: Sign, notarize, and verify disk image
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          dmg_path="dist/Seiza-${version}-universal.dmg"
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+
+          codesign --force --timestamp --sign "$CERT_ID" "$dmg_path"
+          xcrun notarytool submit "$dmg_path" \
+            --key "$key_path" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait \
+            --timeout 30m
+          xcrun stapler staple "$dmg_path"
+          xcrun stapler validate "$dmg_path"
           hdiutil verify "dist/Seiza-${version}-universal.dmg"
+          codesign --verify --verbose=4 "$dmg_path"
+          spctl --assess \
+            --type open \
+            --context context:primary-signature \
+            --verbose=4 \
+            "$dmg_path"
+
+      - name: Produce checksums
+        run: |
           (
             cd dist
             shasum -a 256 Seiza-* > SHA256SUMS.txt
@@ -74,7 +186,7 @@ jobs:
           printf '%s\n' \
             '## Seiza for macOS' \
             '' \
-            'This first package is an **unsigned development preview**. macOS may require Control-click → Open. Developer ID signing and Apple notarization are intentionally deferred until the repository receives the Apple credentials documented in `docs/RELEASING.md`.' \
+            'This universal application and disk image are Developer ID signed, notarized by Apple, and stapled for normal Gatekeeper installation.' \
             '' \
             '- Universal macOS 15+ application (Apple silicon and Intel)' \
             '- FITS, JPEG, PNG, and TIFF viewing' \
@@ -87,3 +199,13 @@ jobs:
             --notes-file release-notes.md \
             dist/Seiza-* \
             dist/SHA256SUMS.txt
+
+      - name: Remove signing material
+        if: always()
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          security delete-keychain "$RUNNER_TEMP/seiza-signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          rm -f "$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          rm -f "$RUNNER_TEMP/Seiza-notarization.zip"

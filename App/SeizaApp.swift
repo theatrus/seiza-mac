@@ -96,6 +96,119 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func open(_ urls: [URL]) {
+        let request = normalizedRoots(from: urls)
+        guard let windowKey = request.roots.first else { return }
+
+        if let existing = documentWindows[windowKey]?.controller {
+            existing.showWindow(nil)
+            existing.window?.makeKeyAndOrderFront(nil)
+            closeWelcomeWindow()
+            return
+        }
+
+        let session = DocumentWindowSession(accessURLs: request.accessURLs)
+        let imageURLs = ImageCollection.collect(from: request.roots)
+        guard !imageURLs.isEmpty else {
+            presentNoSupportedImagesAlert()
+            return
+        }
+
+        let window = NSWindow()
+        let controller = NSWindowController(window: window)
+        session.controller = controller
+        documentWindows[windowKey] = session
+        installViewer(
+            imageURLs: imageURLs,
+            openedDirectory: containsDirectory(request.roots),
+            in: window
+        )
+        window.setContentSize(NSSize(width: 1120, height: 760))
+        window.minSize = NSSize(width: 640, height: 420)
+        window.styleMask.insert([.resizable, .titled, .closable, .miniaturizable])
+        window.tabbingMode = .automatic
+        window.titlebarSeparatorStyle = .none
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self, weak window] _ in
+            guard let window else { return }
+            self?.removeDocumentWindow(for: window)
+        }
+        controller.showWindow(nil)
+        DispatchQueue.main.async {
+            window.titlebarSeparatorStyle = .none
+        }
+        closeWelcomeWindow()
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func replaceContents(of window: NSWindow, with urls: [URL]) {
+        let request = normalizedRoots(from: urls)
+        guard let windowKey = request.roots.first else { return }
+
+        if let existing = documentWindows[windowKey]?.controller,
+           existing.window !== window {
+            existing.showWindow(nil)
+            existing.window?.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let replacement = DocumentWindowSession(accessURLs: request.accessURLs)
+        let imageURLs = ImageCollection.collect(from: request.roots)
+        guard !imageURLs.isEmpty else {
+            presentNoSupportedImagesAlert()
+            return
+        }
+        guard let current = documentWindows.first(where: {
+            $0.value.controller?.window === window
+        }), let controller = current.value.controller else {
+            open(urls)
+            return
+        }
+
+        documentWindows.removeValue(forKey: current.key)
+        replacement.controller = controller
+        documentWindows[windowKey] = replacement
+        installViewer(
+            imageURLs: imageURLs,
+            openedDirectory: containsDirectory(request.roots),
+            in: window
+        )
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func documentWindow(for root: URL) -> NSWindow? {
+        documentWindows[root.standardizedFileURL]?.controller?.window
+    }
+
+    private func installViewer(
+        imageURLs: [URL],
+        openedDirectory: Bool,
+        in window: NSWindow
+    ) {
+        let view = ViewerView(
+            urls: imageURLs,
+            showsImageBrowser: openedDirectory,
+            onSelectionChange: { [weak window] selectedURL in
+                window?.title = selectedURL.lastPathComponent
+            },
+            onDropURLs: { [weak self, weak window] urls in
+                guard let window else { return }
+                self?.replaceContents(of: window, with: urls)
+            }
+        )
+        if let hostingController = window.contentViewController
+            as? NSHostingController<ViewerView> {
+            hostingController.rootView = view
+        } else {
+            window.contentViewController = NSHostingController(rootView: view)
+        }
+        window.title = imageURLs[0].lastPathComponent
+    }
+
+    private func normalizedRoots(from urls: [URL]) -> (roots: [URL], accessURLs: [URL]) {
         var seenRoots = Set<URL>()
         var roots: [URL] = []
         var accessURLs: [URL] = []
@@ -106,56 +219,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 accessURLs.append(url)
             }
         }
-        guard let windowKey = roots.first else { return }
+        return (roots, accessURLs)
+    }
 
-        if let existing = documentWindows[windowKey]?.controller {
-            existing.showWindow(nil)
-            existing.window?.makeKeyAndOrderFront(nil)
-            closeWelcomeWindow()
-            return
-        }
-
-        let session = DocumentWindowSession(accessURLs: accessURLs)
-        let imageURLs = ImageCollection.collect(from: roots)
-        guard !imageURLs.isEmpty else {
-            presentNoSupportedImagesAlert()
-            return
-        }
-        let openedDirectory = roots.contains { root in
+    private func containsDirectory(_ roots: [URL]) -> Bool {
+        roots.contains { root in
             (try? root.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
         }
+    }
 
-        let window = NSWindow()
-        let view = ViewerView(
-            urls: imageURLs,
-            showsImageBrowser: openedDirectory
-        ) { [weak window] selectedURL in
-            window?.title = selectedURL.lastPathComponent
+    private func removeDocumentWindow(for window: NSWindow) {
+        if let entry = documentWindows.first(where: {
+            $0.value.controller?.window === window
+        }) {
+            documentWindows.removeValue(forKey: entry.key)
         }
-        window.contentViewController = NSHostingController(rootView: view)
-        window.title = imageURLs[0].lastPathComponent
-        window.setContentSize(NSSize(width: 1120, height: 760))
-        window.minSize = NSSize(width: 640, height: 420)
-        window.styleMask.insert([.resizable, .titled, .closable, .miniaturizable])
-        window.tabbingMode = .automatic
-        window.titlebarSeparatorStyle = .none
-        let controller = NSWindowController(window: window)
-        session.controller = controller
-        documentWindows[windowKey] = session
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification,
-            object: window,
-            queue: .main
-        ) { [weak self] _ in
-            self?.documentWindows.removeValue(forKey: windowKey)
-        }
-        controller.showWindow(nil)
-        DispatchQueue.main.async {
-            window.titlebarSeparatorStyle = .none
-        }
-        closeWelcomeWindow()
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
     }
 
     private func presentNoSupportedImagesAlert() {

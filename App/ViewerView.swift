@@ -1,25 +1,48 @@
 import AppKit
 import SwiftUI
 
+private extension DeepSkyCatalog {
+    var overlayColor: Color {
+        switch self {
+        case .messier: Color(red: 242.0 / 255.0, green: 202.0 / 255.0, blue: 114.0 / 255.0)
+        case .ngc: Color(red: 85.0 / 255.0, green: 207.0 / 255.0, blue: 1)
+        case .ic: Color(red: 114.0 / 255.0, green: 223.0 / 255.0, blue: 185.0 / 255.0)
+        case .sharplessVDB: Color(red: 238.0 / 255.0, green: 154.0 / 255.0, blue: 120.0 / 255.0)
+        case .lbn: Color(red: 162.0 / 255.0, green: 217.0 / 255.0, blue: 111.0 / 255.0)
+        case .cederblad: Color(red: 112.0 / 255.0, green: 215.0 / 255.0, blue: 208.0 / 255.0)
+        case .darkNebulae: Color(red: 180.0 / 255.0, green: 163.0 / 255.0, blue: 240.0 / 255.0)
+        case .supernovaRemnants: Color(red: 241.0 / 255.0, green: 135.0 / 255.0, blue: 130.0 / 255.0)
+        case .ugc: Color(red: 121.0 / 255.0, green: 175.0 / 255.0, blue: 245.0 / 255.0)
+        case .pgc: Color(red: 161.0 / 255.0, green: 174.0 / 255.0, blue: 216.0 / 255.0)
+        case .other: Color(red: 193.0 / 255.0, green: 209.0 / 255.0, blue: 211.0 / 255.0)
+        }
+    }
+}
+
 struct ViewerView: View {
     let urls: [URL]
     let showsImageBrowser: Bool
     let onSelectionChange: (URL) -> Void
+    let onDropURLs: ([URL]) -> Void
 
     @State private var selectedIndex: Int
     @State private var model: ImageDocumentModel
     @State private var showInspector = false
     @State private var showImageBrowser: Bool
+    @State private var rgbStretchMode = RGBStretchMode.auto
+    @State private var isDropTarget = false
 
     init(
         urls: [URL],
         initialIndex: Int = 0,
         showsImageBrowser: Bool = false,
-        onSelectionChange: @escaping (URL) -> Void = { _ in }
+        onSelectionChange: @escaping (URL) -> Void = { _ in },
+        onDropURLs: @escaping ([URL]) -> Void = { _ in }
     ) {
         self.urls = urls
         self.showsImageBrowser = showsImageBrowser
         self.onSelectionChange = onSelectionChange
+        self.onDropURLs = onDropURLs
         let selectedIndex = min(max(initialIndex, 0), max(urls.count - 1, 0))
         _selectedIndex = State(initialValue: selectedIndex)
         _model = State(initialValue: ImageDocumentModel(url: urls[selectedIndex]))
@@ -40,6 +63,7 @@ struct ViewerView: View {
             ImagePageView(
                 model: model,
                 showInspector: $showInspector,
+                rgbStretchMode: $rgbStretchMode,
                 position: selectedIndex + 1,
                 itemCount: urls.count,
                 canGoPrevious: selectedIndex > 0,
@@ -49,6 +73,18 @@ struct ViewerView: View {
             )
             .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
         }
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(.tint, style: StrokeStyle(lineWidth: 3, dash: [8]))
+                .padding(8)
+                .opacity(isDropTarget ? 1 : 0)
+                .allowsHitTesting(false)
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            guard !urls.isEmpty else { return false }
+            onDropURLs(urls)
+            return true
+        } isTargeted: { isDropTarget = $0 }
         .onAppear {
             onSelectionChange(currentURL)
         }
@@ -78,7 +114,10 @@ struct ViewerView: View {
     private func select(_ index: Int) {
         guard urls.indices.contains(index), index != selectedIndex else { return }
         selectedIndex = index
-        model = ImageDocumentModel(url: urls[index])
+        model = ImageDocumentModel(
+            url: urls[index],
+            rgbStretchMode: rgbStretchMode
+        )
         onSelectionChange(urls[index])
     }
 }
@@ -259,18 +298,26 @@ private struct ImagePageView: View {
     @State private var scrollPosition = ScrollPosition()
     @State private var visibleContentOrigin = CGPoint.zero
     @Binding private var showInspector: Bool
+    @Binding private var rgbStretchMode: RGBStretchMode
     @State private var viewportSize = CGSize.zero
     @State private var isFitToWindow = true
-    @State private var showSkyObjects = true
+    @State private var showDeepSky = true
+    @State private var showNamedStars = true
+    @State private var showTransients = true
+    @State private var showHistoricalTransients = false
+    @State private var showMinorBodies = true
+    @State private var showCoordinateGrid = true
     @State private var showCatalogOutlines = true
     @State private var showObjectLabels = true
     @State private var showDetectedStars = false
-    @State private var showCatalogStars = false
+    @State private var showFieldStars = false
     @State private var showFieldCenter = true
+    @State private var hiddenDeepSkyCatalogs = Set<DeepSkyCatalog>()
 
     init(
         model: ImageDocumentModel,
         showInspector: Binding<Bool>,
+        rgbStretchMode: Binding<RGBStretchMode>,
         position: Int,
         itemCount: Int,
         canGoPrevious: Bool,
@@ -285,6 +332,7 @@ private struct ImagePageView: View {
         self.goPrevious = goPrevious
         self.goNext = goNext
         _showInspector = showInspector
+        _rgbStretchMode = rgbStretchMode
         _model = ObservedObject(wrappedValue: model)
     }
 
@@ -326,6 +374,24 @@ private struct ImagePageView: View {
                     .help("Next Image (→)")
                 }
 
+                Menu {
+                    Picker("RGB Stretch", selection: rgbStretchSelection) {
+                        ForEach(RGBStretchMode.allCases) { mode in
+                            Text(mode.title)
+                                .tag(mode)
+                                .help(mode.help)
+                        }
+                    }
+                } label: {
+                    Label("RGB Stretch", systemImage: "circle.lefthalf.filled")
+                }
+                .disabled(!model.supportsRGBStretch)
+                .help(
+                    model.supportsRGBStretch
+                        ? "RGB Stretch: \(rgbStretchMode.title)"
+                        : "RGB stretch is available for color FITS images"
+                )
+
                 Button {
                     showInspector = true
                     model.solve(catalogDirectory: CatalogAccess.resolve())
@@ -342,25 +408,81 @@ private struct ImagePageView: View {
                 .help(isSolving ? "Solving image…" : "Plate Solve")
 
                 Menu {
-                    Toggle("Deep-Sky Objects", isOn: $showSkyObjects)
+                    Toggle(overlayLabel("Deep Sky", key: "deep_sky"), isOn: $showDeepSky)
+                        .disabled(!overlayAvailable("deep_sky"))
+                        .help(overlayHelp("deep_sky"))
+                    Toggle(
+                        overlayLabel("Named Stars", key: "named_stars"),
+                        isOn: $showNamedStars
+                    )
+                    .disabled(!overlayAvailable("named_stars"))
+                    .help(overlayHelp("named_stars"))
+                    Toggle(
+                        overlayLabel("Transients", key: "transients"),
+                        isOn: $showTransients
+                    )
+                    .disabled(!overlayAvailable("transients"))
+                    .help(overlayHelp("transients"))
+                    Toggle(
+                        overlayLabel("Older Transients", key: "historical_transients"),
+                        isOn: $showHistoricalTransients
+                    )
+                    .disabled(!showTransients || !overlayAvailable("historical_transients"))
+                    .help(overlayHelp("historical_transients"))
+                    Toggle(
+                        overlayLabel("Solar System", key: "minor_bodies"),
+                        isOn: $showMinorBodies
+                    )
+                    .disabled(!overlayAvailable("minor_bodies"))
+                    .help(overlayHelp("minor_bodies"))
+
+                    Menu {
+                        ForEach(availableDeepSkyCatalogs) { catalog in
+                            Toggle(isOn: catalogVisibility(catalog)) {
+                                Label {
+                                    Text("\(catalog.title) · \(deepSkyCatalogCount(catalog))")
+                                } icon: {
+                                    Image(systemName: "circle.fill")
+                                        .foregroundStyle(catalog.overlayColor)
+                                }
+                            }
+                        }
+                    } label: {
+                        Text("Deep-Sky Catalogs")
+                    }
+                    .disabled(!showDeepSky || availableDeepSkyCatalogs.isEmpty)
+
                     Toggle("Detailed OpenNGC Outlines", isOn: $showCatalogOutlines)
-                        .disabled(!showSkyObjects || !hasCatalogOutlines)
+                        .disabled(!showDeepSky || !hasCatalogOutlines)
                     Toggle("Object Labels", isOn: $showObjectLabels)
-                        .disabled(!showSkyObjects)
+                        .disabled(!hasVisibleObjectLayer)
+
+                    Divider()
+
+                    Toggle(
+                        overlayLabel("Field Stars", key: "field_stars"),
+                        isOn: $showFieldStars
+                    )
+                    .disabled(!overlayAvailable("field_stars"))
+                    Toggle("RA / Dec Grid", isOn: $showCoordinateGrid)
                     Toggle("Field Center", isOn: $showFieldCenter)
 
                     Divider()
 
                     Toggle("Detected Stars", isOn: $showDetectedStars)
-                    Toggle("Catalog Stars", isOn: $showCatalogStars)
 
                     Divider()
 
                     Button("Hide All Overlays") {
-                        showSkyObjects = false
+                        showDeepSky = false
+                        showNamedStars = false
+                        showTransients = false
+                        showHistoricalTransients = false
+                        showMinorBodies = false
                         showObjectLabels = false
                         showDetectedStars = false
-                        showCatalogStars = false
+                        showFieldStars = false
+                        showCoordinateGrid = false
                         showFieldCenter = false
                     }
                     .disabled(!hasVisibleOverlays)
@@ -417,7 +539,9 @@ private struct ImagePageView: View {
     private var imagePane: some View {
         switch model.loadState {
         case .loading:
-            if let previewImage = model.previewImage {
+            if let image = model.image {
+                imageCanvas(image: image, showsLoadingIndicator: true)
+            } else if let previewImage = model.previewImage {
                 imageCanvas(image: previewImage, showsLoadingIndicator: true)
             } else {
                 ProgressView("Reading image…")
@@ -461,12 +585,18 @@ private struct ImagePageView: View {
                             SolveOverlayView(
                                 solution: solution,
                                 sourceSize: CGSize(width: image.width, height: image.height),
-                                showsSkyObjects: showSkyObjects,
+                                showsDeepSky: showDeepSky,
+                                showsNamedStars: showNamedStars,
+                                showsTransients: showTransients,
+                                showsHistoricalTransients: showHistoricalTransients,
+                                showsMinorBodies: showMinorBodies,
+                                showsCoordinateGrid: showCoordinateGrid,
                                 showsCatalogOutlines: showCatalogOutlines,
                                 showsObjectLabels: showObjectLabels,
                                 showsDetectedStars: showDetectedStars,
-                                showsCatalogStars: showCatalogStars,
-                                showsFieldCenter: showFieldCenter
+                                showsFieldStars: showFieldStars,
+                                showsFieldCenter: showFieldCenter,
+                                hiddenDeepSkyCatalogs: hiddenDeepSkyCatalogs
                             )
                             .frame(width: metrics.imageSize.width, height: metrics.imageSize.height)
                             .allowsHitTesting(false)
@@ -692,13 +822,67 @@ private struct ImagePageView: View {
         return false
     }
 
+    private var rgbStretchSelection: Binding<RGBStretchMode> {
+        Binding(
+            get: { rgbStretchMode },
+            set: { mode in
+                rgbStretchMode = mode
+                model.setRGBStretchMode(mode)
+            }
+        )
+    }
+
     private var solvedSolution: SolveResult? {
         if case .solved(let solution) = model.solveState { return solution }
         return nil
     }
 
+    private func overlayAvailable(_ key: String) -> Bool {
+        solvedSolution?.overlayAvailability?[key] ?? (solvedSolution != nil)
+    }
+
+    private func overlayHelp(_ key: String) -> String {
+        solvedSolution?.overlayUnavailableReasons?[key] ?? "Toggle this solve overlay"
+    }
+
+    private func overlayLabel(_ title: String, key: String) -> String {
+        guard let count = solvedSolution?.overlayCounts?[key] else { return title }
+        return "\(title) · \(count)"
+    }
+
+    private var availableDeepSkyCatalogs: [DeepSkyCatalog] {
+        guard let solution = solvedSolution else { return [] }
+        let present = Set(solution.objectPositions.compactMap(\.deepSkyCatalog))
+        return DeepSkyCatalog.allCases.filter(present.contains)
+    }
+
+    private func deepSkyCatalogCount(_ catalog: DeepSkyCatalog) -> Int {
+        solvedSolution?.objectPositions.lazy.filter { $0.deepSkyCatalog == catalog }.count ?? 0
+    }
+
+    private func catalogVisibility(_ catalog: DeepSkyCatalog) -> Binding<Bool> {
+        Binding(
+            get: { !hiddenDeepSkyCatalogs.contains(catalog) },
+            set: { visible in
+                if visible {
+                    hiddenDeepSkyCatalogs.remove(catalog)
+                } else {
+                    hiddenDeepSkyCatalogs.insert(catalog)
+                }
+            }
+        )
+    }
+
+    private var hasVisibleObjectLayer: Bool {
+        showDeepSky || showNamedStars || showTransients || showMinorBodies
+    }
+
     private var hasVisibleOverlays: Bool {
-        showSkyObjects || showDetectedStars || showCatalogStars || showFieldCenter
+        hasVisibleObjectLayer
+            || showDetectedStars
+            || showFieldStars
+            || showCoordinateGrid
+            || showFieldCenter
     }
 
     private var hasCatalogOutlines: Bool {
@@ -714,21 +898,13 @@ private struct SolveOverlayView: View {
         static let comet = Color(red: 123.0 / 255.0, green: 1, blue: 208.0 / 255.0)
         static let asteroid = Color(red: 1, green: 179.0 / 255.0, blue: 107.0 / 255.0)
         static let fieldStar = Color(red: 238.0 / 255.0, green: 247.0 / 255.0, blue: 1)
+        static let grid = Color(red: 125.0 / 255.0, green: 219.0 / 255.0, blue: 232.0 / 255.0)
+        static let gridLabel = Color(red: 185.0 / 255.0, green: 243.0 / 255.0, blue: 247.0 / 255.0)
         static let center = Color(red: 242.0 / 255.0, green: 198.0 / 255.0, blue: 109.0 / 255.0)
         static let labelHalo = Color.black.opacity(0.88)
-        static let messier = Color(red: 242.0 / 255.0, green: 202.0 / 255.0, blue: 114.0 / 255.0)
-        static let ngc = Color(red: 85.0 / 255.0, green: 207.0 / 255.0, blue: 1)
-        static let ic = Color(red: 114.0 / 255.0, green: 223.0 / 255.0, blue: 185.0 / 255.0)
-        static let sharplessVdb = Color(red: 238.0 / 255.0, green: 154.0 / 255.0, blue: 120.0 / 255.0)
-        static let lbn = Color(red: 162.0 / 255.0, green: 217.0 / 255.0, blue: 111.0 / 255.0)
-        static let cederblad = Color(red: 112.0 / 255.0, green: 215.0 / 255.0, blue: 208.0 / 255.0)
-        static let darkNebula = Color(red: 180.0 / 255.0, green: 163.0 / 255.0, blue: 240.0 / 255.0)
-        static let supernovaRemnant = Color(red: 241.0 / 255.0, green: 135.0 / 255.0, blue: 130.0 / 255.0)
-        static let ugc = Color(red: 121.0 / 255.0, green: 175.0 / 255.0, blue: 245.0 / 255.0)
-        static let pgc = Color(red: 161.0 / 255.0, green: 174.0 / 255.0, blue: 216.0 / 255.0)
-        static let otherDeepSky = Color(red: 193.0 / 255.0, green: 209.0 / 255.0, blue: 211.0 / 255.0)
-
         static let markerStrokeWidth: CGFloat = 0.7
+        static let movingMarkerStrokeWidth: CGFloat = 0.95
+        static let gridStrokeWidth: CGFloat = 0.65
         static let fieldStarStrokeWidth: CGFloat = 0.65
         static let centerStrokeWidth: CGFloat = 0.75
         static let markerOpacity = 0.88
@@ -743,14 +919,31 @@ private struct SolveOverlayView: View {
         let halfWidth: CGFloat
     }
 
+    private enum GridAxis {
+        case rightAscension
+        case declination
+    }
+
+    private struct GridCurve {
+        let points: [CGPoint?]
+        let label: String
+        let axis: GridAxis
+    }
+
     let solution: SolveResult
     let sourceSize: CGSize
-    let showsSkyObjects: Bool
+    let showsDeepSky: Bool
+    let showsNamedStars: Bool
+    let showsTransients: Bool
+    let showsHistoricalTransients: Bool
+    let showsMinorBodies: Bool
+    let showsCoordinateGrid: Bool
     let showsCatalogOutlines: Bool
     let showsObjectLabels: Bool
     let showsDetectedStars: Bool
-    let showsCatalogStars: Bool
+    let showsFieldStars: Bool
     let showsFieldCenter: Bool
+    let hiddenDeepSkyCatalogs: Set<DeepSkyCatalog>
 
     var body: some View {
         Canvas(rendersAsynchronously: true) { context, size in
@@ -761,11 +954,22 @@ private struct SolveOverlayView: View {
             let sourceFontSize = max(sourceSize.width / 75, 14)
             let fontSize = sourceFontSize * markerScale
 
-            if showsSkyObjects {
-                let encompassing = solution.objectPositions.filter {
+            if showsCoordinateGrid {
+                drawCoordinateGrid(
+                    scaleX: scaleX,
+                    scaleY: scaleY,
+                    markerScale: markerScale,
+                    canvasSize: size,
+                    context: &context
+                )
+            }
+
+            let visibleObjects = solution.objectPositions.filter(objectIsVisible)
+            if !visibleObjects.isEmpty {
+                let encompassing = visibleObjects.filter {
                     encompassesFrame($0, width: sourceSize.width, height: sourceSize.height)
                 }
-                let inFrame = solution.objectPositions.filter { object in
+                let inFrame = visibleObjects.filter { object in
                     !encompassing.contains { candidate in
                         candidate.name == object.name
                             && candidate.source == object.source
@@ -791,7 +995,55 @@ private struct SolveOverlayView: View {
                         x: CGFloat(object.x) * scaleX,
                         y: CGFloat(object.y) * scaleY
                     )
-                    if showsCatalogOutlines, !object.outlines.isEmpty {
+                    let sourceMajorRadius = max(
+                        CGFloat(object.semiMajorPixels),
+                        sourceFontSize
+                    )
+                    let sourceMinorRadius = object.angleDegrees == nil
+                        ? sourceMajorRadius
+                        : max(CGFloat(object.semiMinorPixels), sourceFontSize)
+                    let namedStar = object.kind == "star" || object.kind == "double-star"
+                    let movingBody = object.kind == "comet" || object.kind == "asteroid"
+                    let transient = object.kind == "transient"
+
+                    if namedStar {
+                        let radius = sourceMajorRadius * scaleX
+                        var marker = Path()
+                        marker.move(to: CGPoint(x: center.x - radius, y: center.y))
+                        marker.addLine(to: CGPoint(x: center.x - radius / 3, y: center.y))
+                        marker.move(to: CGPoint(x: center.x + radius / 3, y: center.y))
+                        marker.addLine(to: CGPoint(x: center.x + radius, y: center.y))
+                        markerStroke(marker, color: color, context: &context)
+                    } else if movingBody || transient {
+                        let horizontalRadius = sourceMajorRadius * scaleX
+                        let verticalRadius = sourceMajorRadius * scaleY
+                        var marker = Path()
+                        marker.move(to: CGPoint(x: center.x, y: center.y - verticalRadius))
+                        marker.addLine(to: CGPoint(x: center.x + horizontalRadius, y: center.y))
+                        marker.addLine(to: CGPoint(x: center.x, y: center.y + verticalRadius))
+                        marker.addLine(to: CGPoint(x: center.x - horizontalRadius, y: center.y))
+                        marker.closeSubpath()
+                        markerStroke(
+                            marker,
+                            color: color,
+                            lineWidth: Style.movingMarkerStrokeWidth,
+                            context: &context
+                        )
+                        if movingBody, let tail = movingBodyTail(
+                            for: object,
+                            center: center,
+                            sourceRadius: sourceMajorRadius,
+                            scaleX: scaleX,
+                            scaleY: scaleY
+                        ) {
+                            markerStroke(
+                                tail,
+                                color: color,
+                                lineWidth: Style.movingMarkerStrokeWidth,
+                                context: &context
+                            )
+                        }
+                    } else if showsCatalogOutlines, !object.outlines.isEmpty {
                         for outline in object.outlines {
                             for contour in outline.contours {
                                 if let path = outlinePath(
@@ -804,21 +1056,6 @@ private struct SolveOverlayView: View {
                             }
                         }
                     } else {
-                        let sourceMajorRadius = max(
-                            CGFloat(object.semiMajorPixels),
-                            sourceFontSize
-                        )
-                        let sourceMinorRadius: CGFloat
-                        if object.angleDegrees == nil {
-                            // The catalog has no trustworthy orientation for this
-                            // asymmetric extent, so draw the conservative circle.
-                            sourceMinorRadius = sourceMajorRadius
-                        } else {
-                            sourceMinorRadius = max(
-                                CGFloat(object.semiMinorPixels),
-                                sourceFontSize
-                            )
-                        }
                         let majorRadius = sourceMajorRadius * scaleX
                         let minorRadius = sourceMinorRadius * scaleY
                         var marker = Path()
@@ -889,7 +1126,7 @@ private struct SolveOverlayView: View {
                 markerStroke(path, color: Style.identifiedStar, context: &context)
             }
 
-            if showsCatalogStars {
+            if showsFieldStars {
                 var path = Path()
                 let radius = max(sourceSize.width / 1300, 2.5) * markerScale
                 for star in solution.catalogStarPositions {
@@ -924,6 +1161,348 @@ private struct SolveOverlayView: View {
         }
     }
 
+    private func drawCoordinateGrid(
+        scaleX: CGFloat,
+        scaleY: CGFloat,
+        markerScale: CGFloat,
+        canvasSize: CGSize,
+        context: inout GraphicsContext
+    ) {
+        let fontSize = gridLabelFontSize() * markerScale
+        for curve in coordinateGrid() {
+            var path = Path()
+            var penDown = false
+            let visiblePoints = curve.points.compactMap { point -> CGPoint? in
+                guard let point else {
+                    penDown = false
+                    return nil
+                }
+                let scaled = CGPoint(x: point.x * scaleX, y: point.y * scaleY)
+                if penDown {
+                    path.addLine(to: scaled)
+                } else {
+                    path.move(to: scaled)
+                }
+                penDown = true
+                return point.x >= 4
+                    && point.x <= sourceSize.width - 4
+                    && point.y >= 4
+                    && point.y <= sourceSize.height - 4
+                    ? scaled
+                    : nil
+            }
+            context.stroke(
+                path,
+                with: .color(Style.grid.opacity(0.72)),
+                style: StrokeStyle(
+                    lineWidth: Style.gridStrokeWidth,
+                    dash: [7, 5]
+                )
+            )
+            guard let first = visiblePoints.first else { continue }
+            let anchor = visiblePoints.dropFirst().reduce(first) { best, candidate in
+                switch curve.axis {
+                case .rightAscension: candidate.y < best.y ? candidate : best
+                case .declination: candidate.x < best.x ? candidate : best
+                }
+            }
+            let padding = max(6, fontSize * 0.45)
+            let estimatedWidth = CGFloat(curve.label.count) * fontSize * 0.7
+            let point: CGPoint
+            let textAnchor: UnitPoint
+            switch curve.axis {
+            case .rightAscension:
+                point = CGPoint(
+                    x: min(max(anchor.x, padding + estimatedWidth / 2), canvasSize.width - padding - estimatedWidth / 2),
+                    y: min(max(anchor.y + fontSize * 1.35, padding + fontSize), canvasSize.height - padding)
+                )
+                textAnchor = .center
+            case .declination:
+                point = CGPoint(
+                    x: min(max(anchor.x + padding, padding), canvasSize.width - padding - estimatedWidth),
+                    y: min(max(anchor.y - padding, padding + fontSize), canvasSize.height - padding)
+                )
+                textAnchor = .leading
+            }
+            drawGridLabel(
+                curve.label,
+                at: point,
+                fontSize: fontSize,
+                anchor: textAnchor,
+                context: &context
+            )
+        }
+    }
+
+    private func coordinateGrid() -> [GridCurve] {
+        let width = Double(sourceSize.width)
+        let height = Double(sourceSize.height)
+        guard width > 0, height > 0 else { return [] }
+        let centerRA = pixelToWorld(x: width / 2, y: height / 2).0
+        var minimumRA = Double.infinity
+        var maximumRA = -Double.infinity
+        var minimumDec = Double.infinity
+        var maximumDec = -Double.infinity
+        for xIndex in 0...8 {
+            for yIndex in 0...8 {
+                let sky = pixelToWorld(
+                    x: width * Double(xIndex) / 8,
+                    y: height * Double(yIndex) / 8
+                )
+                let unwrappedRA = centerRA + modulo(sky.0 - centerRA + 540, 360) - 180
+                minimumRA = min(minimumRA, unwrappedRA)
+                maximumRA = max(maximumRA, unwrappedRA)
+                minimumDec = min(minimumDec, sky.1)
+                maximumDec = max(maximumDec, sky.1)
+            }
+        }
+        guard minimumRA.isFinite, maximumRA.isFinite,
+              minimumDec.isFinite, maximumDec.isFinite else { return [] }
+        let cosineDec = max(abs(cos(solution.centerDecDegrees * .pi / 180)), 0.05)
+        let span = max(
+            maximumDec - minimumDec,
+            (maximumRA - minimumRA) * cosineDec,
+            solution.scaleArcsecPerPixel / 3_600
+        )
+        let decStep = niceGridStep(span / 5)
+        let raStep = niceGridStep(span / cosineDec / 5)
+        var curves: [GridCurve] = []
+
+        var ra = floor(minimumRA / raStep) * raStep
+        for _ in 0..<32 where ra <= maximumRA + raStep {
+            curves.append(GridCurve(
+                points: sampleGridCurve(
+                    start: minimumDec - decStep,
+                    end: maximumDec + decStep
+                ) { dec in
+                    worldToPixel(ra: modulo(ra, 360), dec: min(max(dec, -89.999_999), 89.999_999))
+                },
+                label: formatRA(modulo(ra, 360)),
+                axis: .rightAscension
+            ))
+            ra += raStep
+        }
+
+        var dec = floor(minimumDec / decStep) * decStep
+        for _ in 0..<32 where dec <= maximumDec + decStep && dec <= 90 {
+            if dec >= -90 {
+                curves.append(GridCurve(
+                    points: sampleGridCurve(
+                        start: minimumRA - raStep,
+                        end: maximumRA + raStep
+                    ) { ra in
+                        worldToPixel(ra: modulo(ra, 360), dec: min(max(dec, -89.999_999), 89.999_999))
+                    },
+                    label: formatDeclination(dec),
+                    axis: .declination
+                ))
+            }
+            dec += decStep
+        }
+        return curves
+    }
+
+    private func sampleGridCurve(
+        start: Double,
+        end: Double,
+        projection: (Double) -> CGPoint?
+    ) -> [CGPoint?] {
+        (0...96).map { index in
+            let coordinate = start + (end - start) * Double(index) / 96
+            guard let point = projection(coordinate), point.x.isFinite, point.y.isFinite else {
+                return nil
+            }
+            let width = Double(sourceSize.width)
+            let height = Double(sourceSize.height)
+            guard Double(point.x) >= -4 * width,
+                  Double(point.x) <= 5 * width,
+                  Double(point.y) >= -4 * height,
+                  Double(point.y) <= 5 * height else { return nil }
+            return point
+        }
+    }
+
+    private func pixelToWorld(x: Double, y: Double) -> (Double, Double) {
+        let wcs = solution.wcs
+        let dx = x - wcs.crpix[0]
+        let dy = y - wcs.crpix[1]
+        let xi = (wcs.cd[0][0] * dx + wcs.cd[0][1] * dy) * .pi / 180
+        let eta = (wcs.cd[1][0] * dx + wcs.cd[1][1] * dy) * .pi / 180
+        let ra0 = wcs.crval[0] * .pi / 180
+        let dec0 = wcs.crval[1] * .pi / 180
+        let rho = hypot(xi, eta)
+        guard rho > 0 else { return (wcs.crval[0], wcs.crval[1]) }
+        let c = atan(rho)
+        let dec = asin(cos(c) * sin(dec0) + eta * sin(c) * cos(dec0) / rho)
+        let ra = ra0 + atan2(
+            xi * sin(c),
+            rho * cos(dec0) * cos(c) - eta * sin(dec0) * sin(c)
+        )
+        return (modulo(ra * 180 / .pi, 360), dec * 180 / .pi)
+    }
+
+    private func worldToPixel(ra: Double, dec: Double) -> CGPoint? {
+        let wcs = solution.wcs
+        let ra0 = wcs.crval[0] * .pi / 180
+        let dec0 = wcs.crval[1] * .pi / 180
+        let ra = ra * .pi / 180
+        let dec = dec * .pi / 180
+        let deltaRA = ra - ra0
+        let cosineC = sin(dec0) * sin(dec) + cos(dec0) * cos(dec) * cos(deltaRA)
+        guard cosineC > 1e-9 else { return nil }
+        let xi = cos(dec) * sin(deltaRA) / cosineC * 180 / .pi
+        let eta = (cos(dec0) * sin(dec) - sin(dec0) * cos(dec) * cos(deltaRA))
+            / cosineC * 180 / .pi
+        let determinant = wcs.cd[0][0] * wcs.cd[1][1] - wcs.cd[0][1] * wcs.cd[1][0]
+        guard determinant != 0 else { return nil }
+        return CGPoint(
+            x: wcs.crpix[0] + (wcs.cd[1][1] * xi - wcs.cd[0][1] * eta) / determinant,
+            y: wcs.crpix[1] + (-wcs.cd[1][0] * xi + wcs.cd[0][0] * eta) / determinant
+        )
+    }
+
+    private func gridLabelFontSize() -> CGFloat {
+        max(min(max(sourceSize.width / 60, 18), sourceSize.width / 18), 6)
+    }
+
+    private func niceGridStep(_ target: Double) -> Double {
+        let steps: [Double] = [
+            1.0 / 3_600, 2.0 / 3_600, 5.0 / 3_600, 10.0 / 3_600,
+            15.0 / 3_600, 30.0 / 3_600, 1.0 / 60, 2.0 / 60,
+            5.0 / 60, 10.0 / 60, 15.0 / 60, 30.0 / 60,
+            1, 2, 5, 10, 15, 30, 45, 90,
+        ]
+        return steps.first { $0 >= target } ?? 90
+    }
+
+    private func formatRA(_ ra: Double) -> String {
+        let totalTenths = Int((modulo(ra, 360) / 15 * 36_000).rounded()) % 864_000
+        let hours = totalTenths / 36_000
+        let minutes = totalTenths % 36_000 / 600
+        let seconds = totalTenths % 600
+        return String(
+            format: "RA %02dh%02dm%02d.%01ds",
+            hours,
+            minutes,
+            seconds / 10,
+            seconds % 10
+        )
+    }
+
+    private func formatDeclination(_ dec: Double) -> String {
+        let sign = dec < 0 ? "−" : "+"
+        let totalTenths = Int((abs(dec) * 36_000).rounded())
+        let degrees = totalTenths / 36_000
+        let minutes = totalTenths % 36_000 / 600
+        let seconds = totalTenths % 600
+        return String(
+            format: "Dec %@%02d°%02d′%02d.%01d″",
+            sign,
+            degrees,
+            minutes,
+            seconds / 10,
+            seconds % 10
+        )
+    }
+
+    private func modulo(_ value: Double, _ divisor: Double) -> Double {
+        ((value.truncatingRemainder(dividingBy: divisor)) + divisor)
+            .truncatingRemainder(dividingBy: divisor)
+    }
+
+    private func drawGridLabel(
+        _ value: String,
+        at point: CGPoint,
+        fontSize: CGFloat,
+        anchor: UnitPoint,
+        context: inout GraphicsContext
+    ) {
+        let font = Font.system(size: fontSize, weight: .medium, design: .monospaced)
+        let halo = Text(value).font(font).foregroundStyle(Style.labelHalo)
+        let foreground = Text(value).font(font).foregroundStyle(Style.gridLabel)
+        let radius = max(fontSize * 0.05, 0.5)
+        for offset in [
+            CGSize(width: -radius, height: 0),
+            CGSize(width: radius, height: 0),
+            CGSize(width: 0, height: -radius),
+            CGSize(width: 0, height: radius),
+        ] {
+            context.draw(
+                halo,
+                at: CGPoint(x: point.x + offset.width, y: point.y + offset.height),
+                anchor: anchor
+            )
+        }
+        context.draw(foreground, at: point, anchor: anchor)
+    }
+
+    private func movingBodyTail(
+        for object: SolveObjectPoint,
+        center: CGPoint,
+        sourceRadius: CGFloat,
+        scaleX: CGFloat,
+        scaleY: CGFloat
+    ) -> Path? {
+        guard let direction = object.directionImageAngleDegrees else { return nil }
+        let physicalLength = object.motionArcsecPerHour.map {
+            CGFloat($0 * 3 / solution.scaleArcsecPerPixel)
+        }
+        let vectorLength = physicalLength.map {
+            min(max($0, sourceRadius * 3), sourceRadius * 9)
+        }
+        let defaultTipDistance: CGFloat = object.kind == "comet" ? 4 : 4.5
+        let tipDistance = vectorLength.map { max(abs($0) / max(abs(sourceRadius), .ulpOfOne), 1.5) }
+            ?? defaultTipDistance
+        let radians = CGFloat(direction) * .pi / 180
+        func point(along: CGFloat, offset: CGFloat = 0) -> CGPoint {
+            CGPoint(
+                x: center.x + (cos(radians) * sourceRadius * along - sin(radians) * sourceRadius * offset) * scaleX,
+                y: center.y + (sin(radians) * sourceRadius * along + cos(radians) * sourceRadius * offset) * scaleY
+            )
+        }
+        var path = Path()
+        if object.kind == "comet" {
+            let root = point(along: 1.15)
+            let span = tipDistance - 1.15
+            let shoulder = 1.15 + span * 0.75
+            let flare = min(max(span * 0.18, 0.35), 0.85)
+            let tip = point(along: tipDistance)
+            path.move(to: root)
+            path.addLine(to: tip)
+            path.move(to: root)
+            path.addLine(to: point(along: shoulder, offset: flare))
+            path.move(to: root)
+            path.addLine(to: point(along: shoulder, offset: -flare))
+        } else {
+            let root = point(along: 1.2)
+            let span = tipDistance - 1.2
+            let tip = point(along: tipDistance)
+            let arrowRoot = 1.2 + span * 0.73
+            let arrowWidth = min(max(span * 0.2, 0.45), 0.9)
+            path.move(to: root)
+            path.addLine(to: tip)
+            path.move(to: point(along: arrowRoot, offset: arrowWidth))
+            path.addLine(to: tip)
+            path.addLine(to: point(along: arrowRoot, offset: -arrowWidth))
+        }
+        return path
+    }
+
+    private func objectIsVisible(_ object: SolveObjectPoint) -> Bool {
+        switch object.kind {
+        case "star", "double-star", "identified-star":
+            return showsNamedStars
+        case "transient":
+            return showsTransients
+                && (object.nearCapture != false || showsHistoricalTransients)
+        case "comet", "asteroid":
+            return showsMinorBodies
+        default:
+            guard showsDeepSky, let catalog = object.deepSkyCatalog else { return false }
+            return !hiddenDeepSkyCatalogs.contains(catalog)
+        }
+    }
+
     private func objectColor(_ object: SolveObjectPoint) -> Color {
         switch object.kind {
         case "comet": Style.comet
@@ -931,30 +1510,8 @@ private struct SolveOverlayView: View {
         case "transient": Style.transient
         case "identified-star": Style.identifiedStar
         case "star", "double-star": Style.namedStar
-        default: deepSkyCatalogColor(for: object.name)
+        default: (object.deepSkyCatalog ?? .other).overlayColor
         }
-    }
-
-    private func deepSkyCatalogColor(for name: String) -> Color {
-        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if matches("^PGC(?:\\s|$)", name) { return Style.pgc }
-        if matches("^UGC(?:\\s|$)", name) { return Style.ugc }
-        if matches("^LBN(?:\\s|$)", name) { return Style.lbn }
-        if matches("^(?:Ced|Cederblad)(?:\\s|$)", name) { return Style.cederblad }
-        if matches("^(?:LDN(?:\\s|$)|B\\s*\\d)", name) { return Style.darkNebula }
-        if matches("^SNR(?:\\s|$)", name) { return Style.supernovaRemnant }
-        if matches("^(?:Sh\\s*2[- ]|vdB(?:\\s|$))", name) { return Style.sharplessVdb }
-        if matches("^M\\s*\\d", name) { return Style.messier }
-        if matches("^NGC\\s*\\d", name) { return Style.ngc }
-        if matches("^IC\\s*\\d", name) { return Style.ic }
-        return Style.otherDeepSky
-    }
-
-    private func matches(_ pattern: String, _ value: String) -> Bool {
-        value.range(
-            of: pattern,
-            options: [.regularExpression, .caseInsensitive]
-        ) != nil
     }
 
     private func encompassesFrame(
@@ -1087,12 +1644,13 @@ private struct SolveOverlayView: View {
     private func markerStroke(
         _ path: Path,
         color: Color,
+        lineWidth: CGFloat = Style.markerStrokeWidth,
         context: inout GraphicsContext
     ) {
         context.stroke(
             path,
             with: .color(color.opacity(Style.markerOpacity)),
-            lineWidth: Style.markerStrokeWidth
+            lineWidth: lineWidth
         )
     }
 }
@@ -1107,6 +1665,9 @@ private struct InspectorView: View {
                     LabeledContent("Dimensions", value: "\(metadata.width) × \(metadata.height)")
                     LabeledContent("Format", value: metadata.format)
                     LabeledContent("Encoding", value: metadata.colorKind)
+                    if model.supportsRGBStretch {
+                        LabeledContent("RGB stretch", value: model.rgbStretchMode.title)
+                    }
                     LabeledContent("Median", value: "\(metadata.statistics.median)")
                     LabeledContent("MAD", value: metadata.statistics.mad.formatted(.number.precision(.fractionLength(2))))
                 }
@@ -1150,15 +1711,45 @@ private struct InspectorView: View {
             LabeledContent("Scale", value: solution.scaleArcsecPerPixel.formatted(.number.precision(.fractionLength(3))) + "″/px")
             LabeledContent("Matches", value: "\(solution.matchedStars)")
             LabeledContent("RMS", value: solution.rmsArcsec.formatted(.number.precision(.fractionLength(2))) + "″")
-            LabeledContent("Sky objects", value: "\(solution.objectPositions.count)")
+            if let captureTime = solution.captureTime {
+                LabeledContent("Acquired", value: captureTime)
+            }
+            if let counts = solution.overlayCounts {
+                LabeledContent("Deep sky", value: "\(counts["deep_sky"] ?? 0)")
+                LabeledContent("Named stars", value: "\(counts["named_stars"] ?? 0)")
+                LabeledContent("Transients", value: "\(counts["transients"] ?? 0)")
+                LabeledContent("Solar system", value: "\(counts["minor_bodies"] ?? 0)")
+            } else {
+                LabeledContent("Sky objects", value: "\(solution.objectPositions.count)")
+            }
             if let error = solution.objectCatalogError {
                 Text("Object overlay unavailable: \(error)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
             }
+            if let reasons = solution.overlayUnavailableReasons {
+                ForEach(reasons.keys.sorted(), id: \.self) { key in
+                    if key != "deep_sky", key != "named_stars", let reason = reasons[key] {
+                        Text("\(overlayLayerName(key)): \(reason)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
             LabeledContent("Detected diagnostics", value: "\(solution.detectedStarPositions.count)")
             LabeledContent("Catalog diagnostics", value: "\(solution.catalogStarPositions.count)")
+        }
+    }
+
+    private func overlayLayerName(_ key: String) -> String {
+        switch key {
+        case "transients": "Transients"
+        case "historical_transients": "Older transients"
+        case "minor_bodies": "Solar system"
+        case "field_stars": "Field stars"
+        default: key
         }
     }
 }

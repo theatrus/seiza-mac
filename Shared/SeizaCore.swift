@@ -12,8 +12,33 @@ struct ImageMetadata: Decodable {
     let planes: Int
     let format: String
     let colorKind: String
+    let rgbStretchMode: String?
     let statistics: ImageStatistics
     let headers: [String: JSONValue]
+}
+
+enum RGBStretchMode: UInt32, CaseIterable, Identifiable {
+    case auto = 0
+    case linkedAuto = 1
+    case linear = 2
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .auto: "Auto"
+        case .linkedAuto: "Linked Auto"
+        case .linear: "Linear"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .auto: "Stretch each RGB channel independently."
+        case .linkedAuto: "Use one shared automatic stretch for all RGB channels."
+        case .linear: "Map the native 16-bit RGB range directly to the display."
+        }
+    }
 }
 
 struct ImageStatistics: Decodable {
@@ -36,6 +61,10 @@ struct SolveResult: Decodable {
     let catalogStarPositions: [SolveCatalogStarPoint]
     let objectPositions: [SolveObjectPoint]
     let objectCatalogError: String?
+    let captureTime: String?
+    let overlayAvailability: [String: Bool]?
+    let overlayUnavailableReasons: [String: String]?
+    let overlayCounts: [String: Int]?
     let wcs: WCSResult
 }
 
@@ -51,20 +80,94 @@ struct SolveCatalogStarPoint: Decodable {
 }
 
 struct SolveObjectPoint: Decodable {
+    let stableId: String?
     let name: String
     let commonName: String
     let kind: String
     let source: String
+    let catalogSource: String?
     let x: Double
     let y: Double
     let semiMajorPixels: Double
     let semiMinorPixels: Double
     let angleDegrees: Double?
     let prominence: Double?
+    let raDegrees: Double?
+    let decDegrees: Double?
+    let discovered: String?
+    let nearCapture: Bool?
+    let distanceAu: Double?
+    let motionArcsecPerHour: Double?
+    let directionPositionAngleDegrees: Double?
+    let directionImageAngleDegrees: Double?
     let outlines: [SolveObjectOutline]
 
     var displayName: String {
         commonName.isEmpty || commonName == name ? name : "\(name) · \(commonName)"
+    }
+
+    var deepSkyCatalog: DeepSkyCatalog? {
+        DeepSkyCatalog.classify(name: name, kind: kind)
+    }
+}
+
+enum DeepSkyCatalog: String, CaseIterable, Identifiable {
+    case messier
+    case ngc
+    case ic
+    case sharplessVDB = "sharpless-vdb"
+    case lbn
+    case cederblad
+    case darkNebulae = "dark-nebulae"
+    case supernovaRemnants = "snr"
+    case ugc
+    case pgc
+    case other = "other-deep-sky"
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .messier: "Messier"
+        case .ngc: "NGC"
+        case .ic: "IC"
+        case .sharplessVDB: "Sharpless / vdB"
+        case .lbn: "LBN (bright nebulae)"
+        case .cederblad: "Cederblad"
+        case .darkNebulae: "Dark nebulae (B / LDN)"
+        case .supernovaRemnants: "Supernova remnants"
+        case .ugc: "UGC galaxies"
+        case .pgc: "PGC galaxies"
+        case .other: "Other / default catalogs"
+        }
+    }
+
+    static func classify(name: String, kind: String) -> DeepSkyCatalog? {
+        if [
+            "star", "double-star", "identified-star", "field-star",
+            "transient", "comet", "asteroid", "satellite",
+        ].contains(kind) {
+            return nil
+        }
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if matches("^PGC(?:\\s|$)", name) { return .pgc }
+        if matches("^UGC(?:\\s|$)", name) { return .ugc }
+        if matches("^LBN(?:\\s|$)", name) { return .lbn }
+        if matches("^(?:Ced|Cederblad)(?:\\s|$)", name) { return .cederblad }
+        if matches("^(?:LDN(?:\\s|$)|B\\s*\\d)", name) { return .darkNebulae }
+        if matches("^SNR(?:\\s|$)", name) { return .supernovaRemnants }
+        if matches("^(?:Sh\\s*2[- ]|vdB(?:\\s|$))", name) { return .sharplessVDB }
+        if matches("^M\\s*\\d", name) { return .messier }
+        if matches("^NGC\\s*\\d", name) { return .ngc }
+        if matches("^IC\\s*\\d", name) { return .ic }
+        return .other
+    }
+
+    private static func matches(_ pattern: String, _ value: String) -> Bool {
+        value.range(
+            of: pattern,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
     }
 }
 
@@ -148,15 +251,17 @@ enum SeizaCore {
         url: URL,
         targetMedian: Double = 0.2,
         shadowsClip: Double = -2.8,
-        maxDimension: UInt32 = 0
+        maxDimension: UInt32 = 0,
+        rgbStretchMode: RGBStretchMode = .auto
     ) throws -> RenderedImage {
         var errorPointer: UnsafeMutablePointer<CChar>?
         let handle = url.path.withCString { path in
-            seiza_rendered_image_open(
+            seiza_rendered_image_open_with_rgb_stretch(
                 path,
                 targetMedian,
                 shadowsClip,
                 maxDimension,
+                rgbStretchMode.rawValue,
                 &errorPointer
             )
         }
