@@ -29,7 +29,9 @@ The initial app already provides:
   styling from `@seiza/astro-overlay` 0.5;
 - detailed OpenNGC contours with catalog ellipses as the fallback, plus
   independent object-label and outline controls;
-- a data-based Quick Look preview extension bundled inside the app.
+- a data-based Quick Look preview extension bundled inside the app;
+- a dedicated HIG-style FITS document icon for Finder and Open With
+  associations.
 
 ## Build
 
@@ -54,6 +56,14 @@ DerivedData/Build/Products/Debug/Seiza.app
 ```
 
 Open `Seiza.xcodeproj` to run and sign it with a local development team.
+
+The app and FITS document icons are generated from the checked-in colorful
+Seiza website mark. Regenerate them on macOS with:
+
+```sh
+swift scripts/generate-app-icons.swift
+swift scripts/generate-document-icon.swift
+```
 
 ## Tests and continuous integration
 
