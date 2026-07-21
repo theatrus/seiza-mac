@@ -54,8 +54,9 @@ Newer edits replace obsolete preview work. **Save Changes** commits the complete
 draft stack as one undoable operation and restores the full-resolution render;
 **Cancel** returns to the committed image.
 
-The development build also offers **Apply light deconvolution** in the same
-linear-processing section. Enable it only when you have measured the FWHM of
+The development build in [PR #13](https://github.com/theatrus/seiza-mac/pull/13)
+also offers **Apply light deconvolution** in the same linear-processing
+section. Enable it only when you have measured the FWHM of
 unsaturated stars in source-image pixels. Seiza applies background correction
 first, then conservative damped Richardson–Lucy restoration, then the display
 stretch. The default four iterations and 35% amount are deliberately light;

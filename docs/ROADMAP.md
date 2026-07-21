@@ -12,8 +12,9 @@ stackable stretch controls with undo/redo, image-picked GHS symmetry points,
 latest-only live previews, optional smooth background-gradient removal,
 in-place add/remove/reorder controls, and a detachable utility panel.
 
-Active development adds optional conservative deconvolution after background
-correction and before stretching. The Mac controls expose measured PSF FWHM,
+Active [PR #13](https://github.com/theatrus/seiza-mac/pull/13) adds optional
+conservative deconvolution after background correction and before stretching.
+The Mac controls expose measured PSF FWHM,
 iterations, amount, noise damping, and correction limits without enabling the
 operation by default. The companion [Seiza PR #76](https://github.com/theatrus/seiza/pull/76)
 composes that step inside the native linear FITS render pipeline and preserves
