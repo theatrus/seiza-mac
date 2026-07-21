@@ -205,6 +205,12 @@ enum FITSStretchColorStrategy: String, CaseIterable, Identifiable, Encodable {
 struct FITSStretchConfiguration: Equatable, Encodable {
     static let `default` = Self()
 
+    static var identity: Self {
+        var configuration = Self.default
+        configuration.type = .identity
+        return configuration
+    }
+
     var type: FITSStretchType = .autoMtf
     var colorStrategy: FITSStretchColorStrategy = .unlinked
     var maxAnalysisSamples = 200_000
@@ -336,6 +342,58 @@ struct FITSStretchStack: Equatable, Encodable {
     }
 }
 
+struct FITSImageProcessingConfiguration: Equatable, Encodable {
+    static let `default` = Self(stretchStack: .default, extractsBackground: false)
+
+    let stretchStack: FITSStretchStack
+    let extractsBackground: Bool
+    let interactivePreview: Bool
+
+    init(
+        stretchStack: FITSStretchStack,
+        extractsBackground: Bool,
+        interactivePreview: Bool = false
+    ) {
+        self.stretchStack = stretchStack
+        self.extractsBackground = extractsBackground
+        self.interactivePreview = interactivePreview
+    }
+
+    var jsonData: Data {
+        get throws {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            return try encoder.encode(self)
+        }
+    }
+
+    var cacheIdentifier: String {
+        guard let data = try? jsonData else { return "invalid-processing-config" }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case stretch
+        case background
+        case interactivePreview = "interactive_preview"
+    }
+
+    private struct BackgroundPayload: Encodable {
+        let mode = "subtract"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(stretchStack.stages, forKey: .stretch)
+        if extractsBackground {
+            try container.encode(BackgroundPayload(), forKey: .background)
+        }
+        if interactivePreview {
+            try container.encode(true, forKey: .interactivePreview)
+        }
+    }
+}
+
 struct FITSStretchHistory: Equatable {
     private(set) var appliedStages: [FITSStretchConfiguration]
     private var undoStacks: [[FITSStretchConfiguration]] = []
@@ -357,10 +415,26 @@ struct FITSStretchHistory: Equatable {
         redoStacks.removeAll()
     }
 
+    mutating func updateCurrent(_ configuration: FITSStretchConfiguration) {
+        precondition(configuration.validationMessage == nil)
+        undoStacks.append(appliedStages)
+        appliedStages[appliedStages.count - 1] = configuration
+        redoStacks.removeAll()
+    }
+
     mutating func replace(with configuration: FITSStretchConfiguration) {
         precondition(configuration.validationMessage == nil)
         undoStacks.append(appliedStages)
         appliedStages = [configuration]
+        redoStacks.removeAll()
+    }
+
+    mutating func replaceStack(with stages: [FITSStretchConfiguration]) {
+        precondition(!stages.isEmpty)
+        precondition(stages.allSatisfy { $0.validationMessage == nil })
+        guard stages != appliedStages else { return }
+        undoStacks.append(appliedStages)
+        appliedStages = stages
         redoStacks.removeAll()
     }
 
@@ -704,7 +778,7 @@ enum SeizaCore {
     static func render(
         url: URL,
         maxDimension: UInt32 = 0,
-        stretchStack: FITSStretchStack = .default
+        processing: FITSImageProcessingConfiguration = .default
     ) throws -> RenderedImage {
         var errorPointer: UnsafeMutablePointer<CChar>?
         let extensionName = url.pathExtension.lowercased()
@@ -712,7 +786,7 @@ enum SeizaCore {
         let handle: OpaquePointer?
         if isFITS {
             let configurationJSON = String(
-                decoding: try stretchStack.jsonData,
+                decoding: try processing.jsonData,
                 as: UTF8.self
             )
             handle = url.path.withCString { path in

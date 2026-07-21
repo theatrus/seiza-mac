@@ -51,22 +51,22 @@ enum ImageThumbnailCache {
 
     static func memoryImage(
         for url: URL,
-        stretchStack: FITSStretchStack = .default
+        processing: FITSImageProcessingConfiguration = .default
     ) -> CGImage? {
         memory.object(
             forKey: cacheKey(
                 for: url,
-                stretchStack: stretchStack
+                processing: processing
             ) as NSString
         )?.image
     }
 
     static func load(
         for url: URL,
-        stretchStack: FITSStretchStack = .default,
+        processing: FITSImageProcessingConfiguration = .default,
         completion: @escaping (CGImage?) -> Void
     ) {
-        let key = cacheKey(for: url, stretchStack: stretchStack)
+        let key = cacheKey(for: url, processing: processing)
         if let image = memory.object(forKey: key as NSString)?.image {
             completion(image)
             return
@@ -100,27 +100,27 @@ enum ImageThumbnailCache {
 
     static func render(
         for url: URL,
-        stretchStack: FITSStretchStack = .default,
+        processing: FITSImageProcessingConfiguration = .default,
         completion: @escaping (CGImage?) -> Void
     ) {
         ImageRenderQueue.renderThumbnail(
             url: url,
-            stretchStack: stretchStack,
+            processing: processing,
             completion: completion
         )
     }
 
     static func prefetch(
         _ urls: [URL],
-        stretchStack: FITSStretchStack = .default
+        processing: FITSImageProcessingConfiguration = .default
     ) {
         for url in urls where memoryImage(
             for: url,
-            stretchStack: stretchStack
+            processing: processing
         ) == nil {
-            load(for: url, stretchStack: stretchStack) { cached in
+            load(for: url, processing: processing) { cached in
                 guard cached == nil else { return }
-                render(for: url, stretchStack: stretchStack) { _ in }
+                render(for: url, processing: processing) { _ in }
             }
         }
     }
@@ -129,10 +129,10 @@ enum ImageThumbnailCache {
     static func storeThumbnail(
         from image: CGImage,
         for url: URL,
-        stretchStack: FITSStretchStack = .default
+        processing: FITSImageProcessingConfiguration = .default
     ) -> CGImage {
         let thumbnail = resized(image, maximumDimension: maximumDimension)
-        let key = cacheKey(for: url, stretchStack: stretchStack)
+        let key = cacheKey(for: url, processing: processing)
         memory.setObject(
             ImageThumbnailBox(thumbnail),
             forKey: key as NSString,
@@ -199,7 +199,7 @@ enum ImageThumbnailCache {
 
     private static func cacheKey(
         for url: URL,
-        stretchStack: FITSStretchStack
+        processing: FITSImageProcessingConfiguration
     ) -> String {
         let canonicalURL = url.resolvingSymlinksInPath().standardizedFileURL
         let values = try? canonicalURL.resourceValues(forKeys: [
@@ -211,7 +211,7 @@ enum ImageThumbnailCache {
             canonicalURL.path,
             String(values?.fileSize ?? 0),
             String(values?.contentModificationDate?.timeIntervalSince1970 ?? 0),
-            "fits-stretch:\(stretchStack.cacheIdentifier)",
+            "fits-processing:\(processing.cacheIdentifier)",
         ].joined(separator: "\n")
         let digest = SHA256.hash(data: Data(signature.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
@@ -293,10 +293,10 @@ enum ImageRenderQueue {
 
     static func renderThumbnail(
         url: URL,
-        stretchStack: FITSStretchStack = .default,
+        processing: FITSImageProcessingConfiguration = .default,
         completion: @escaping ThumbnailCompletion
     ) {
-        let key = jobKey(for: url, stretchStack: stretchStack)
+        let key = jobKey(for: url, processing: processing)
         let shouldSchedule = stateQueue.sync {
             if var job = jobs[key] {
                 job.thumbnailCompletions.append(completion)
@@ -313,16 +313,16 @@ enum ImageRenderQueue {
         scheduleThumbnail(
             url: url,
             key: key,
-            stretchStack: stretchStack
+            processing: processing
         )
     }
 
     static func renderFull(
         url: URL,
-        stretchStack: FITSStretchStack,
+        processing: FITSImageProcessingConfiguration,
         completion: @escaping FullCompletion
     ) {
-        let key = jobKey(for: url, stretchStack: stretchStack)
+        let key = jobKey(for: url, processing: processing)
         let shouldSchedule = stateQueue.sync {
             if var job = jobs[key] {
                 job.fullCompletions.append(completion)
@@ -339,14 +339,14 @@ enum ImageRenderQueue {
         scheduleFull(
             url: url,
             key: key,
-            stretchStack: stretchStack
+            processing: processing
         )
     }
 
     private static func scheduleThumbnail(
         url: URL,
         key: String,
-        stretchStack: FITSStretchStack
+        processing: FITSImageProcessingConfiguration
     ) {
         thumbnailOperations.addOperation {
             let accessing = url.startAccessingSecurityScopedResource()
@@ -355,13 +355,13 @@ enum ImageRenderQueue {
             let thumbnail = try? SeizaCore.render(
                 url: url,
                 maxDimension: UInt32(ImageThumbnailCache.maximumDimension),
-                stretchStack: stretchStack
+                processing: processing
             ).image
             if let thumbnail {
                 ImageThumbnailCache.storeThumbnail(
                     from: thumbnail,
                     for: url,
-                    stretchStack: stretchStack
+                    processing: processing
                 )
             }
 
@@ -384,7 +384,7 @@ enum ImageRenderQueue {
                 scheduleFull(
                     url: url,
                     key: key,
-                    stretchStack: stretchStack
+                    processing: processing
                 )
             }
         }
@@ -393,7 +393,7 @@ enum ImageRenderQueue {
     private static func scheduleFull(
         url: URL,
         key: String,
-        stretchStack: FITSStretchStack
+        processing: FITSImageProcessingConfiguration
     ) {
         fullOperations.addOperation {
             let accessing = url.startAccessingSecurityScopedResource()
@@ -402,7 +402,7 @@ enum ImageRenderQueue {
             let result = Result {
                 try SeizaCore.render(
                     url: url,
-                    stretchStack: stretchStack
+                    processing: processing
                 )
             }
             let thumbnail: CGImage?
@@ -411,7 +411,7 @@ enum ImageRenderQueue {
                 thumbnail = ImageThumbnailCache.storeThumbnail(
                     from: rendered.image,
                     for: url,
-                    stretchStack: stretchStack
+                    processing: processing
                 )
             case .failure:
                 thumbnail = nil
@@ -433,8 +433,82 @@ enum ImageRenderQueue {
 
     private static func jobKey(
         for url: URL,
-        stretchStack: FITSStretchStack
+        processing: FITSImageProcessingConfiguration
     ) -> String {
-        "\(url.resolvingSymlinksInPath().standardizedFileURL.path)\n\(stretchStack.cacheIdentifier)"
+        "\(url.resolvingSymlinksInPath().standardizedFileURL.path)\n\(processing.cacheIdentifier)"
+    }
+}
+
+/// A serial, latest-only queue for interactive controls. Pending previews are
+/// cancelled when a newer request arrives; an already-running C ABI call is
+/// allowed to finish, but its result is discarded and only the newest queued
+/// request is delivered.
+final class LatestImagePreviewRenderer {
+    typealias Completion = (Result<RenderedImage, Error>) -> Void
+
+    private let operations: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "fyi.seiza.mac.processing-preview"
+        queue.qualityOfService = .userInteractive
+        queue.maxConcurrentOperationCount = 1
+        return queue
+    }()
+
+    func render(
+        url: URL,
+        processing: FITSImageProcessingConfiguration,
+        maxDimension: UInt32,
+        completion: @escaping Completion
+    ) {
+        operations.cancelAllOperations()
+        operations.addOperation(
+            ImagePreviewOperation(
+                url: url,
+                processing: processing,
+                maxDimension: maxDimension,
+                completion: completion
+            )
+        )
+    }
+
+    func cancel() {
+        operations.cancelAllOperations()
+    }
+}
+
+private final class ImagePreviewOperation: Operation, @unchecked Sendable {
+    private let url: URL
+    private let processing: FITSImageProcessingConfiguration
+    private let maxDimension: UInt32
+    private let completion: LatestImagePreviewRenderer.Completion
+
+    init(
+        url: URL,
+        processing: FITSImageProcessingConfiguration,
+        maxDimension: UInt32,
+        completion: @escaping LatestImagePreviewRenderer.Completion
+    ) {
+        self.url = url
+        self.processing = processing
+        self.maxDimension = maxDimension
+        self.completion = completion
+    }
+
+    override func main() {
+        guard !isCancelled else { return }
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        let result = Result {
+            try SeizaCore.render(
+                url: url,
+                maxDimension: maxDimension,
+                processing: processing
+            )
+        }
+        guard !isCancelled else { return }
+        OperationQueue.main.addOperation { [self] in
+            guard !isCancelled else { return }
+            self.completion(result)
+        }
     }
 }

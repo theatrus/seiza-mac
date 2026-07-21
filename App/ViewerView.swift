@@ -268,9 +268,89 @@ private final class ImageThumbnailModel: ObservableObject {
     }
 }
 
+@MainActor
+private final class StretchPanelPresenter: NSObject, ObservableObject, NSWindowDelegate {
+    @Published private(set) var isPresented = false
+
+    private var panel: NSPanel?
+
+    func present<Content: View>(
+        title: String,
+        relativeTo parentWindow: NSWindow?,
+        content: () -> Content
+    ) {
+        if let panel {
+            panel.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 650),
+            styleMask: [.titled, .closable, .resizable, .utilityWindow],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = title
+        panel.isFloatingPanel = true
+        panel.hidesOnDeactivate = true
+        panel.becomesKeyOnlyIfNeeded = false
+        panel.collectionBehavior.insert(.fullScreenAuxiliary)
+        panel.minSize = NSSize(width: 430, height: 460)
+        panel.contentViewController = NSHostingController(rootView: content())
+        panel.delegate = self
+        position(panel, relativeTo: parentWindow)
+
+        self.panel = panel
+        isPresented = true
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    func orderFront() {
+        panel?.makeKeyAndOrderFront(nil)
+    }
+
+    func close() {
+        panel?.close()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard notification.object as? NSPanel === panel else { return }
+        panel?.contentViewController = nil
+        panel = nil
+        isPresented = false
+    }
+
+    private func position(_ panel: NSPanel, relativeTo parentWindow: NSWindow?) {
+        guard let parentWindow, let visibleFrame = parentWindow.screen?.visibleFrame else {
+            panel.center()
+            return
+        }
+
+        let panelSize = panel.frame.size
+        let preferredRight = parentWindow.frame.maxX + 12
+        let preferredLeft = parentWindow.frame.minX - panelSize.width - 12
+        let x: CGFloat
+        if preferredRight + panelSize.width <= visibleFrame.maxX {
+            x = preferredRight
+        } else {
+            x = max(preferredLeft, visibleFrame.minX)
+        }
+        let y = min(
+            max(parentWindow.frame.maxY - panelSize.height, visibleFrame.minY),
+            visibleFrame.maxY - panelSize.height
+        )
+        panel.setFrameOrigin(NSPoint(x: x, y: y))
+    }
+}
+
 private struct ImagePageView: View {
     private static let zoomRange = 0.01...8.0
     private static let zoomStep = 1.25
+
+    private enum StretchEditorPresentation {
+        case popover
+        case panel
+    }
 
     private struct CanvasMetrics {
         let imageSize: CGSize
@@ -317,8 +397,12 @@ private struct ImagePageView: View {
     @State private var isExporting = false
     @State private var exportError: String?
     @State private var showStretchControls = false
-    @State private var stretchDraft = FITSStretchConfiguration.default
+    @State private var stretchDraftStages = [FITSStretchConfiguration.default]
+    @State private var selectedStretchStageIndex = 0
+    @State private var extractsBackgroundDraft = false
     @State private var isPickingSymmetryPoint = false
+    @State private var returnsToStretchPanelAfterPicking = false
+    @StateObject private var stretchPanelPresenter = StretchPanelPresenter()
 
     init(
         model: ImageDocumentModel,
@@ -395,8 +479,12 @@ private struct ImagePageView: View {
                 .help("Redo Stretch (⇧⌘Z)")
 
                 Button {
-                    stretchDraft = model.stretchConfiguration
-                    showStretchControls.toggle()
+                    if stretchPanelPresenter.isPresented {
+                        stretchPanelPresenter.orderFront()
+                    } else {
+                        beginStretchEditing()
+                        showStretchControls.toggle()
+                    }
                 } label: {
                     Label("Stretch", systemImage: "slider.horizontal.3")
                 }
@@ -407,36 +495,7 @@ private struct ImagePageView: View {
                         : "Stretch controls are available for FITS images"
                 )
                 .popover(isPresented: $showStretchControls, arrowEdge: .bottom) {
-                    FITSStretchControlsView(
-                        configuration: $stretchDraft,
-                        supportsColor: model.supportsColorStretch,
-                        appliedStages: model.stretchHistory.appliedStages,
-                        canUndo: model.stretchHistory.canUndo,
-                        canRedo: model.stretchHistory.canRedo,
-                        undo: {
-                            model.undoStretch()
-                            stretchDraft = model.stretchConfiguration
-                        },
-                        redo: {
-                            model.redoStretch()
-                            stretchDraft = model.stretchConfiguration
-                        },
-                        pickSymmetryPoint: {
-                            showStretchControls = false
-                            isPickingSymmetryPoint = true
-                        },
-                        replace: {
-                            model.replaceStretchStack(with: stretchDraft)
-                            showStretchControls = false
-                        },
-                        apply: {
-                            model.addStretch(stretchDraft)
-                            showStretchControls = false
-                        },
-                        cancel: {
-                            showStretchControls = false
-                        }
-                    )
+                    stretchEditor(presentation: .popover)
                 }
 
                 Button {
@@ -585,6 +644,10 @@ private struct ImagePageView: View {
             }
         }
         .onChange(of: model.url) { _, _ in
+            showStretchControls = false
+            stretchPanelPresenter.close()
+            isPickingSymmetryPoint = false
+            returnsToStretchPanelAfterPicking = false
             zoom = 1
             pinchStartZoom = nil
             pinchAnchor = nil
@@ -596,6 +659,9 @@ private struct ImagePageView: View {
         }
         .onAppear {
             catalogSetup.refreshStatus()
+        }
+        .onDisappear {
+            stretchPanelPresenter.close()
         }
         .onChange(of: exportCoordinator.requestNumber) { _, _ in
             guard model.image != nil, !isExporting else {
@@ -619,9 +685,88 @@ private struct ImagePageView: View {
         )
     }
 
+    private func beginStretchEditing() {
+        stretchDraftStages = model.stretchHistory.appliedStages
+        selectedStretchStageIndex = stretchDraftStages.count - 1
+        extractsBackgroundDraft = model.extractsBackground
+    }
+
+    private func stretchEditor(
+        presentation: StretchEditorPresentation
+    ) -> some View {
+        FITSStretchControlsView(
+            model: model,
+            stages: $stretchDraftStages,
+            selectedStageIndex: $selectedStretchStageIndex,
+            extractsBackground: $extractsBackgroundDraft,
+            undo: {
+                model.undoStretch()
+                beginStretchEditing()
+            },
+            redo: {
+                model.redoStretch()
+                beginStretchEditing()
+            },
+            pickSymmetryPoint: {
+                returnsToStretchPanelAfterPicking = presentation == .panel
+                dismissStretchEditor(presentation)
+                isPickingSymmetryPoint = true
+            },
+            popOut: presentation == .popover ? { presentStretchPanel() } : nil,
+            contentMaxHeight: presentation == .popover ? 520 : nil,
+            preview: { stack, extractsBackground in
+                model.preview(
+                    stretchStack: stack,
+                    extractsBackground: extractsBackground
+                )
+            },
+            clearPreview: model.cancelPreview,
+            save: { stack, extractsBackground in
+                model.replaceStretchStack(
+                    with: stack,
+                    extractsBackground: extractsBackground
+                )
+                dismissStretchEditor(presentation)
+            },
+            cancel: {
+                model.cancelPreview()
+                dismissStretchEditor(presentation)
+            }
+        )
+    }
+
+    private func presentStretchPanel() {
+        showStretchControls = false
+        stretchPanelPresenter.present(
+            title: "Stretch — \(model.url.lastPathComponent)",
+            relativeTo: NSApp.mainWindow
+        ) {
+            stretchEditor(presentation: .panel)
+        }
+    }
+
+    private func dismissStretchEditor(_ presentation: StretchEditorPresentation) {
+        switch presentation {
+        case .popover:
+            showStretchControls = false
+        case .panel:
+            stretchPanelPresenter.close()
+        }
+    }
+
+    private func returnToStretchEditorAfterPicking() {
+        isPickingSymmetryPoint = false
+        if returnsToStretchPanelAfterPicking {
+            returnsToStretchPanelAfterPicking = false
+            presentStretchPanel()
+        } else {
+            showStretchControls = true
+        }
+    }
+
     @MainActor
     private func presentExportPanel() {
-        guard let image = model.image else {
+        guard let image = model.exportImage else {
             NSSound.beep()
             return
         }
@@ -724,11 +869,11 @@ private struct ImagePageView: View {
     @ViewBuilder
     private var imagePane: some View {
         switch model.loadState {
-        case .loading:
+        case .loading, .loaded:
             if let image = model.image {
-                imageCanvas(image: image, showsLoadingIndicator: true)
+                imageCanvas(image: image, showsLoadingIndicator: isLoading)
             } else if let previewImage = model.previewImage {
-                imageCanvas(image: previewImage, showsLoadingIndicator: true)
+                imageCanvas(image: previewImage, showsLoadingIndicator: isLoading)
             } else {
                 ProgressView("Reading image…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -739,11 +884,11 @@ private struct ImagePageView: View {
                 systemImage: "exclamationmark.triangle",
                 description: Text(message)
             )
-        case .loaded:
-            if let image = model.image {
-                imageCanvas(image: image, showsLoadingIndicator: false)
-            }
         }
+    }
+
+    private var isLoading: Bool {
+        if case .loading = model.loadState { true } else { false }
     }
 
     private func imageCanvas(
@@ -770,7 +915,7 @@ private struct ImagePageView: View {
                         if let solution = solvedSolution, hasVisibleOverlays {
                             SolveOverlayView(
                                 solution: solution,
-                                sourceSize: CGSize(width: image.width, height: image.height),
+                                sourceSize: sourceSize(for: image),
                                 showsDeepSky: showDeepSky,
                                 showsNamedStars: showNamedStars,
                                 showsTransients: showTransients,
@@ -836,8 +981,7 @@ private struct ImagePageView: View {
                             systemImage: "eyedropper"
                         )
                         Button("Cancel") {
-                            isPickingSymmetryPoint = false
-                            showStretchControls = true
+                            returnToStretchEditorAfterPicking()
                         }
                         .controlSize(.small)
                     }
@@ -850,7 +994,9 @@ private struct ImagePageView: View {
             }
             .onAppear {
                 viewportSize = geometry.size
-                applyFitZoom(image: image, viewport: geometry.size)
+                if isFitToWindow {
+                    applyFitZoom(image: image, viewport: geometry.size)
+                }
             }
             .onChange(of: geometry.size) { _, newSize in
                 viewportSize = newSize
@@ -858,7 +1004,7 @@ private struct ImagePageView: View {
                     applyFitZoom(image: image, viewport: newSize)
                 }
             }
-            .onChange(of: CGSize(width: image.width, height: image.height)) { _, _ in
+            .onChange(of: sourceSize(for: image)) { _, _ in
                 if isFitToWindow {
                     applyFitZoom(image: image, viewport: geometry.size)
                 }
@@ -931,12 +1077,13 @@ private struct ImagePageView: View {
             return
         }
 
-        stretchDraft.type = .ghs
-        stretchDraft.symmetryPoint = sample
-        stretchDraft.protectShadows = min(stretchDraft.protectShadows, sample)
-        stretchDraft.protectHighlights = max(stretchDraft.protectHighlights, sample)
-        isPickingSymmetryPoint = false
-        showStretchControls = true
+        var configuration = stretchDraftStages[selectedStretchStageIndex]
+        configuration.type = .ghs
+        configuration.symmetryPoint = sample
+        configuration.protectShadows = min(configuration.protectShadows, sample)
+        configuration.protectHighlights = max(configuration.protectHighlights, sample)
+        stretchDraftStages[selectedStretchStageIndex] = configuration
+        returnToStretchEditorAfterPicking()
     }
 
     private func clampedZoom(_ value: Double) -> Double {
@@ -974,8 +1121,9 @@ private struct ImagePageView: View {
 
     private func applyFitZoom(image: CGImage, viewport: CGSize) {
         guard viewport.width > 0, viewport.height > 0 else { return }
-        let horizontalScale = viewport.width / CGFloat(image.width)
-        let verticalScale = viewport.height / CGFloat(image.height)
+        let sourceSize = sourceSize(for: image)
+        let horizontalScale = viewport.width / sourceSize.width
+        let verticalScale = viewport.height / sourceSize.height
         zoom = clampedZoom(Double(min(horizontalScale, verticalScale)))
         scrollToOrigin()
     }
@@ -1056,10 +1204,18 @@ private struct ImagePageView: View {
     }
 
     private func displayedSize(for image: CGImage, zoom: Double) -> CGSize {
-        CGSize(
-            width: pixelAlignedLength(CGFloat(image.width) * zoom),
-            height: pixelAlignedLength(CGFloat(image.height) * zoom)
+        let sourceSize = sourceSize(for: image)
+        return CGSize(
+            width: pixelAlignedLength(sourceSize.width * zoom),
+            height: pixelAlignedLength(sourceSize.height * zoom)
         )
+    }
+
+    private func sourceSize(for image: CGImage) -> CGSize {
+        guard let metadata = model.metadata, metadata.width > 0, metadata.height > 0 else {
+            return CGSize(width: image.width, height: image.height)
+        }
+        return CGSize(width: metadata.width, height: metadata.height)
     }
 
     private func pixelAlignedLength(_ value: CGFloat) -> CGFloat {

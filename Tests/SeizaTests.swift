@@ -289,7 +289,10 @@ final class RenderBoundaryTests: XCTestCase {
             let variant = try SeizaCore.render(
                 url: url,
                 maxDimension: 4_096,
-                stretchStack: FITSStretchStack(stages: [configuration])
+                processing: FITSImageProcessingConfiguration(
+                    stretchStack: FITSStretchStack(stages: [configuration]),
+                    extractsBackground: false
+                )
             )
             XCTAssertEqual(variant.image.width, 2, stretchType.title)
             XCTAssertEqual(variant.image.height, 2, stretchType.title)
@@ -302,9 +305,190 @@ final class RenderBoundaryTests: XCTestCase {
         let stacked = try SeizaCore.render(
             url: url,
             maxDimension: 4_096,
-            stretchStack: FITSStretchStack(stages: [.default, linear])
+            processing: FITSImageProcessingConfiguration(
+                stretchStack: FITSStretchStack(stages: [.default, linear]),
+                extractsBackground: false
+            )
         )
         XCTAssertEqual(stacked.metadata.stretchStages, 2)
+    }
+
+    func testBackgroundExtractionRunsBeforeStretchingThroughSwiftBoundary() throws {
+        let width = 96
+        let height = 72
+        var values = [Int16]()
+        values.reserveCapacity(width * height)
+        for y in 0..<height {
+            for x in 0..<width {
+                values.append(Int16(2_000 + x * 120 + y * 45))
+            }
+        }
+        let url = try writeSyntheticFITS(width: width, height: height, values: values)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let stack = FITSStretchStack(stages: [.identity])
+        let plain = try SeizaCore.render(
+            url: url,
+            processing: FITSImageProcessingConfiguration(
+                stretchStack: stack,
+                extractsBackground: false
+            )
+        )
+        let corrected = try SeizaCore.render(
+            url: url,
+            processing: FITSImageProcessingConfiguration(
+                stretchStack: stack,
+                extractsBackground: true
+            )
+        )
+
+        XCTAssertEqual(corrected.image.width, width)
+        XCTAssertEqual(corrected.image.height, height)
+        XCTAssertEqual(corrected.metadata.inputHistogram?.upperBound, 1)
+        XCTAssertNotEqual(
+            plain.image.dataProvider?.data as Data?,
+            corrected.image.dataProvider?.data as Data?
+        )
+    }
+
+    func testInteractivePreviewCacheReappliesEveryStretchEdit() throws {
+        let width = 96
+        let height = 72
+        var values = [Int16]()
+        values.reserveCapacity(width * height)
+        for y in 0..<height {
+            for x in 0..<width {
+                values.append(Int16(2_000 + x * 120 + y * 45))
+            }
+        }
+        let url = try writeSyntheticFITS(width: width, height: height, values: values)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        var firstStretch = FITSStretchConfiguration.default
+        firstStretch.targetMedian = 0.21
+        let first = try SeizaCore.render(
+            url: url,
+            maxDimension: 2_048,
+            processing: FITSImageProcessingConfiguration(
+                stretchStack: FITSStretchStack(stages: [firstStretch]),
+                extractsBackground: false,
+                interactivePreview: true
+            )
+        )
+
+        var secondStretch = firstStretch
+        secondStretch.targetMedian = 0.27
+        let second = try SeizaCore.render(
+            url: url,
+            maxDimension: 2_048,
+            processing: FITSImageProcessingConfiguration(
+                stretchStack: FITSStretchStack(stages: [secondStretch]),
+                extractsBackground: false,
+                interactivePreview: true
+            )
+        )
+
+        XCTAssertNotEqual(
+            first.image.dataProvider?.data as Data?,
+            second.image.dataProvider?.data as Data?
+        )
+    }
+
+    @MainActor
+    func testLatestInteractivePreviewWinsAfterRapidEdits() async throws {
+        let width = 96
+        let height = 72
+        var values = [Int16]()
+        values.reserveCapacity(width * height)
+        for y in 0..<height {
+            for x in 0..<width {
+                values.append(Int16(2_000 + x * 120 + y * 45))
+            }
+        }
+        let url = try writeSyntheticFITS(width: width, height: height, values: values)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let model = ImageDocumentModel(url: url)
+        try await waitUntil("initial FITS render") {
+            if case .loaded = model.loadState { true } else { false }
+        }
+
+        var latestStretch = FITSStretchConfiguration.default
+        latestStretch.targetMedian = 0.27
+        let expected = try SeizaCore.render(
+            url: url,
+            maxDimension: 2_048,
+            processing: FITSImageProcessingConfiguration(
+                stretchStack: FITSStretchStack(stages: [latestStretch]),
+                extractsBackground: false,
+                interactivePreview: true
+            )
+        )
+
+        for targetMedian in [0.21, 0.23, 0.27] {
+            var stretch = FITSStretchConfiguration.default
+            stretch.targetMedian = targetMedian
+            model.preview(
+                stretchStack: FITSStretchStack(stages: [stretch]),
+                extractsBackground: false
+            )
+        }
+
+        let expectedPixels = expected.image.dataProvider?.data as Data?
+        try await waitUntil("latest interactive preview") {
+            !model.isPreviewRendering
+                && model.image?.dataProvider?.data as Data? == expectedPixels
+        }
+    }
+
+    @MainActor
+    private func waitUntil(
+        _ description: String,
+        timeout: Duration = .seconds(5),
+        condition: () -> Bool
+    ) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !condition() {
+            guard clock.now < deadline else {
+                XCTFail("Timed out waiting for \(description)")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    private func writeSyntheticFITS(
+        width: Int,
+        height: Int,
+        values: [Int16]
+    ) throws -> URL {
+        XCTAssertEqual(values.count, width * height)
+        var fits = Data()
+        for value in [
+            "SIMPLE  =                    T",
+            "BITPIX  =                   16",
+            "NAXIS   =                    2",
+            String(format: "NAXIS1  = %20d", width),
+            String(format: "NAXIS2  = %20d", height),
+            "BZERO   =                32768",
+            "END",
+        ] {
+            let card = value.padding(toLength: 80, withPad: " ", startingAt: 0)
+            fits.append(try XCTUnwrap(card.data(using: .ascii)))
+        }
+        fits.append(Data(repeating: 0x20, count: 2_880 - fits.count))
+        for value in values {
+            var bigEndian = value.bigEndian
+            withUnsafeBytes(of: &bigEndian) { fits.append(contentsOf: $0) }
+        }
+        let paddedLength = ((fits.count + 2_879) / 2_880) * 2_880
+        fits.append(Data(repeating: 0, count: paddedLength - fits.count))
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString).fits")
+        try fits.write(to: url)
+        return url
     }
 }
 
@@ -371,6 +555,40 @@ final class FITSStretchConfigurationTests: XCTestCase {
         XCTAssertEqual((json[1]["model"] as? [String: Any])?["type"] as? String, "linear")
     }
 
+    func testProcessingConfigurationWrapsTheStackAndOptionalBackgroundStep() throws {
+        let withoutBackground = FITSImageProcessingConfiguration(
+            stretchStack: FITSStretchStack(stages: [.default, .identity]),
+            extractsBackground: false
+        )
+        let plainJSON = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: withoutBackground.jsonData) as? [String: Any]
+        )
+        XCTAssertEqual((plainJSON["stretch"] as? [Any])?.count, 2)
+        XCTAssertNil(plainJSON["background"])
+
+        let withBackground = FITSImageProcessingConfiguration(
+            stretchStack: .default,
+            extractsBackground: true
+        )
+        let processedJSON = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: withBackground.jsonData) as? [String: Any]
+        )
+        let background = try XCTUnwrap(processedJSON["background"] as? [String: Any])
+        XCTAssertEqual(background["mode"] as? String, "subtract")
+        XCTAssertNotEqual(withBackground.cacheIdentifier, withoutBackground.cacheIdentifier)
+
+        let interactivePreview = FITSImageProcessingConfiguration(
+            stretchStack: .default,
+            extractsBackground: true,
+            interactivePreview: true
+        )
+        let previewJSON = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: interactivePreview.jsonData) as? [String: Any]
+        )
+        XCTAssertEqual(previewJSON["interactive_preview"] as? Bool, true)
+        XCTAssertNotEqual(interactivePreview.cacheIdentifier, withBackground.cacheIdentifier)
+    }
+
     func testStretchHistorySupportsUndoRedoAndClearsDivergentRedo() {
         var history = FITSStretchHistory()
         var linear = FITSStretchConfiguration.default
@@ -401,6 +619,30 @@ final class FITSStretchConfigurationTests: XCTestCase {
         XCTAssertEqual(history.appliedStages.map(\.type), [.identity])
         XCTAssertTrue(history.undo())
         XCTAssertEqual(history.appliedStages.map(\.type), [.autoMtf, .linear, .autoMtf])
+
+        history.updateCurrent(identity)
+        XCTAssertEqual(history.appliedStages.map(\.type), [.autoMtf, .linear, .identity])
+        XCTAssertTrue(history.undo())
+        XCTAssertEqual(history.appliedStages.map(\.type), [.autoMtf, .linear, .autoMtf])
+    }
+
+    func testStretchHistoryCommitsRemovedAndReorderedStagesAsOneUndoStep() {
+        var history = FITSStretchHistory()
+        var linear = FITSStretchConfiguration.default
+        linear.type = .linear
+        var asinh = FITSStretchConfiguration.default
+        asinh.type = .asinh
+        history.apply(linear)
+        history.apply(asinh)
+
+        history.replaceStack(with: [asinh, .default])
+        XCTAssertEqual(history.appliedStages.map(\.type), [.asinh, .autoMtf])
+
+        history.replaceStack(with: history.appliedStages)
+        XCTAssertTrue(history.undo())
+        XCTAssertEqual(history.appliedStages.map(\.type), [.autoMtf, .linear, .asinh])
+        XCTAssertTrue(history.redo())
+        XCTAssertEqual(history.appliedStages.map(\.type), [.asinh, .autoMtf])
     }
 }
 

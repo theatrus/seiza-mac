@@ -10,4 +10,4 @@ publish = false
 crate-type = ["staticlib"]
 
 [dependencies]
-seiza-cabi = { git = "https://github.com/theatrus/seiza.git", rev = "8d65b1ca1a1b19b33fa8f44768573316a15d09e3" }
+seiza-cabi = { git = "https://github.com/theatrus/seiza.git", rev = "ea3b2063acbd4652dc0042667262bd8af7f8f452" }

@@ -55,11 +55,32 @@ percentile Asinh separately from manual Linear, Asinh, MTF, and Generalized
 Hyperbolic Stretch controls, with an identity option for normalized data. GHS
 can sample its symmetry point from the displayed image. Color FITS can analyze
 linked or per-channel data, or stretch luminance while preserving RGB
-chromaticity.
+chromaticity. An optional background step fits and subtracts a smooth model
+from the linear mono or RGB samples before the first stretch stage.
+
+The Swift editor owns one draft stack independently from its presentation. The
+toolbar opens that editor as a bounded popover by default; a pop-out action
+hosts the same view, bindings, validation, and preview callbacks in a resizable
+AppKit utility panel. Adding, removing, selecting, or reordering a stage mutates
+the shared draft and schedules the same live-preview path. Saving replaces the
+committed stack as one undoable history operation. The panel closes when its
+document changes or disappears, so it cannot keep editing a stale image model.
+
+Interactive controls debounce edits and submit them to a serial latest-only
+preview queue. Pending work is cancelled when a newer edit arrives; a native
+render already inside the C ABI may finish, but its result is discarded. Only
+the newest result can update the document. The preview is bounded to 2048
+pixels while the committed full-resolution render remains separate for export,
+and source dimensions from metadata keep zoom and overlay geometry stable while
+the preview is visible. The C ABI retains the two most recent prepared linear
+preview buffers, keyed by file identity, preview size, and background settings.
+Stretch-only edits therefore reuse the decoded, downsampled, and (when enabled)
+background-corrected pixels instead of refitting the same background.
+
 Raster JPEG, PNG, and TIFF pixels remain color-managed display data and bypass
 the FITS stretch pipeline. Thumbnail-cache and background-render job identities
-include the complete, deterministically encoded stack, so only truly
-identical renders share work or cached pixels.
+include the complete, deterministically encoded processing request, so only
+truly identical stretch and background renders share work or cached pixels.
 
 The ABI supplies exact 256-bin channel counts for input and rendered pixels.
 The inspector plots those counts on a linear vertical scale capped at the 98th
