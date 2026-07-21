@@ -1,0 +1,47 @@
+# macOS and Finder metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Rust and Xcode build products
+/.build/
+/build/
+/DerivedData/
+/target/
+/dist/
+/release-assets/
+*.app
+*.dmg
+*.dSYM
+*.dSYM.zip
+*.xcarchive
+
+# Xcode per-user and source-control state
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.moved-aside
+*.hmap
+.swiftpm/
+
+# Editors and local tooling
+.idea/
+.vscode/
+.codex/
+*.log
+*.tmp
+*~
+
+# Local configuration and Apple signing material
+.env
+.env.*
+!.env.example
+*.cer
+*.p12
+*.provisionprofile
+*.mobileprovision
+AuthKey_*.p8
+*.keychain
+*.keychain-db

@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - name: Validate project metadata
+        run: |
+          plutil -lint App/Info.plist App/Seiza.entitlements
+          plutil -lint QuickLook/Info.plist QuickLook/SeizaQuickLook.entitlements
+          xcodebuild -project Seiza.xcodeproj -list
+
+      - name: Rust format
+        run: cargo fmt --all --check
+
+      - name: Rust lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --workspace --locked
+
+      - name: Swift unit tests and native app integration build
+        run: |
+          xcodebuild test \
+            -project Seiza.xcodeproj \
+            -scheme Seiza \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath DerivedData \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Build universal Release app
+        run: |
+          xcodebuild build \
+            -project Seiza.xcodeproj \
+            -scheme Seiza \
+            -configuration Release \
+            -derivedDataPath DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=NO \
+            'ARCHS=arm64 x86_64'
+          file DerivedData/Build/Products/Release/Seiza.app/Contents/MacOS/Seiza \
+            | grep -q 'universal binary with 2 architectures'
+
+      - name: Package and verify development DMG
+        run: |
+          scripts/package-dmg.sh \
+            DerivedData/Build/Products/Release/Seiza.app \
+            dist/Seiza-development.dmg \
+            development
+          hdiutil verify dist/Seiza-development.dmg

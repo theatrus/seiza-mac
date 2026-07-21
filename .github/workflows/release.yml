@@ -1,0 +1,86 @@
+name: Release DMG
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  dmg:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - name: Validate tag and test Rust core
+        run: |
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          version="${GITHUB_REF_NAME#v}"
+          marketing_version="$(
+            xcodebuild \
+              -project Seiza.xcodeproj \
+              -scheme Seiza \
+              -configuration Release \
+              -showBuildSettings \
+              | awk '/MARKETING_VERSION/ { print $3; exit }'
+          )"
+          test "$version" = "$marketing_version"
+          cargo fmt --all --check
+          cargo test --workspace --locked
+
+      - name: Build universal Release app
+        run: |
+          xcodebuild build \
+            -project Seiza.xcodeproj \
+            -scheme Seiza \
+            -configuration Release \
+            -derivedDataPath DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=NO \
+            'ARCHS=arm64 x86_64'
+
+      - name: Package unsigned development preview
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          scripts/package-dmg.sh \
+            DerivedData/Build/Products/Release/Seiza.app \
+            "dist/Seiza-${version}-universal.dmg" \
+            "$version"
+          ditto -c -k --sequesterRsrc --keepParent \
+            DerivedData/Build/Products/Release/Seiza.app \
+            "dist/Seiza-${version}-universal.zip"
+          hdiutil verify "dist/Seiza-${version}-universal.dmg"
+          shasum -a 256 dist/Seiza-* > dist/SHA256SUMS.txt
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s\n' \
+            '## Seiza for macOS' \
+            '' \
+            'This first package is an **unsigned development preview**. macOS may require Control-click → Open. Developer ID signing and Apple notarization are intentionally deferred until the repository receives the Apple credentials documented in `docs/RELEASING.md`.' \
+            '' \
+            '- Universal macOS 15+ application (Apple silicon and Intel)' \
+            '- FITS, JPEG, PNG, and TIFF viewing' \
+            '- Explicit Seiza plate solving and catalog-aware overlays' \
+            '- Quick Look FITS preview extension' \
+            > release-notes.md
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --title "Seiza ${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md \
+            dist/Seiza-* \
+            dist/SHA256SUMS.txt
