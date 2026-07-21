@@ -188,6 +188,30 @@ final class ImageExportTests: XCTestCase {
         }
     }
 
+    func testPixelSamplerReturnsDisplayedLuminance() throws {
+        let image = try makeTestImage()
+        XCTAssertEqual(
+            try XCTUnwrap(ImagePixelSampler.normalizedLuminance(
+                image: image,
+                x: 0,
+                y: 0,
+                radius: 0
+            )),
+            0.2126,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(ImagePixelSampler.normalizedLuminance(
+                image: image,
+                x: 1,
+                y: 1,
+                radius: 0
+            )),
+            1,
+            accuracy: 0.0001
+        )
+    }
+
     private func makeTestImage() throws -> CGImage {
         let pixels: [UInt8] = [
             255, 0, 0, 255,
@@ -257,6 +281,7 @@ final class RenderBoundaryTests: XCTestCase {
         XCTAssertTrue(inputHistogram.isValid)
         XCTAssertEqual(inputHistogram.upperBound, 65_535)
         XCTAssertEqual(inputHistogram.red.reduce(0, +), 4)
+        XCTAssertEqual(rendered.metadata.stretchStages, 1)
 
         for stretchType in FITSStretchType.allCases {
             var configuration = FITSStretchConfiguration.default
@@ -264,11 +289,22 @@ final class RenderBoundaryTests: XCTestCase {
             let variant = try SeizaCore.render(
                 url: url,
                 maxDimension: 4_096,
-                stretchConfiguration: configuration
+                stretchStack: FITSStretchStack(stages: [configuration])
             )
             XCTAssertEqual(variant.image.width, 2, stretchType.title)
             XCTAssertEqual(variant.image.height, 2, stretchType.title)
         }
+
+        var linear = FITSStretchConfiguration.default
+        linear.type = .linear
+        linear.black = 0.02
+        linear.white = 0.9
+        let stacked = try SeizaCore.render(
+            url: url,
+            maxDimension: 4_096,
+            stretchStack: FITSStretchStack(stages: [.default, linear])
+        )
+        XCTAssertEqual(stacked.metadata.stretchStages, 2)
     }
 }
 
@@ -318,6 +354,53 @@ final class FITSStretchConfigurationTests: XCTestCase {
         configuration.protectShadows = 0.1
         configuration.protectHighlights = 0.9
         XCTAssertNil(configuration.validationMessage)
+    }
+
+    func testStretchStackEncodesAsAnOrderedJSONArray() throws {
+        var second = FITSStretchConfiguration.default
+        second.type = .linear
+        second.black = 0.1
+        second.white = 0.8
+        let stack = FITSStretchStack(stages: [.default, second])
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: stack.jsonData) as? [[String: Any]]
+        )
+
+        XCTAssertEqual(json.count, 2)
+        XCTAssertEqual((json[0]["model"] as? [String: Any])?["type"] as? String, "auto-mtf")
+        XCTAssertEqual((json[1]["model"] as? [String: Any])?["type"] as? String, "linear")
+    }
+
+    func testStretchHistorySupportsUndoRedoAndClearsDivergentRedo() {
+        var history = FITSStretchHistory()
+        var linear = FITSStretchConfiguration.default
+        linear.type = .linear
+        var asinh = FITSStretchConfiguration.default
+        asinh.type = .asinh
+
+        XCTAssertFalse(history.canUndo)
+        XCTAssertFalse(history.undo())
+        history.apply(linear)
+        history.apply(asinh)
+        XCTAssertEqual(history.appliedStages.map(\.type), [.autoMtf, .linear, .asinh])
+
+        XCTAssertTrue(history.undo())
+        XCTAssertEqual(history.current.type, .linear)
+        XCTAssertTrue(history.canRedo)
+        XCTAssertTrue(history.redo())
+        XCTAssertEqual(history.current.type, .asinh)
+
+        XCTAssertTrue(history.undo())
+        history.apply(.default)
+        XCTAssertFalse(history.canRedo)
+        XCTAssertEqual(history.appliedStages.map(\.type), [.autoMtf, .linear, .autoMtf])
+
+        var identity = FITSStretchConfiguration.default
+        identity.type = .identity
+        history.replace(with: identity)
+        XCTAssertEqual(history.appliedStages.map(\.type), [.identity])
+        XCTAssertTrue(history.undo())
+        XCTAssertEqual(history.appliedStages.map(\.type), [.autoMtf, .linear, .autoMtf])
     }
 }
 

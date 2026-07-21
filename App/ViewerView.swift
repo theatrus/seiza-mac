@@ -318,6 +318,7 @@ private struct ImagePageView: View {
     @State private var exportError: String?
     @State private var showStretchControls = false
     @State private var stretchDraft = FITSStretchConfiguration.default
+    @State private var isPickingSymmetryPoint = false
 
     init(
         model: ImageDocumentModel,
@@ -379,6 +380,20 @@ private struct ImagePageView: View {
                     .help("Next Image (→)")
                 }
 
+                Button(action: model.undoStretch) {
+                    Label("Undo Stretch", systemImage: "arrow.uturn.backward")
+                }
+                .disabled(!model.supportsFITSStretch || !model.stretchHistory.canUndo)
+                .keyboardShortcut("z", modifiers: .command)
+                .help("Undo Last Stretch (⌘Z)")
+
+                Button(action: model.redoStretch) {
+                    Label("Redo Stretch", systemImage: "arrow.uturn.forward")
+                }
+                .disabled(!model.supportsFITSStretch || !model.stretchHistory.canRedo)
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .help("Redo Stretch (⇧⌘Z)")
+
                 Button {
                     stretchDraft = model.stretchConfiguration
                     showStretchControls.toggle()
@@ -395,8 +410,27 @@ private struct ImagePageView: View {
                     FITSStretchControlsView(
                         configuration: $stretchDraft,
                         supportsColor: model.supportsColorStretch,
+                        appliedStages: model.stretchHistory.appliedStages,
+                        canUndo: model.stretchHistory.canUndo,
+                        canRedo: model.stretchHistory.canRedo,
+                        undo: {
+                            model.undoStretch()
+                            stretchDraft = model.stretchConfiguration
+                        },
+                        redo: {
+                            model.redoStretch()
+                            stretchDraft = model.stretchConfiguration
+                        },
+                        pickSymmetryPoint: {
+                            showStretchControls = false
+                            isPickingSymmetryPoint = true
+                        },
+                        replace: {
+                            model.replaceStretchStack(with: stretchDraft)
+                            showStretchControls = false
+                        },
                         apply: {
-                            model.setStretchConfiguration(stretchDraft)
+                            model.addStretch(stretchDraft)
                             showStretchControls = false
                         },
                         cancel: {
@@ -778,6 +812,42 @@ private struct ImagePageView: View {
                         .accessibilityLabel("Loading full-resolution image")
                 }
             }
+            .overlay {
+                if isPickingSymmetryPoint {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .gesture(
+                            SpatialTapGesture()
+                                .onEnded { value in
+                                    captureSymmetryPoint(
+                                        at: value.location,
+                                        image: image,
+                                        viewport: geometry.size
+                                    )
+                                }
+                        )
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if isPickingSymmetryPoint {
+                    HStack(spacing: 10) {
+                        Label(
+                            "Click the image to sample the GHS symmetry point",
+                            systemImage: "eyedropper"
+                        )
+                        Button("Cancel") {
+                            isPickingSymmetryPoint = false
+                            showStretchControls = true
+                        }
+                        .controlSize(.small)
+                    }
+                    .font(.callout)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(14)
+                }
+            }
             .onAppear {
                 viewportSize = geometry.size
                 applyFitZoom(image: image, viewport: geometry.size)
@@ -836,6 +906,37 @@ private struct ImagePageView: View {
                 pinchStartZoom = nil
                 pinchAnchor = nil
             }
+    }
+
+    private func captureSymmetryPoint(
+        at location: CGPoint,
+        image: CGImage,
+        viewport: CGSize
+    ) {
+        let metrics = canvasMetrics(for: image, viewport: viewport, zoom: zoom)
+        let contentPoint = CGPoint(
+            x: visibleContentOrigin.x + location.x,
+            y: visibleContentOrigin.y + location.y
+        )
+        let normalizedPoint = CGPoint(
+            x: (contentPoint.x - metrics.imageOrigin.x) / metrics.imageSize.width,
+            y: (contentPoint.y - metrics.imageOrigin.y) / metrics.imageSize.height
+        )
+        guard (0...1).contains(normalizedPoint.x),
+              (0...1).contains(normalizedPoint.y) else { return }
+
+        let x = min(Int((normalizedPoint.x * CGFloat(image.width)).rounded(.down)), image.width - 1)
+        let y = min(Int((normalizedPoint.y * CGFloat(image.height)).rounded(.down)), image.height - 1)
+        guard let sample = ImagePixelSampler.normalizedLuminance(image: image, x: x, y: y) else {
+            return
+        }
+
+        stretchDraft.type = .ghs
+        stretchDraft.symmetryPoint = sample
+        stretchDraft.protectShadows = min(stretchDraft.protectShadows, sample)
+        stretchDraft.protectHighlights = max(stretchDraft.protectHighlights, sample)
+        isPickingSymmetryPoint = false
+        showStretchControls = true
     }
 
     private func clampedZoom(_ value: Double) -> Double {
@@ -1995,6 +2096,40 @@ private struct LabeledHistogramView: View {
     }
 }
 
+enum ImagePixelSampler {
+    static func normalizedLuminance(
+        image: CGImage,
+        x: Int,
+        y: Int,
+        radius: Int = 1
+    ) -> Double? {
+        guard radius >= 0,
+              image.bitsPerComponent == 8,
+              image.bitsPerPixel == 32,
+              image.alphaInfo == .last || image.alphaInfo == .premultipliedLast,
+              (0..<image.width).contains(x),
+              (0..<image.height).contains(y),
+              let data = image.dataProvider?.data,
+              let bytes = CFDataGetBytePtr(data) else { return nil }
+
+        let byteCount = CFDataGetLength(data)
+        var samples: [Double] = []
+        for sampleY in max(y - radius, 0)...min(y + radius, image.height - 1) {
+            for sampleX in max(x - radius, 0)...min(x + radius, image.width - 1) {
+                let offset = sampleY * image.bytesPerRow + sampleX * 4
+                guard offset + 2 < byteCount else { return nil }
+                let red = Double(bytes[offset]) / 255
+                let green = Double(bytes[offset + 1]) / 255
+                let blue = Double(bytes[offset + 2]) / 255
+                samples.append(0.2126 * red + 0.7152 * green + 0.0722 * blue)
+            }
+        }
+        guard !samples.isEmpty else { return nil }
+        samples.sort()
+        return samples[samples.count / 2]
+    }
+}
+
 private struct InspectorView: View {
     @ObservedObject var model: ImageDocumentModel
 
@@ -2008,7 +2143,9 @@ private struct InspectorView: View {
                     if model.supportsFITSStretch {
                         LabeledContent(
                             "Stretch",
-                            value: model.stretchConfiguration.type.title
+                            value: model.stretchHistory.appliedStages.count == 1
+                                ? model.stretchConfiguration.type.title
+                                : "\(model.stretchHistory.appliedStages.count) stages · \(model.stretchConfiguration.type.title)"
                         )
                         if model.supportsColorStretch {
                             LabeledContent(

@@ -3,6 +3,13 @@ import SwiftUI
 struct FITSStretchControlsView: View {
     @Binding var configuration: FITSStretchConfiguration
     let supportsColor: Bool
+    let appliedStages: [FITSStretchConfiguration]
+    let canUndo: Bool
+    let canRedo: Bool
+    let undo: () -> Void
+    let redo: () -> Void
+    let pickSymmetryPoint: () -> Void
+    let replace: () -> Void
     let apply: () -> Void
     let cancel: () -> Void
 
@@ -24,6 +31,49 @@ struct FITSStretchControlsView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Applied Stages")
+                                .font(.subheadline.weight(.semibold))
+                            Spacer()
+                            Button(action: undo) {
+                                Label("Undo Stretch", systemImage: "arrow.uturn.backward")
+                                    .labelStyle(.iconOnly)
+                            }
+                            .disabled(!canUndo)
+                            .help("Undo last stretch")
+                            Button(action: redo) {
+                                Label("Redo Stretch", systemImage: "arrow.uturn.forward")
+                                    .labelStyle(.iconOnly)
+                            }
+                            .disabled(!canRedo)
+                            .help("Redo stretch")
+                        }
+
+                        ForEach(Array(appliedStages.enumerated()), id: \.offset) { index, stage in
+                            HStack(spacing: 8) {
+                                Image(systemName: index == 0 ? "photo" : "plus.circle.fill")
+                                    .foregroundStyle(
+                                        index == 0 ? Color.secondary : Color.accentColor
+                                    )
+                                Text(stage.type.title)
+                                Spacer()
+                                if index == 0 {
+                                    Text("Base")
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .font(.caption)
+                        }
+
+                        Text("Each new stage operates on the previous stage at full floating-point precision.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Divider()
+
                     LabeledContent("Method") {
                         Picker("Method", selection: $configuration.type) {
                             Section("Automatic") {
@@ -86,10 +136,13 @@ struct FITSStretchControlsView: View {
             Divider()
 
             HStack {
+                Button("Replace Stack", action: replace)
+                    .help("Discard the current stages and use this stretch as the new base")
+                    .disabled(configuration.validationMessage != nil)
                 Spacer()
                 Button("Cancel", action: cancel)
                     .keyboardShortcut(.cancelAction)
-                Button("Apply", action: apply)
+                Button("Add Stretch", action: apply)
                     .keyboardShortcut(.defaultAction)
                     .disabled(configuration.validationMessage != nil)
             }
@@ -184,12 +237,16 @@ struct FITSStretchControlsView: View {
                 range: -5...15,
                 step: 0.1
             )
-            StretchParameterRow(
-                title: "Symmetry point",
-                value: $configuration.symmetryPoint,
-                range: 0...1,
-                step: 0.001
-            )
+            VStack(alignment: .trailing, spacing: 6) {
+                StretchParameterRow(
+                    title: "Symmetry point",
+                    value: $configuration.symmetryPoint,
+                    range: 0...1,
+                    step: 0.001
+                )
+                Button("Pick from Image…", systemImage: "eyedropper", action: pickSymmetryPoint)
+                    .controlSize(.small)
+            }
             StretchParameterRow(
                 title: "Shadow protection",
                 value: $configuration.protectShadows,

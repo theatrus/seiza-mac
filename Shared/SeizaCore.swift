@@ -102,6 +102,7 @@ struct ImageMetadata: Decodable {
     let format: String
     let colorKind: String
     let rgbStretchMode: String?
+    let stretchStages: Int?
     let statistics: ImageStatistics
     let inputHistogram: ImageHistogram?
     let displayHistogram: ImageHistogram?
@@ -308,6 +309,75 @@ struct FITSStretchConfiguration: Equatable, Encodable {
         try container.encode(StretchModelPayload(configuration: self), forKey: .model)
         try container.encode(colorStrategy, forKey: .colorStrategy)
         try container.encode(maxAnalysisSamples, forKey: .maxAnalysisSamples)
+    }
+}
+
+struct FITSStretchStack: Equatable, Encodable {
+    static let `default` = Self(stages: [.default])
+
+    let stages: [FITSStretchConfiguration]
+
+    init(stages: [FITSStretchConfiguration]) {
+        precondition(!stages.isEmpty, "A stretch stack must contain at least one stage")
+        self.stages = stages
+    }
+
+    var jsonData: Data {
+        get throws {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            return try encoder.encode(stages)
+        }
+    }
+
+    var cacheIdentifier: String {
+        guard let data = try? jsonData else { return "invalid-stretch-stack" }
+        return String(decoding: data, as: UTF8.self)
+    }
+}
+
+struct FITSStretchHistory: Equatable {
+    private(set) var appliedStages: [FITSStretchConfiguration]
+    private var undoStacks: [[FITSStretchConfiguration]] = []
+    private var redoStacks: [[FITSStretchConfiguration]] = []
+
+    init(base: FITSStretchConfiguration = .default) {
+        appliedStages = [base]
+    }
+
+    var stack: FITSStretchStack { FITSStretchStack(stages: appliedStages) }
+    var current: FITSStretchConfiguration { appliedStages[appliedStages.count - 1] }
+    var canUndo: Bool { !undoStacks.isEmpty }
+    var canRedo: Bool { !redoStacks.isEmpty }
+
+    mutating func apply(_ configuration: FITSStretchConfiguration) {
+        precondition(configuration.validationMessage == nil)
+        undoStacks.append(appliedStages)
+        appliedStages.append(configuration)
+        redoStacks.removeAll()
+    }
+
+    mutating func replace(with configuration: FITSStretchConfiguration) {
+        precondition(configuration.validationMessage == nil)
+        undoStacks.append(appliedStages)
+        appliedStages = [configuration]
+        redoStacks.removeAll()
+    }
+
+    @discardableResult
+    mutating func undo() -> Bool {
+        guard let previous = undoStacks.popLast() else { return false }
+        redoStacks.append(appliedStages)
+        appliedStages = previous
+        return true
+    }
+
+    @discardableResult
+    mutating func redo() -> Bool {
+        guard let next = redoStacks.popLast() else { return false }
+        undoStacks.append(appliedStages)
+        appliedStages = next
+        return true
     }
 }
 
@@ -634,7 +704,7 @@ enum SeizaCore {
     static func render(
         url: URL,
         maxDimension: UInt32 = 0,
-        stretchConfiguration: FITSStretchConfiguration = .default
+        stretchStack: FITSStretchStack = .default
     ) throws -> RenderedImage {
         var errorPointer: UnsafeMutablePointer<CChar>?
         let extensionName = url.pathExtension.lowercased()
@@ -642,7 +712,7 @@ enum SeizaCore {
         let handle: OpaquePointer?
         if isFITS {
             let configurationJSON = String(
-                decoding: try stretchConfiguration.jsonData,
+                decoding: try stretchStack.jsonData,
                 as: UTF8.self
             )
             handle = url.path.withCString { path in

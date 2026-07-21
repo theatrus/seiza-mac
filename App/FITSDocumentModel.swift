@@ -21,7 +21,7 @@ final class ImageDocumentModel: ObservableObject {
     @Published private(set) var previewImage: CGImage?
     @Published private(set) var image: CGImage?
     @Published private(set) var metadata: ImageMetadata?
-    @Published private(set) var stretchConfiguration: FITSStretchConfiguration
+    @Published private(set) var stretchHistory: FITSStretchHistory
     private var loadGeneration = 0
 
     init(
@@ -29,22 +29,23 @@ final class ImageDocumentModel: ObservableObject {
         stretchConfiguration: FITSStretchConfiguration = .default
     ) {
         self.url = url
-        self.stretchConfiguration = stretchConfiguration
+        stretchHistory = FITSStretchHistory(base: stretchConfiguration)
+        let stretchStack = stretchHistory.stack
         previewImage = ImageThumbnailCache.memoryImage(
             for: url,
-            stretchConfiguration: stretchConfiguration
+            stretchStack: stretchStack
         )
         if previewImage == nil {
             ImageThumbnailCache.load(
                 for: url,
-                stretchConfiguration: stretchConfiguration
+                stretchStack: stretchStack
             ) { [weak self] image in
                 guard let image else { return }
                 DispatchQueue.main.async {
                     guard
                         let self,
                         self.image == nil,
-                        self.stretchConfiguration == stretchConfiguration
+                        self.stretchHistory.stack == stretchStack
                     else { return }
                     self.previewImage = image
                 }
@@ -62,10 +63,37 @@ final class ImageDocumentModel: ObservableObject {
         return colorKind == "planar-rgb" || colorKind == "bayer"
     }
 
-    func setStretchConfiguration(_ configuration: FITSStretchConfiguration) {
-        guard configuration.validationMessage == nil,
-              configuration != stretchConfiguration else { return }
-        stretchConfiguration = configuration
+    var stretchConfiguration: FITSStretchConfiguration {
+        stretchHistory.current
+    }
+
+    func addStretch(_ configuration: FITSStretchConfiguration) {
+        guard configuration.validationMessage == nil else { return }
+        var history = stretchHistory
+        history.apply(configuration)
+        stretchHistory = history
+        load()
+    }
+
+    func replaceStretchStack(with configuration: FITSStretchConfiguration) {
+        guard configuration.validationMessage == nil else { return }
+        var history = stretchHistory
+        history.replace(with: configuration)
+        stretchHistory = history
+        load()
+    }
+
+    func undoStretch() {
+        var history = stretchHistory
+        guard history.undo() else { return }
+        stretchHistory = history
+        load()
+    }
+
+    func redoStretch() {
+        var history = stretchHistory
+        guard history.redo() else { return }
+        stretchHistory = history
         load()
     }
 
@@ -74,10 +102,10 @@ final class ImageDocumentModel: ObservableObject {
         let generation = loadGeneration
         loadState = .loading
         let url = url
-        let stretchConfiguration = stretchConfiguration
+        let stretchStack = stretchHistory.stack
         ImageRenderQueue.renderFull(
             url: url,
-            stretchConfiguration: stretchConfiguration
+            stretchStack: stretchStack
         ) { [weak self] result in
             guard let self, self.loadGeneration == generation else { return }
             switch result {

@@ -47,14 +47,18 @@ layout, allocator-owned memory, or panic is allowed to cross the ABI:
 JSON is used for metadata and WCS because those records evolve more often than
 the high-volume pixel path. Pixels stay in a direct contiguous buffer.
 
-FITS display rendering sends an explicit, validated stretch configuration to
-the C ABI. The toolbar groups automatic MTF and percentile Asinh separately
-from manual Linear, Asinh, MTF, and Generalized Hyperbolic Stretch controls,
-with an identity option for normalized data. Color FITS can analyze linked or
-per-channel data, or stretch luminance while preserving RGB chromaticity.
+FITS display rendering sends a non-empty, ordered stack of validated stretch
+configurations to the C ABI. Rust keeps intermediate stage data in `f32` and
+only converts the final result to RGBA, so the Swift undo/redo history never
+introduces 8-bit interstage quantization. The toolbar groups automatic MTF and
+percentile Asinh separately from manual Linear, Asinh, MTF, and Generalized
+Hyperbolic Stretch controls, with an identity option for normalized data. GHS
+can sample its symmetry point from the displayed image. Color FITS can analyze
+linked or per-channel data, or stretch luminance while preserving RGB
+chromaticity.
 Raster JPEG, PNG, and TIFF pixels remain color-managed display data and bypass
 the FITS stretch pipeline. Thumbnail-cache and background-render job identities
-include the complete, deterministically encoded configuration, so only truly
+include the complete, deterministically encoded stack, so only truly
 identical renders share work or cached pixels.
 
 The ABI supplies exact 256-bin channel counts for input and rendered pixels.
