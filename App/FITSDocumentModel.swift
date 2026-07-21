@@ -156,6 +156,10 @@ final class ImageDocumentModel: ObservableObject {
         committedImage ?? image
     }
 
+    var fullResolutionDisplayImage: CGImage? {
+        fullResolutionPreview?.rendered.image ?? committedImage ?? image
+    }
+
     func addStretch(
         _ configuration: FITSStretchConfiguration,
         extractsBackground: Bool,

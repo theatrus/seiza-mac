@@ -41,6 +41,13 @@ struct SeizaApp: App {
                 .keyboardShortcut("e", modifiers: [.command, .shift])
             }
             CommandGroup(after: .pasteboard) {
+                Button("Copy Image") {
+                    appDelegate.copyImage(nil)
+                }
+                .keyboardShortcut("c")
+
+                Divider()
+
                 Button("Copy Adjustments") {
                     appDelegate.copyImageAdjustments(nil)
                 }
@@ -121,6 +128,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         session.exportCoordinator.requestExport()
+    }
+
+    @objc func copyImage(_ sender: Any?) {
+        guard let session = activeDocumentSession else {
+            NSSound.beep()
+            return
+        }
+        session.exportCoordinator.requestCopy()
     }
 
     @objc func copyImageAdjustments(_ sender: Any?) {

@@ -477,6 +477,8 @@ private struct ImagePageView: View {
     @State private var hiddenDeepSkyCatalogs = Set<DeepSkyCatalog>()
     @State private var isExporting = false
     @State private var exportError: String?
+    @State private var imageClipboardError: String?
+    @State private var copiesImageWhenPreviewFinishes = false
     @State private var processingClipboardError: String?
     @State private var showStretchControls = false
     @State private var stretchDraftStages = [FITSStretchConfiguration.default]
@@ -735,6 +737,7 @@ private struct ImagePageView: View {
             stretchPanelPresenter.close()
             isPickingSymmetryPoint = false
             returnsToStretchPanelAfterPicking = false
+            copiesImageWhenPreviewFinishes = false
             zoom = 1
             pinchStartZoom = nil
             pinchAnchor = nil
@@ -756,6 +759,14 @@ private struct ImagePageView: View {
                 return
             }
             presentExportPanel()
+        }
+        .onChange(of: exportCoordinator.copyRequestNumber) { _, _ in
+            requestImageCopy()
+        }
+        .onChange(of: model.isPreviewRendering) { _, isRendering in
+            guard !isRendering, copiesImageWhenPreviewFinishes else { return }
+            copiesImageWhenPreviewFinishes = false
+            copyFullResolutionImage()
         }
         .onChange(of: processingClipboardCoordinator.copyRequestNumber) { _, _ in
             copyImageProcessing()
@@ -789,6 +800,58 @@ private struct ImagePageView: View {
                 Text(processingClipboardError ?? "An unknown error occurred.")
             }
         )
+        .alert(
+            "Couldn’t Copy Image",
+            isPresented: Binding(
+                get: { imageClipboardError != nil },
+                set: { if !$0 { imageClipboardError = nil } }
+            ),
+            actions: {
+                Button("OK", role: .cancel) {}
+            },
+            message: {
+                Text(imageClipboardError ?? "An unknown error occurred.")
+            }
+        )
+    }
+
+    private func requestImageCopy() {
+        guard model.image != nil else {
+            NSSound.beep()
+            return
+        }
+        if model.isPreviewRendering {
+            copiesImageWhenPreviewFinishes = true
+        } else {
+            copyFullResolutionImage()
+        }
+    }
+
+    @MainActor
+    private func copyFullResolutionImage() {
+        if let previewError = model.previewError {
+            imageClipboardError = previewError
+            return
+        }
+        guard let image = model.fullResolutionDisplayImage else {
+            NSSound.beep()
+            return
+        }
+        let copiedImage: CGImage
+        if let solution = solvedSolution, hasVisibleOverlays {
+            guard let composited = renderExportImage(image: image, solution: solution) else {
+                imageClipboardError = ImageExportError.couldNotComposite.localizedDescription
+                return
+            }
+            copiedImage = composited
+        } else {
+            copiedImage = image
+        }
+        do {
+            try ImageClipboard.copy(copiedImage)
+        } catch {
+            imageClipboardError = error.localizedDescription
+        }
     }
 
     private func copyImageProcessing() {

@@ -218,6 +218,20 @@ final class ImageExportTests: XCTestCase {
         }
     }
 
+    func testCopiesFullResolutionImageToMacPasteboard() throws {
+        let image = try makeTestImage()
+        let pasteboard = NSPasteboard(name: .init("fyi.seiza.tests.\(UUID().uuidString)"))
+
+        try ImageClipboard.copy(image, to: pasteboard)
+
+        let png = try XCTUnwrap(pasteboard.data(forType: .png))
+        XCTAssertNotNil(pasteboard.data(forType: .tiff))
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(png as CFData, nil))
+        let decoded = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        XCTAssertEqual(decoded.width, image.width)
+        XCTAssertEqual(decoded.height, image.height)
+    }
+
     func testJPEGOnlyOffersEightBitExport() {
         XCTAssertEqual(ImageExportFormat.jpeg.supportedBitDepths, [.eight])
         XCTAssertEqual(ImageExportFormat.png.supportedBitDepths, [.sixteen, .eight])
@@ -612,6 +626,10 @@ final class RenderBoundaryTests: XCTestCase {
             !model.isPreviewRendering
                 && model.image?.dataProvider?.data as Data? == expectedPixels
         }
+        XCTAssertEqual(
+            model.fullResolutionDisplayImage?.dataProvider?.data as Data?,
+            expectedPixels
+        )
 
         model.replaceStretchStack(
             with: FITSStretchStack(stages: [latestStretch]),

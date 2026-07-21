@@ -58,7 +58,7 @@ export work.
 | Catalog setup | Included | Faster installation | Same | Download, verify, install, or repair solver catalogs in Settings with visible progress and reuse the verified cache through hard links when possible. |
 | Solver overlays | Included | Included | Same | Toggle named and field stars, individual deep-sky catalogs, transients, comets, asteroids, detections, coordinate grid, and field center. |
 | Object outlines | Included | Included | Same | Draw detailed OpenNGC contours with catalog ellipses as a fallback. |
-| Image export | Not included | 8-bit PNG/JPEG/TIFF | Native 16-bit PNG/TIFF | Export at source dimensions with or without visible solve overlays. PNG and TIFF can preserve 16 bits per channel directly from the full-precision Seiza render; JPEG remains 8-bit. |
+| Image export and copy | Not included | 8-bit PNG/JPEG/TIFF | Native 16-bit PNG/TIFF | Export at source dimensions with or without visible solve overlays, or copy the full-resolution displayed image and visible overlays to the Mac clipboard. PNG and TIFF can preserve 16 bits per channel directly from the full-precision Seiza render; JPEG remains 8-bit. |
 | Finder Quick Look preview | Known Finder issue | Fixed | Same | Select a FITS file in Finder and press Space to see a stretched preview without opening Seiza. |
 | Finder file support | Included | Included | Same | Register `.fits`, `.fit`, and `.fts` files with a dedicated FITS document icon. |
 | Finder icon thumbnails | Planned | Planned | Planned | Show image content on FITS file icons. Spacebar previews already work through Quick Look on `main`. |

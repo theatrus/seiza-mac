@@ -133,6 +133,12 @@ itself or include the currently visible solve overlays without reducing a
 16-bit export to 8-bit. A 16-bit export is rendered directly from the committed
 full-precision processing stack even when a smaller live preview is on screen.
 
+Choose **Edit > Copy Image** or press **Command-C** while the viewer has focus to
+place the full source-resolution displayed image on the Mac clipboard as PNG and
+TIFF. Visible solve overlays are composited exactly as they appear in the
+viewer. If a live stretch refinement is still running, Seiza waits for its
+full-resolution pass instead of copying the temporary bounded preview.
+
 ## Finder Quick Look
 
 After installing Seiza, select a `.fits`, `.fit`, or `.fts` file in Finder and
