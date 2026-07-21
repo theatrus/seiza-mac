@@ -87,7 +87,8 @@ final class ImageDocumentModel: ObservableObject {
 
     init(
         url: URL,
-        processingConfiguration: FITSImageProcessingConfiguration = .default
+        processingConfiguration: FITSImageProcessingConfiguration = .default,
+        stretchHistory carriedStretchHistory: FITSStretchHistory? = nil
     ) {
         self.url = url
         let processingConfiguration = FITSImageProcessingConfiguration(
@@ -95,7 +96,15 @@ final class ImageDocumentModel: ObservableObject {
             extractsBackground: processingConfiguration.extractsBackground,
             deconvolution: processingConfiguration.deconvolution
         )
-        stretchHistory = FITSStretchHistory(stack: processingConfiguration.stretchStack)
+        if let carriedStretchHistory {
+            precondition(
+                carriedStretchHistory.stack == processingConfiguration.stretchStack,
+                "Carried stretch history must match the current processing recipe"
+            )
+            stretchHistory = carriedStretchHistory
+        } else {
+            stretchHistory = FITSStretchHistory(stack: processingConfiguration.stretchStack)
+        }
         extractsBackground = processingConfiguration.extractsBackground
         deconvolutionConfiguration = processingConfiguration.deconvolution
         let processing = processingConfiguration

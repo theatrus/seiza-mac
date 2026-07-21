@@ -956,6 +956,37 @@ final class FITSStretchConfigurationTests: XCTestCase {
         XCTAssertFalse(model.stretchHistory.canUndo)
     }
 
+    @MainActor
+    func testDocumentModelPreservesDirectoryStretchUndoAndRedoHistory() {
+        var linear = FITSStretchConfiguration.default
+        linear.type = .linear
+        linear.black = 0.1
+        linear.white = 0.9
+        var history = FITSStretchHistory()
+        history.apply(linear)
+        XCTAssertTrue(history.undo())
+        XCTAssertTrue(history.canRedo)
+        XCTAssertTrue(history.redo())
+        let processing = FITSImageProcessingConfiguration(
+            stretchStack: history.stack,
+            extractsBackground: false
+        )
+        let missingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString).fits")
+
+        let model = ImageDocumentModel(
+            url: missingURL,
+            processingConfiguration: processing,
+            stretchHistory: history
+        )
+
+        XCTAssertTrue(model.stretchHistory.canUndo)
+        XCTAssertFalse(model.stretchHistory.canRedo)
+        model.undoStretch()
+        XCTAssertEqual(model.stretchHistory.stack, .default)
+        XCTAssertTrue(model.stretchHistory.canRedo)
+    }
+
     func testStretchHistoryCommitsRemovedAndReorderedStagesAsOneUndoStep() {
         var history = FITSStretchHistory()
         var linear = FITSStretchConfiguration.default

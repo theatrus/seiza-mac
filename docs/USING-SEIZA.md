@@ -20,7 +20,9 @@ moving through a long sequence does not require each thumbnail to be decoded
 again. A directory may mix FITS and ordinary raster images. The last committed
 FITS processing recipe carries forward as you move between frames, so a stack
 chosen for one exposure becomes the starting point for the next. Automatic
-stages still measure every image independently.
+stages still measure every image independently. The stretch undo and redo
+timeline follows the recipe through the directory, so moving to another frame
+does not discard your recent adjustments.
 
 Use **Edit > Copy Adjustments** (**Shift-Command-C**) and **Paste Adjustments**
 (**Shift-Command-V**) to move the complete committed recipe between non-adjacent
