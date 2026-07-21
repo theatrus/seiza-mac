@@ -1,46 +1,47 @@
 # Seiza for macOS
 
-[![CI](https://github.com/theatrus/seiza-mac/actions/workflows/ci.yml/badge.svg)](https://github.com/theatrus/seiza-mac/actions/workflows/ci.yml)
+**A fast, native FITS viewer and plate solver for the Mac.**
 
-[**Download Seiza 0.2.0 for macOS**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.2.0-universal.dmg) · [Release notes, ZIP, and checksums](https://github.com/theatrus/seiza-mac/releases/latest)
+Open one image or a whole night of captures. Step through them instantly. Stretch
+FITS data, inspect headers, plate-solve a frame, and see the stars and deep-sky
+objects in it. Everything runs locally, and Seiza never solves an image until
+you ask it to.
 
-Universal for Apple silicon and Intel. Requires macOS 15 or later. Developer ID
-signed, notarized by Apple, and bundled with a FITS Quick Look extension.
+[**Download Seiza 0.2.0**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.2.0-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
 ![Seiza browsing an astronomy-image folder with its thumbnail drawer](docs/images/seiza-gallery.jpg)
 
 ![Seiza displaying a plate-solved FITS image with a WCS grid, field center, and catalog overlays](docs/images/seiza-solved-fits.jpg)
 
-A fast, native macOS astronomy-image viewer and plate-solving app powered by the
-[Seiza](https://github.com/theatrus/seiza) Rust libraries. There is no Tauri,
-web view, or local server in the application path: SwiftUI and AppKit own the
-macOS experience, and a small `seiza-cabi` static library owns the Rust FFI.
+Seiza is a real Mac app built with SwiftUI, AppKit, and the
+[Seiza](https://github.com/theatrus/seiza) Rust core. There is no Tauri,
+Electron, web view, or local server.
 
-The initial app already provides:
+## Feature matrix
 
-- native file/folder opening and drag-and-drop for FITS, JPEG, PNG, and TIFF,
-  including replacing the contents of an existing viewer window;
-- naturally sorted, mixed-format folder collections with a thumbnail drawer,
-  toolbar controls, and Left/Right Arrow navigation;
-- persistent local thumbnail caching with parallel, system-scheduled tile renders
-  and instant previews while full-resolution images load in the background;
-- mono, planar-RGB, and Bayer/OSC rendering through `seiza-fits`;
-- color-preserving JPEG, PNG, and TIFF decoding through Seiza's `image` pipeline;
-- selectable per-channel Auto, color-preserving Linked Auto, and Linear display
-  modes for planar-RGB and Bayer/OSC FITS, using the N.I.N.A./PixInsight-family
-  MTF for automatic stretches;
-- FITS header and image-statistics inspection;
-- asynchronous, explicitly requested blind solving through Seiza 0.11.2;
-- Seiza Server-parity solve overlays for named stars, individually toggleable
-  deep-sky catalogs, current and historical transients, acquisition-time
-  comets and asteroids, field stars, a coordinate grid, field center, and
-  diagnostic detections, using the catalog-aware palette and restrained SVG
-  styling from `@seiza/astro-overlay` 0.5;
-- detailed OpenNGC contours with catalog ellipses as the fallback, plus
-  independent object-label and outline controls;
-- a data-based Quick Look preview extension bundled inside the app;
-- a dedicated HIG-style FITS document icon for Finder and Open With
-  associations.
+| Feature | Status | What you get |
+| --- | --- | --- |
+| FITS and raster viewing | Available | Open FITS, JPEG, PNG, and TIFF files or drop them onto an existing window. |
+| Folder browsing | Available | Browse mixed-format folders with a thumbnail drawer, local thumbnail cache, and arrow-key navigation. |
+| FITS display | Available | View mono, planar RGB, and Bayer/OSC data with fast automatic stretching. |
+| RGB controls | Available | Choose per-channel Auto, color-preserving Linked Auto, or Linear display. |
+| Zoom and inspection | Available | Fit to window, pan, pinch around the pointer, and inspect FITS headers and image statistics. |
+| Local plate solving | Available | Run a blind solve only when you press Solve. No image is uploaded. |
+| Catalog setup | Available | Download, verify, install, or repair solver catalogs in Settings with visible progress. |
+| Solver overlays | Available | Toggle named and field stars, individual deep-sky catalogs, transients, comets, asteroids, detections, coordinate grid, and field center. |
+| Object outlines | Available | Draw detailed OpenNGC contours with catalog ellipses as a fallback. |
+| Finder Quick Look preview | Available | Select a FITS file in Finder and press Space to see a stretched preview without opening Seiza. |
+| Finder file support | Available | Register `.fits`, `.fit`, and `.fts` files with a dedicated FITS document icon. |
+| Finder icon thumbnails | Planned | Show image content on FITS file icons. Spacebar previews already work through Quick Look. |
+| FITS cubes and multiple extensions | Planned | Navigate image planes and HDUs inside one FITS file. |
+
+## Download
+
+[**Download the current DMG**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.2.0-universal.dmg), open it, and drag Seiza to Applications.
+
+Seiza requires macOS 15 or newer. The same download runs natively on Apple
+silicon and Intel Macs. Release builds are signed with Developer ID and
+notarized by Apple.
 
 ## Build
 
@@ -76,6 +77,8 @@ swift scripts/generate-document-icon.swift
 
 ## Tests and continuous integration
 
+[![CI](https://github.com/theatrus/seiza-mac/actions/workflows/ci.yml/badge.svg)](https://github.com/theatrus/seiza-mac/actions/workflows/ci.yml)
+
 The repository exercises the Rust rendering/C ABI with unit tests and the
 native application with XCTest. Main-branch CI checks Rust formatting and
 Clippy warnings, runs both test suites, validates the app and extension property
@@ -102,10 +105,24 @@ environment setup.
 
 ## Catalogs and solving
 
-Previewing images does not require catalog data. Blind solving any supported
-FITS or raster image requires a
-complete Seiza catalog directory containing a star catalog and blind index.
-Create one with either:
+Previewing images does not require catalog data, and Seiza never starts a solve
+until you press Solve. Blind solving any supported FITS or raster image requires
+a complete Seiza catalog directory containing a star catalog and blind index.
+
+Open **Seiza > Settings** (`Command-,`), leave **Standard blind solving**
+selected, and click **Download and Install Catalogs**. You can use Seiza's
+default data location or choose another writable directory. The Settings pane
+reports download, installation, and verification progress and may be closed
+while setup continues.
+
+![Seiza catalog download and verification controls in Settings](docs/images/seiza-catalog-setup.jpg)
+
+After the transfer finishes, Seiza reads every large catalog from beginning to
+end to verify its SHA-256 digest. This phase can take several minutes, but its
+byte counter continues to report progress. Setup is safe to retry and will
+reuse already verified downloads.
+
+The equivalent command-line setup is:
 
 ```sh
 seiza setup
@@ -117,26 +134,24 @@ or:
 seiza download-data prebuilt --output /path/to/catalogs
 ```
 
-Choose that directory in Seiza's Settings. The sandbox permission is retained
-as a security-scoped bookmark; the app does not copy the catalog. The main
-object catalog supplies named-star and deep-sky overlays, `transients.bin`
-supplies dated transient overlays, and `minor-bodies.bin` supplies comet and
-asteroid positions at the FITS acquisition time. Solving and catalog loading
-only begin when the user presses Solve. Satellite overlays are intentionally
-deferred.
+If you created a catalog directory on the command line, choose that directory
+in Seiza's Settings. The sandbox permission is retained as a security-scoped
+bookmark. The main object catalog supplies named-star and deep-sky overlays,
+`transients.bin` supplies dated transient overlays, and `minor-bodies.bin`
+supplies comet and asteroid positions at the FITS acquisition time. Solving and
+catalog loading
+only begin when the user presses Solve. If the required star catalog or blind
+index is missing, Solve explains the problem and links back to Catalog Settings.
+Satellite overlays are intentionally deferred.
 
-## Quick Look and Preview.app
+## Finder integration
 
-The bundled Quick Look extension is the supported modern macOS integration
-for custom previews. Once the signed app is installed, it makes stretched FITS
-previews available to system Quick Look clients for the registered FITS type.
-Apple documents Quick Look preview extensions, but does not expose a modern
-third-party decoder plug-in API for Preview.app itself. Direct “Open in
-Preview” handoff can be added by rendering a temporary TIFF or PNG; making
-Preview.app decode the original FITS file in-process is intentionally not part
-of this design.
+Installing Seiza registers FITS files and its Quick Look extension with macOS.
+Select a `.fits`, `.fit`, or `.fts` file in Finder and press Space to see a
+stretched preview without opening the app.
 
-Finder image thumbnails are a separate `QLThumbnailProvider` extension and are
-deliberately left for the next phase.
+Always-visible image thumbnails on Finder file icons require a separate
+`QLThumbnailProvider` extension and are planned for a later release. Quick Look
+previews already work.
 
 See [ARCHITECTURE.md](docs/ARCHITECTURE.md) and [ROADMAP.md](docs/ROADMAP.md).

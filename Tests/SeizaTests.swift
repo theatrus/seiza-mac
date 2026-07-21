@@ -98,6 +98,62 @@ final class OverlayCatalogTests: XCTestCase {
     }
 }
 
+final class CatalogSetupPayloadTests: XCTestCase {
+    func testCatalogStatusDecodesSolverAndOverlayReadiness() throws {
+        let data = Data(
+            #"""
+            {
+              "directory": "/tmp/seiza-catalogs",
+              "readyForSolving": true,
+              "readyForOverlays": false,
+              "starCatalog": {"available": true, "path": "/tmp/seiza-catalogs/stars-deep-gaia17.bin"},
+              "blindIndex": {"available": true, "path": "/tmp/seiza-catalogs/blind-gaia16.idx"},
+              "objects": {"available": true, "path": "/tmp/seiza-catalogs/objects.bin"},
+              "transients": {"available": false, "path": null},
+              "minorBodies": {"available": true, "path": "/tmp/seiza-catalogs/minor-bodies.bin"}
+            }
+            """#.utf8
+        )
+
+        let status = try JSONDecoder().decode(CatalogStatus.self, from: data)
+        XCTAssertTrue(status.readyForSolving)
+        XCTAssertFalse(status.readyForOverlays)
+        XCTAssertTrue(status.starCatalog.available)
+        XCTAssertFalse(status.transients.available)
+    }
+
+    func testVerificationProgressRemainsDeterminateAfterDownload() throws {
+        let data = Data(
+            #"""
+            {
+              "phase": "verifying",
+              "message": "Verifying and installing stars-deep-gaia17.bin",
+              "fileName": "stars-deep-gaia17.bin",
+              "filesCompleted": 3,
+              "filesTotal": 5,
+              "bytesCompleted": 536870912,
+              "bytesTotal": 1073741824,
+              "writtenBytes": 536870912
+            }
+            """#.utf8
+        )
+
+        let progress = try JSONDecoder().decode(CatalogSetupProgress.self, from: data)
+        XCTAssertEqual(progress.phase, .verifying)
+        XCTAssertEqual(progress.fractionCompleted, 0.5)
+        XCTAssertEqual(progress.filesCompleted, 3)
+        XCTAssertEqual(progress.filesTotal, 5)
+    }
+
+    func testCatalogSetupPresetABIValuesStayStable() {
+        XCTAssertEqual(CatalogSetupPreset.allCases, [.standardBlind, .deepestBlind, .all])
+        XCTAssertEqual(CatalogSetupPreset.standardBlind.rawValue, 0)
+        XCTAssertEqual(CatalogSetupPreset.deepestBlind.rawValue, 1)
+        XCTAssertEqual(CatalogSetupPreset.all.rawValue, 2)
+        XCTAssertTrue(CatalogSetupPreset.standardBlind.detail.contains("Recommended"))
+    }
+}
+
 @MainActor
 final class DocumentWindowLifecycleTests: XCTestCase {
     func testDroppedImageReusesWindowAndRekeysDocumentSession() throws {

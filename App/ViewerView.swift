@@ -292,6 +292,7 @@ private struct ImagePageView: View {
 
     @Environment(\.displayScale) private var displayScale
     @ObservedObject private var model: ImageDocumentModel
+    @ObservedObject private var catalogSetup = CatalogSetupController.shared
     @State private var zoom = 1.0
     @State private var pinchStartZoom: Double?
     @State private var pinchAnchor: ZoomAnchor?
@@ -405,7 +406,7 @@ private struct ImagePageView: View {
                     }
                 }
                 .disabled(isSolving || model.image == nil)
-                .help(isSolving ? "Solving image…" : "Plate Solve")
+                .help(solveHelp)
 
                 Menu {
                     Toggle(overlayLabel("Deep Sky", key: "deep_sky"), isOn: $showDeepSky)
@@ -533,6 +534,17 @@ private struct ImagePageView: View {
                 applyFitZoom(image: image, viewport: viewportSize)
             }
         }
+        .onAppear {
+            catalogSetup.refreshStatus()
+        }
+    }
+
+    private var solveHelp: String {
+        if isSolving { return "Solving image…" }
+        if let status = catalogSetup.status, !status.readyForSolving {
+            return "Plate Solve — catalog setup required in Settings"
+        }
+        return "Plate Solve"
     }
 
     @ViewBuilder

@@ -13,6 +13,8 @@
   and asteroids, field stars, coordinate grid, labels, and field center
 - HIG-style FITS document icon and Quick Look preview extension
 - signed, notarized Apple-silicon development distribution
+- managed, retry-safe catalog download and repair UI with readiness checks and
+  byte-level SHA-256 verification progress
 
 ## Phase 2 — serious inspection
 
@@ -27,7 +29,6 @@
 
 - `QLThumbnailProvider` Finder thumbnails
 - Spotlight metadata importer for selected FITS headers
-- “Open Rendered Image in Preview” TIFF handoff
 - Finder Quick Actions for solve and export
 
 ## Phase 4 — the whole works
@@ -36,6 +37,7 @@
 - blink/difference views and registration
 - satellite overlays with shutter-open time, observer, element epoch, and
   explicit prediction provenance
-- multi-extension FITS and cube navigation
-- managed catalog download/update UI using Seiza's verified bundles
+- multi-extension FITS image-HDU navigation
+- lazy FITS cube slice navigation with neighboring-slice preloading
+- catalog bundle update discovery and selective dataset management
 - universal signed releases, updater, crash reporting, and performance corpus
