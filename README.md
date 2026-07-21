@@ -23,8 +23,8 @@ Electron, web view, or local server.
 | --- | --- | --- |
 | FITS and raster viewing | Available | Open FITS, JPEG, PNG, and TIFF files or drop them onto an existing window. |
 | Folder browsing | Available | Browse mixed-format folders with a thumbnail drawer, local thumbnail cache, and arrow-key navigation. |
-| FITS display | Available | View mono, planar RGB, and Bayer/OSC data with fast automatic stretching. |
-| RGB controls | Available | Choose per-channel Auto, color-preserving Linked Auto, or Linear display. |
+| FITS display | Available | View mono, planar RGB, and Bayer/OSC data with fast native rendering. |
+| Stretch controls | Available | Stack or replace automatic and manual stretches without intermediate 8-bit quantization; undo and redo edits; pick GHS symmetry points from the image; and choose linked, per-channel, or luminance-preserving color handling. |
 | Zoom and inspection | Available | Fit to window, pan, pinch around the pointer, and compare pre- and post-stretch histograms alongside headers and statistics. |
 | Local plate solving | Available | Run a blind solve only when you press Solve. No image is uploaded. |
 | Catalog setup | Available | Download, verify, install, or repair solver catalogs in Settings with visible progress. |

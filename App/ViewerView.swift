@@ -31,7 +31,6 @@ struct ViewerView: View {
     @State private var model: ImageDocumentModel
     @State private var showInspector = false
     @State private var showImageBrowser: Bool
-    @State private var rgbStretchMode = RGBStretchMode.auto
     @State private var isDropTarget = false
 
     init(
@@ -68,7 +67,6 @@ struct ViewerView: View {
                 model: model,
                 exportCoordinator: exportCoordinator,
                 showInspector: $showInspector,
-                rgbStretchMode: $rgbStretchMode,
                 position: selectedIndex + 1,
                 itemCount: urls.count,
                 canGoPrevious: selectedIndex > 0,
@@ -119,10 +117,7 @@ struct ViewerView: View {
     private func select(_ index: Int) {
         guard urls.indices.contains(index), index != selectedIndex else { return }
         selectedIndex = index
-        model = ImageDocumentModel(
-            url: urls[index],
-            rgbStretchMode: rgbStretchMode
-        )
+        model = ImageDocumentModel(url: urls[index])
         onSelectionChange(urls[index])
     }
 }
@@ -305,7 +300,6 @@ private struct ImagePageView: View {
     @State private var scrollPosition = ScrollPosition()
     @State private var visibleContentOrigin = CGPoint.zero
     @Binding private var showInspector: Bool
-    @Binding private var rgbStretchMode: RGBStretchMode
     @State private var viewportSize = CGSize.zero
     @State private var isFitToWindow = true
     @State private var showDeepSky = true
@@ -322,12 +316,14 @@ private struct ImagePageView: View {
     @State private var hiddenDeepSkyCatalogs = Set<DeepSkyCatalog>()
     @State private var isExporting = false
     @State private var exportError: String?
+    @State private var showStretchControls = false
+    @State private var stretchDraft = FITSStretchConfiguration.default
+    @State private var isPickingSymmetryPoint = false
 
     init(
         model: ImageDocumentModel,
         exportCoordinator: ImageExportCoordinator,
         showInspector: Binding<Bool>,
-        rgbStretchMode: Binding<RGBStretchMode>,
         position: Int,
         itemCount: Int,
         canGoPrevious: Bool,
@@ -342,7 +338,6 @@ private struct ImagePageView: View {
         self.goPrevious = goPrevious
         self.goNext = goNext
         _showInspector = showInspector
-        _rgbStretchMode = rgbStretchMode
         _model = ObservedObject(wrappedValue: model)
         _exportCoordinator = ObservedObject(wrappedValue: exportCoordinator)
     }
@@ -385,23 +380,64 @@ private struct ImagePageView: View {
                     .help("Next Image (→)")
                 }
 
-                Menu {
-                    Picker("RGB Stretch", selection: rgbStretchSelection) {
-                        ForEach(RGBStretchMode.allCases) { mode in
-                            Text(mode.title)
-                                .tag(mode)
-                                .help(mode.help)
-                        }
-                    }
-                } label: {
-                    Label("RGB Stretch", systemImage: "circle.lefthalf.filled")
+                Button(action: model.undoStretch) {
+                    Label("Undo Stretch", systemImage: "arrow.uturn.backward")
                 }
-                .disabled(!model.supportsRGBStretch)
+                .disabled(!model.supportsFITSStretch || !model.stretchHistory.canUndo)
+                .keyboardShortcut("z", modifiers: .command)
+                .help("Undo Last Stretch (⌘Z)")
+
+                Button(action: model.redoStretch) {
+                    Label("Redo Stretch", systemImage: "arrow.uturn.forward")
+                }
+                .disabled(!model.supportsFITSStretch || !model.stretchHistory.canRedo)
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .help("Redo Stretch (⇧⌘Z)")
+
+                Button {
+                    stretchDraft = model.stretchConfiguration
+                    showStretchControls.toggle()
+                } label: {
+                    Label("Stretch", systemImage: "slider.horizontal.3")
+                }
+                .disabled(!model.supportsFITSStretch)
                 .help(
-                    model.supportsRGBStretch
-                        ? "RGB Stretch: \(rgbStretchMode.title)"
-                        : "RGB stretch is available for color FITS images"
+                    model.supportsFITSStretch
+                        ? "Stretch: \(model.stretchConfiguration.type.title)"
+                        : "Stretch controls are available for FITS images"
                 )
+                .popover(isPresented: $showStretchControls, arrowEdge: .bottom) {
+                    FITSStretchControlsView(
+                        configuration: $stretchDraft,
+                        supportsColor: model.supportsColorStretch,
+                        appliedStages: model.stretchHistory.appliedStages,
+                        canUndo: model.stretchHistory.canUndo,
+                        canRedo: model.stretchHistory.canRedo,
+                        undo: {
+                            model.undoStretch()
+                            stretchDraft = model.stretchConfiguration
+                        },
+                        redo: {
+                            model.redoStretch()
+                            stretchDraft = model.stretchConfiguration
+                        },
+                        pickSymmetryPoint: {
+                            showStretchControls = false
+                            isPickingSymmetryPoint = true
+                        },
+                        replace: {
+                            model.replaceStretchStack(with: stretchDraft)
+                            showStretchControls = false
+                        },
+                        apply: {
+                            model.addStretch(stretchDraft)
+                            showStretchControls = false
+                        },
+                        cancel: {
+                            showStretchControls = false
+                        }
+                    )
+                }
 
                 Button {
                     showInspector = true
@@ -776,6 +812,42 @@ private struct ImagePageView: View {
                         .accessibilityLabel("Loading full-resolution image")
                 }
             }
+            .overlay {
+                if isPickingSymmetryPoint {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .gesture(
+                            SpatialTapGesture()
+                                .onEnded { value in
+                                    captureSymmetryPoint(
+                                        at: value.location,
+                                        image: image,
+                                        viewport: geometry.size
+                                    )
+                                }
+                        )
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if isPickingSymmetryPoint {
+                    HStack(spacing: 10) {
+                        Label(
+                            "Click the image to sample the GHS symmetry point",
+                            systemImage: "eyedropper"
+                        )
+                        Button("Cancel") {
+                            isPickingSymmetryPoint = false
+                            showStretchControls = true
+                        }
+                        .controlSize(.small)
+                    }
+                    .font(.callout)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(14)
+                }
+            }
             .onAppear {
                 viewportSize = geometry.size
                 applyFitZoom(image: image, viewport: geometry.size)
@@ -834,6 +906,37 @@ private struct ImagePageView: View {
                 pinchStartZoom = nil
                 pinchAnchor = nil
             }
+    }
+
+    private func captureSymmetryPoint(
+        at location: CGPoint,
+        image: CGImage,
+        viewport: CGSize
+    ) {
+        let metrics = canvasMetrics(for: image, viewport: viewport, zoom: zoom)
+        let contentPoint = CGPoint(
+            x: visibleContentOrigin.x + location.x,
+            y: visibleContentOrigin.y + location.y
+        )
+        let normalizedPoint = CGPoint(
+            x: (contentPoint.x - metrics.imageOrigin.x) / metrics.imageSize.width,
+            y: (contentPoint.y - metrics.imageOrigin.y) / metrics.imageSize.height
+        )
+        guard (0...1).contains(normalizedPoint.x),
+              (0...1).contains(normalizedPoint.y) else { return }
+
+        let x = min(Int((normalizedPoint.x * CGFloat(image.width)).rounded(.down)), image.width - 1)
+        let y = min(Int((normalizedPoint.y * CGFloat(image.height)).rounded(.down)), image.height - 1)
+        guard let sample = ImagePixelSampler.normalizedLuminance(image: image, x: x, y: y) else {
+            return
+        }
+
+        stretchDraft.type = .ghs
+        stretchDraft.symmetryPoint = sample
+        stretchDraft.protectShadows = min(stretchDraft.protectShadows, sample)
+        stretchDraft.protectHighlights = max(stretchDraft.protectHighlights, sample)
+        isPickingSymmetryPoint = false
+        showStretchControls = true
     }
 
     private func clampedZoom(_ value: Double) -> Double {
@@ -970,16 +1073,6 @@ private struct ImagePageView: View {
     private var isSolving: Bool {
         if case .solving = model.solveState { return true }
         return false
-    }
-
-    private var rgbStretchSelection: Binding<RGBStretchMode> {
-        Binding(
-            get: { rgbStretchMode },
-            set: { mode in
-                rgbStretchMode = mode
-                model.setRGBStretchMode(mode)
-            }
-        )
     }
 
     private var solvedSolution: SolveResult? {
@@ -1852,6 +1945,32 @@ private struct SolveOverlayView: View {
     }
 }
 
+enum HistogramPlotScale {
+    static func ceiling(for channels: [[UInt64]]) -> Double {
+        let interior = channels.flatMap { bins -> ArraySlice<UInt64> in
+            guard bins.count > 2 else { return bins[...] }
+            return bins.dropFirst().dropLast()
+        }
+        let nonzeroInterior = interior.filter { $0 > 0 }.sorted()
+        let nonzeroAll = channels.flatMap { $0 }.filter { $0 > 0 }.sorted()
+        let candidates = nonzeroInterior.isEmpty ? nonzeroAll : nonzeroInterior
+        guard !candidates.isEmpty else { return 0 }
+
+        // Clipped black/white pixels and hot bins can be orders of magnitude
+        // taller than the useful distribution. Scale to the 98th percentile
+        // of populated interior bins and clamp taller columns at the top.
+        let index = Int(
+            (Double(candidates.count - 1) * 0.98).rounded(.down)
+        )
+        return Double(candidates[index])
+    }
+
+    static func normalizedHeight(count: UInt64, ceiling: Double) -> Double {
+        guard ceiling > 0 else { return 0 }
+        return min(Double(count) / ceiling, 1)
+    }
+}
+
 private struct ImageHistogramView: View {
     let histogram: ImageHistogram
     let isMonochrome: Bool
@@ -1879,18 +1998,17 @@ private struct ImageHistogramView: View {
                     (histogram.green, Color.green),
                     (histogram.blue, Color.blue),
                 ]
-            let maximum = channels
-                .flatMap { $0.0 }
-                .max()
-                .map(Double.init) ?? 0
-            guard maximum > 0 else { return }
+            let ceiling = HistogramPlotScale.ceiling(
+                for: channels.map(\.0)
+            )
+            guard ceiling > 0 else { return }
 
             context.blendMode = .plusLighter
             for (bins, color) in channels {
                 draw(
                     bins: bins,
                     color: color,
-                    maximum: maximum,
+                    ceiling: ceiling,
                     size: size,
                     context: &context
                 )
@@ -1909,18 +2027,21 @@ private struct ImageHistogramView: View {
     private func draw(
         bins: [UInt64],
         color: Color,
-        maximum: Double,
+        ceiling: Double,
         size: CGSize,
         context: inout GraphicsContext
     ) {
         guard bins.count > 1 else { return }
-        let denominator = log1p(maximum)
-        guard denominator > 0 else { return }
 
         var curve = Path()
         for (index, count) in bins.enumerated() {
             let x = CGFloat(index) / CGFloat(bins.count - 1) * size.width
-            let height = CGFloat(log1p(Double(count)) / denominator) * size.height
+            let height = CGFloat(
+                HistogramPlotScale.normalizedHeight(
+                    count: count,
+                    ceiling: ceiling
+                )
+            ) * size.height
             let point = CGPoint(x: x, y: size.height - height)
             if index == 0 {
                 curve.move(to: point)
@@ -1975,6 +2096,40 @@ private struct LabeledHistogramView: View {
     }
 }
 
+enum ImagePixelSampler {
+    static func normalizedLuminance(
+        image: CGImage,
+        x: Int,
+        y: Int,
+        radius: Int = 1
+    ) -> Double? {
+        guard radius >= 0,
+              image.bitsPerComponent == 8,
+              image.bitsPerPixel == 32,
+              image.alphaInfo == .last || image.alphaInfo == .premultipliedLast,
+              (0..<image.width).contains(x),
+              (0..<image.height).contains(y),
+              let data = image.dataProvider?.data,
+              let bytes = CFDataGetBytePtr(data) else { return nil }
+
+        let byteCount = CFDataGetLength(data)
+        var samples: [Double] = []
+        for sampleY in max(y - radius, 0)...min(y + radius, image.height - 1) {
+            for sampleX in max(x - radius, 0)...min(x + radius, image.width - 1) {
+                let offset = sampleY * image.bytesPerRow + sampleX * 4
+                guard offset + 2 < byteCount else { return nil }
+                let red = Double(bytes[offset]) / 255
+                let green = Double(bytes[offset + 1]) / 255
+                let blue = Double(bytes[offset + 2]) / 255
+                samples.append(0.2126 * red + 0.7152 * green + 0.0722 * blue)
+            }
+        }
+        guard !samples.isEmpty else { return nil }
+        samples.sort()
+        return samples[samples.count / 2]
+    }
+}
+
 private struct InspectorView: View {
     @ObservedObject var model: ImageDocumentModel
 
@@ -1985,8 +2140,19 @@ private struct InspectorView: View {
                     LabeledContent("Dimensions", value: "\(metadata.width) × \(metadata.height)")
                     LabeledContent("Format", value: metadata.format)
                     LabeledContent("Encoding", value: metadata.colorKind)
-                    if model.supportsRGBStretch {
-                        LabeledContent("RGB stretch", value: model.rgbStretchMode.title)
+                    if model.supportsFITSStretch {
+                        LabeledContent(
+                            "Stretch",
+                            value: model.stretchHistory.appliedStages.count == 1
+                                ? model.stretchConfiguration.type.title
+                                : "\(model.stretchHistory.appliedStages.count) stages · \(model.stretchConfiguration.type.title)"
+                        )
+                        if model.supportsColorStretch {
+                            LabeledContent(
+                                "Color handling",
+                                value: model.stretchConfiguration.colorStrategy.title
+                            )
+                        }
                     }
                     LabeledContent("Median", value: "\(metadata.statistics.median)")
                     LabeledContent("MAD", value: metadata.statistics.mad.formatted(.number.precision(.fractionLength(2))))

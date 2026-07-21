@@ -51,19 +51,22 @@ enum ImageThumbnailCache {
 
     static func memoryImage(
         for url: URL,
-        rgbStretchMode: RGBStretchMode = .auto
+        stretchStack: FITSStretchStack = .default
     ) -> CGImage? {
         memory.object(
-            forKey: cacheKey(for: url, rgbStretchMode: rgbStretchMode) as NSString
+            forKey: cacheKey(
+                for: url,
+                stretchStack: stretchStack
+            ) as NSString
         )?.image
     }
 
     static func load(
         for url: URL,
-        rgbStretchMode: RGBStretchMode = .auto,
+        stretchStack: FITSStretchStack = .default,
         completion: @escaping (CGImage?) -> Void
     ) {
-        let key = cacheKey(for: url, rgbStretchMode: rgbStretchMode)
+        let key = cacheKey(for: url, stretchStack: stretchStack)
         if let image = memory.object(forKey: key as NSString)?.image {
             completion(image)
             return
@@ -97,24 +100,27 @@ enum ImageThumbnailCache {
 
     static func render(
         for url: URL,
-        rgbStretchMode: RGBStretchMode = .auto,
+        stretchStack: FITSStretchStack = .default,
         completion: @escaping (CGImage?) -> Void
     ) {
         ImageRenderQueue.renderThumbnail(
             url: url,
-            rgbStretchMode: rgbStretchMode,
+            stretchStack: stretchStack,
             completion: completion
         )
     }
 
     static func prefetch(
         _ urls: [URL],
-        rgbStretchMode: RGBStretchMode = .auto
+        stretchStack: FITSStretchStack = .default
     ) {
-        for url in urls where memoryImage(for: url, rgbStretchMode: rgbStretchMode) == nil {
-            load(for: url, rgbStretchMode: rgbStretchMode) { cached in
+        for url in urls where memoryImage(
+            for: url,
+            stretchStack: stretchStack
+        ) == nil {
+            load(for: url, stretchStack: stretchStack) { cached in
                 guard cached == nil else { return }
-                render(for: url, rgbStretchMode: rgbStretchMode) { _ in }
+                render(for: url, stretchStack: stretchStack) { _ in }
             }
         }
     }
@@ -123,10 +129,10 @@ enum ImageThumbnailCache {
     static func storeThumbnail(
         from image: CGImage,
         for url: URL,
-        rgbStretchMode: RGBStretchMode = .auto
+        stretchStack: FITSStretchStack = .default
     ) -> CGImage {
         let thumbnail = resized(image, maximumDimension: maximumDimension)
-        let key = cacheKey(for: url, rgbStretchMode: rgbStretchMode)
+        let key = cacheKey(for: url, stretchStack: stretchStack)
         memory.setObject(
             ImageThumbnailBox(thumbnail),
             forKey: key as NSString,
@@ -193,7 +199,7 @@ enum ImageThumbnailCache {
 
     private static func cacheKey(
         for url: URL,
-        rgbStretchMode: RGBStretchMode
+        stretchStack: FITSStretchStack
     ) -> String {
         let canonicalURL = url.resolvingSymlinksInPath().standardizedFileURL
         let values = try? canonicalURL.resourceValues(forKeys: [
@@ -205,7 +211,7 @@ enum ImageThumbnailCache {
             canonicalURL.path,
             String(values?.fileSize ?? 0),
             String(values?.contentModificationDate?.timeIntervalSince1970 ?? 0),
-            "rgb-stretch:\(rgbStretchMode.rawValue)",
+            "fits-stretch:\(stretchStack.cacheIdentifier)",
         ].joined(separator: "\n")
         let digest = SHA256.hash(data: Data(signature.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
@@ -262,7 +268,6 @@ enum ImageRenderQueue {
         var kind: JobKind
         var thumbnailCompletions: [ThumbnailCompletion] = []
         var fullCompletions: [FullCompletion] = []
-        var targetMedian = 0.2
     }
 
     private static let thumbnailOperations: OperationQueue = {
@@ -288,10 +293,10 @@ enum ImageRenderQueue {
 
     static func renderThumbnail(
         url: URL,
-        rgbStretchMode: RGBStretchMode = .auto,
+        stretchStack: FITSStretchStack = .default,
         completion: @escaping ThumbnailCompletion
     ) {
-        let key = jobKey(for: url, rgbStretchMode: rgbStretchMode)
+        let key = jobKey(for: url, stretchStack: stretchStack)
         let shouldSchedule = stateQueue.sync {
             if var job = jobs[key] {
                 job.thumbnailCompletions.append(completion)
@@ -305,27 +310,28 @@ enum ImageRenderQueue {
             return true
         }
         guard shouldSchedule else { return }
-        scheduleThumbnail(url: url, key: key, rgbStretchMode: rgbStretchMode)
+        scheduleThumbnail(
+            url: url,
+            key: key,
+            stretchStack: stretchStack
+        )
     }
 
     static func renderFull(
         url: URL,
-        targetMedian: Double,
-        rgbStretchMode: RGBStretchMode,
+        stretchStack: FITSStretchStack,
         completion: @escaping FullCompletion
     ) {
-        let key = jobKey(for: url, rgbStretchMode: rgbStretchMode)
+        let key = jobKey(for: url, stretchStack: stretchStack)
         let shouldSchedule = stateQueue.sync {
             if var job = jobs[key] {
                 job.fullCompletions.append(completion)
-                job.targetMedian = targetMedian
                 jobs[key] = job
                 return false
             }
             jobs[key] = Job(
                 kind: .full,
-                fullCompletions: [completion],
-                targetMedian: targetMedian
+                fullCompletions: [completion]
             )
             return true
         }
@@ -333,15 +339,14 @@ enum ImageRenderQueue {
         scheduleFull(
             url: url,
             key: key,
-            targetMedian: targetMedian,
-            rgbStretchMode: rgbStretchMode
+            stretchStack: stretchStack
         )
     }
 
     private static func scheduleThumbnail(
         url: URL,
         key: String,
-        rgbStretchMode: RGBStretchMode
+        stretchStack: FITSStretchStack
     ) {
         thumbnailOperations.addOperation {
             let accessing = url.startAccessingSecurityScopedResource()
@@ -350,37 +355,36 @@ enum ImageRenderQueue {
             let thumbnail = try? SeizaCore.render(
                 url: url,
                 maxDimension: UInt32(ImageThumbnailCache.maximumDimension),
-                rgbStretchMode: rgbStretchMode
+                stretchStack: stretchStack
             ).image
             if let thumbnail {
                 ImageThumbnailCache.storeThumbnail(
                     from: thumbnail,
                     for: url,
-                    rgbStretchMode: rgbStretchMode
+                    stretchStack: stretchStack
                 )
             }
 
-            let outcome = stateQueue.sync { () -> ([ThumbnailCompletion], Double?) in
-                guard var job = jobs[key] else { return ([], nil) }
+            let outcome = stateQueue.sync { () -> ([ThumbnailCompletion], Bool) in
+                guard var job = jobs[key] else { return ([], false) }
                 let callbacks = job.thumbnailCompletions
                 job.thumbnailCompletions = []
                 if job.fullCompletions.isEmpty {
                     jobs.removeValue(forKey: key)
-                    return (callbacks, nil)
+                    return (callbacks, false)
                 }
                 job.kind = .full
                 jobs[key] = job
-                return (callbacks, job.targetMedian)
+                return (callbacks, true)
             }
             OperationQueue.main.addOperation {
                 outcome.0.forEach { $0(thumbnail) }
             }
-            if let targetMedian = outcome.1 {
+            if outcome.1 {
                 scheduleFull(
                     url: url,
                     key: key,
-                    targetMedian: targetMedian,
-                    rgbStretchMode: rgbStretchMode
+                    stretchStack: stretchStack
                 )
             }
         }
@@ -389,8 +393,7 @@ enum ImageRenderQueue {
     private static func scheduleFull(
         url: URL,
         key: String,
-        targetMedian: Double,
-        rgbStretchMode: RGBStretchMode
+        stretchStack: FITSStretchStack
     ) {
         fullOperations.addOperation {
             let accessing = url.startAccessingSecurityScopedResource()
@@ -399,8 +402,7 @@ enum ImageRenderQueue {
             let result = Result {
                 try SeizaCore.render(
                     url: url,
-                    targetMedian: targetMedian,
-                    rgbStretchMode: rgbStretchMode
+                    stretchStack: stretchStack
                 )
             }
             let thumbnail: CGImage?
@@ -409,7 +411,7 @@ enum ImageRenderQueue {
                 thumbnail = ImageThumbnailCache.storeThumbnail(
                     from: rendered.image,
                     for: url,
-                    rgbStretchMode: rgbStretchMode
+                    stretchStack: stretchStack
                 )
             case .failure:
                 thumbnail = nil
@@ -431,8 +433,8 @@ enum ImageRenderQueue {
 
     private static func jobKey(
         for url: URL,
-        rgbStretchMode: RGBStretchMode
+        stretchStack: FITSStretchStack
     ) -> String {
-        "\(url.resolvingSymlinksInPath().standardizedFileURL.path)\n\(rgbStretchMode.rawValue)"
+        "\(url.resolvingSymlinksInPath().standardizedFileURL.path)\n\(stretchStack.cacheIdentifier)"
     }
 }

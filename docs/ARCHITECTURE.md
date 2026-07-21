@@ -47,13 +47,25 @@ layout, allocator-owned memory, or panic is allowed to cross the ABI:
 JSON is used for metadata and WCS because those records evolve more often than
 the high-volume pixel path. Pixels stay in a direct contiguous buffer.
 
-RGB FITS display rendering exposes three explicit C-ABI modes: per-channel
-Auto, Linked Auto with one shared transfer function derived from the average
-channel medians and MADs, and Linear native-range mapping. Raster JPEG, PNG,
-and TIFF pixels remain color-managed linear display data and are not passed
-through the FITS autostretch. Thumbnail cache and background-render job
-identities include the RGB stretch mode, so results from different transforms
-cannot be accidentally shared.
+FITS display rendering sends a non-empty, ordered stack of validated stretch
+configurations to the C ABI. Rust keeps intermediate stage data in `f32` and
+only converts the final result to RGBA, so the Swift undo/redo history never
+introduces 8-bit interstage quantization. The toolbar groups automatic MTF and
+percentile Asinh separately from manual Linear, Asinh, MTF, and Generalized
+Hyperbolic Stretch controls, with an identity option for normalized data. GHS
+can sample its symmetry point from the displayed image. Color FITS can analyze
+linked or per-channel data, or stretch luminance while preserving RGB
+chromaticity.
+Raster JPEG, PNG, and TIFF pixels remain color-managed display data and bypass
+the FITS stretch pipeline. Thumbnail-cache and background-render job identities
+include the complete, deterministically encoded stack, so only truly
+identical renders share work or cached pixels.
+
+The ABI supplies exact 256-bin channel counts for input and rendered pixels.
+The inspector plots those counts on a linear vertical scale capped at the 98th
+percentile of populated interior bins. This keeps normal image structure
+readable without letting clipped black/white endpoints or a single hot bin
+flatten the rest of the chart.
 
 The main app also exposes catalog readiness and setup through the C ABI. Rust's
 verified Seiza download bundles remain the source of dataset manifests and

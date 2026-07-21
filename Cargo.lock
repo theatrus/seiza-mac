@@ -1361,7 +1361,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "seiza"
 version = "0.11.2"
-source = "git+https://github.com/theatrus/seiza.git?rev=82b7cfeed5e277994cbae46bab60ab6333bbdafd#82b7cfeed5e277994cbae46bab60ab6333bbdafd"
+source = "git+https://github.com/theatrus/seiza.git?rev=8d65b1ca1a1b19b33fa8f44768573316a15d09e3#8d65b1ca1a1b19b33fa8f44768573316a15d09e3"
 dependencies = [
  "directories",
  "image",
@@ -1381,7 +1381,7 @@ dependencies = [
 [[package]]
 name = "seiza-cabi"
 version = "0.11.2"
-source = "git+https://github.com/theatrus/seiza.git?rev=82b7cfeed5e277994cbae46bab60ab6333bbdafd#82b7cfeed5e277994cbae46bab60ab6333bbdafd"
+source = "git+https://github.com/theatrus/seiza.git?rev=8d65b1ca1a1b19b33fa8f44768573316a15d09e3#8d65b1ca1a1b19b33fa8f44768573316a15d09e3"
 dependencies = [
  "cbindgen",
  "image",
@@ -1396,7 +1396,7 @@ dependencies = [
 [[package]]
 name = "seiza-download"
 version = "0.5.0"
-source = "git+https://github.com/theatrus/seiza.git?rev=82b7cfeed5e277994cbae46bab60ab6333bbdafd#82b7cfeed5e277994cbae46bab60ab6333bbdafd"
+source = "git+https://github.com/theatrus/seiza.git?rev=8d65b1ca1a1b19b33fa8f44768573316a15d09e3#8d65b1ca1a1b19b33fa8f44768573316a15d09e3"
 dependencies = [
  "async-compression",
  "directories",
@@ -1414,7 +1414,7 @@ dependencies = [
 [[package]]
 name = "seiza-fits"
 version = "0.1.6"
-source = "git+https://github.com/theatrus/seiza.git?rev=82b7cfeed5e277994cbae46bab60ab6333bbdafd#82b7cfeed5e277994cbae46bab60ab6333bbdafd"
+source = "git+https://github.com/theatrus/seiza.git?rev=8d65b1ca1a1b19b33fa8f44768573316a15d09e3#8d65b1ca1a1b19b33fa8f44768573316a15d09e3"
 dependencies = [
  "multiversion",
  "seiza-stretch",
@@ -1431,7 +1431,7 @@ dependencies = [
 [[package]]
 name = "seiza-stretch"
 version = "0.1.0"
-source = "git+https://github.com/theatrus/seiza.git?rev=82b7cfeed5e277994cbae46bab60ab6333bbdafd#82b7cfeed5e277994cbae46bab60ab6333bbdafd"
+source = "git+https://github.com/theatrus/seiza.git?rev=8d65b1ca1a1b19b33fa8f44768573316a15d09e3#8d65b1ca1a1b19b33fa8f44768573316a15d09e3"
 dependencies = [
  "rayon",
  "serde",

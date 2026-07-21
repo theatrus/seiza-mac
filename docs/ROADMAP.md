@@ -4,8 +4,10 @@
 
 - FITS/JPEG/PNG/TIFF document registration, mixed-format directories, and
   multi-window opening
-- fast mono autostretch plus per-channel Auto, Linked Auto, and Linear RGB
-  display modes for planar-RGB and OSC/Bayer images
+- parameterized Auto MTF, percentile Asinh, Linear, Asinh, MTF, GHS, and
+  identity display modes with linked, per-channel, and luminance-preserving
+  color handling for planar-RGB and OSC/Bayer images; additive stage history,
+  undo/redo, and image-picked GHS symmetry points
 - header/statistics inspector with paired pre- and post-stretch RGB or luminance histograms
 - blind solve action with security-scoped catalog selection
 - catalog-colored, independently toggleable solve overlays for named stars,
