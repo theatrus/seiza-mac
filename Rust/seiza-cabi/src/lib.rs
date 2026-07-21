@@ -1159,7 +1159,13 @@ fn render_fits(
         "mono"
     };
 
-    let rgba = if let Some(rgb) = fits.debayer().or_else(|| fits.rgb_planes()) {
+    let rgb = fits.debayer().or_else(|| fits.rgb_planes());
+    let input_histogram = if let Some(rgb) = &rgb {
+        input_histogram_u16_json(&rgb.data, 3, false)
+    } else {
+        input_histogram_u16_json(&fits.to_u16(), 1, true)
+    };
+    let rgba = if let Some(rgb) = rgb {
         stretch_rgb(&rgb, params, rgb_stretch_mode)
     } else {
         let gray = fits.stretch_to_u8(params);
@@ -1167,6 +1173,7 @@ fn render_fits(
             .flat_map(|value| [value, value, value, 255])
             .collect()
     };
+    let display_histogram = display_histogram_json(&rgba);
     let (width, height, rgba) = downsample_rgba(
         source_width,
         source_height,
@@ -1187,6 +1194,8 @@ fn render_fits(
         "rgbStretchMode": matches!(color_kind, "planar-rgb" | "bayer")
             .then(|| rgb_stretch_mode.name()),
         "statistics": statistics_json(&statistics),
+        "inputHistogram": input_histogram,
+        "displayHistogram": display_histogram,
         "headers": headers,
     });
     let metadata_json = CString::new(metadata.to_string())
@@ -1207,8 +1216,10 @@ fn render_raster(
     let source_width = image.width();
     let source_height = image.height();
     let (planes, color_kind) = raster_encoding(&image);
+    let input_histogram = raster_input_histogram_json(&image);
     let statistics = raster_statistics_json(image.to_luma8().as_raw());
     let rgba = image.to_rgba8().into_raw();
+    let display_histogram = display_histogram_json(&rgba);
     let (width, height, rgba) = downsample_rgba(
         usize::try_from(source_width).map_err(|_| "image width is too large")?,
         usize::try_from(source_height).map_err(|_| "image height is too large")?,
@@ -1222,6 +1233,8 @@ fn render_raster(
         "format": format,
         "colorKind": color_kind,
         "statistics": statistics,
+        "inputHistogram": input_histogram,
+        "displayHistogram": display_histogram,
         "headers": Map::<String, Value>::new(),
     });
     let metadata_json = CString::new(metadata.to_string())
@@ -1309,6 +1322,114 @@ fn raster_statistics_json(values: &[u8]) -> Value {
         "mean": if count == 0 { 0.0 } else { sum as f64 / count as f64 },
         "median": median,
         "mad": mad,
+    })
+}
+
+fn display_histogram_json(rgba: &[u8]) -> Value {
+    let mut red = [0_u64; 256];
+    let mut green = [0_u64; 256];
+    let mut blue = [0_u64; 256];
+    for pixel in rgba.chunks_exact(4) {
+        red[usize::from(pixel[0])] += 1;
+        green[usize::from(pixel[1])] += 1;
+        blue[usize::from(pixel[2])] += 1;
+    }
+    json!({
+        "red": red.as_slice(),
+        "green": green.as_slice(),
+        "blue": blue.as_slice(),
+        "lowerBound": 0.0,
+        "upperBound": 255.0,
+    })
+}
+
+fn raster_input_histogram_json(image: &DynamicImage) -> Value {
+    match image {
+        DynamicImage::ImageLuma8(image) => input_histogram_u8_json(image.as_raw(), 1, true),
+        DynamicImage::ImageLumaA8(image) => input_histogram_u8_json(image.as_raw(), 2, true),
+        DynamicImage::ImageRgb8(image) => input_histogram_u8_json(image.as_raw(), 3, false),
+        DynamicImage::ImageRgba8(image) => input_histogram_u8_json(image.as_raw(), 4, false),
+        DynamicImage::ImageLuma16(image) => input_histogram_u16_json(image.as_raw(), 1, true),
+        DynamicImage::ImageLumaA16(image) => input_histogram_u16_json(image.as_raw(), 2, true),
+        DynamicImage::ImageRgb16(image) => input_histogram_u16_json(image.as_raw(), 3, false),
+        DynamicImage::ImageRgba16(image) => input_histogram_u16_json(image.as_raw(), 4, false),
+        DynamicImage::ImageRgb32F(image) => input_histogram_f32_json(image.as_raw(), 3),
+        DynamicImage::ImageRgba32F(image) => input_histogram_f32_json(image.as_raw(), 4),
+        _ => display_histogram_json(image.to_rgba8().as_raw()),
+    }
+}
+
+fn input_histogram_u8_json(samples: &[u8], stride: usize, monochrome: bool) -> Value {
+    let mut red = [0_u64; 256];
+    let mut green = [0_u64; 256];
+    let mut blue = [0_u64; 256];
+    for pixel in samples.chunks_exact(stride) {
+        let red_value = usize::from(pixel[0]);
+        let green_value = if monochrome {
+            red_value
+        } else {
+            usize::from(pixel[1])
+        };
+        let blue_value = if monochrome {
+            red_value
+        } else {
+            usize::from(pixel[2])
+        };
+        red[red_value] += 1;
+        green[green_value] += 1;
+        blue[blue_value] += 1;
+    }
+    histogram_json(&red, &green, &blue, 0.0, 255.0)
+}
+
+fn input_histogram_u16_json(samples: &[u16], stride: usize, monochrome: bool) -> Value {
+    let mut red = [0_u64; 256];
+    let mut green = [0_u64; 256];
+    let mut blue = [0_u64; 256];
+    for pixel in samples.chunks_exact(stride) {
+        let bin = |value: u16| usize::from(value >> 8);
+        let red_value = bin(pixel[0]);
+        let green_value = if monochrome { red_value } else { bin(pixel[1]) };
+        let blue_value = if monochrome { red_value } else { bin(pixel[2]) };
+        red[red_value] += 1;
+        green[green_value] += 1;
+        blue[blue_value] += 1;
+    }
+    histogram_json(&red, &green, &blue, 0.0, f64::from(u16::MAX))
+}
+
+fn input_histogram_f32_json(samples: &[f32], stride: usize) -> Value {
+    let mut red = [0_u64; 256];
+    let mut green = [0_u64; 256];
+    let mut blue = [0_u64; 256];
+    let bin = |value: f32| {
+        if value.is_finite() {
+            (value.clamp(0.0, 1.0) * 255.0).round() as usize
+        } else {
+            0
+        }
+    };
+    for pixel in samples.chunks_exact(stride) {
+        red[bin(pixel[0])] += 1;
+        green[bin(pixel[1])] += 1;
+        blue[bin(pixel[2])] += 1;
+    }
+    histogram_json(&red, &green, &blue, 0.0, 1.0)
+}
+
+fn histogram_json(
+    red: &[u64; 256],
+    green: &[u64; 256],
+    blue: &[u64; 256],
+    lower_bound: f64,
+    upper_bound: f64,
+) -> Value {
+    json!({
+        "red": red.as_slice(),
+        "green": green.as_slice(),
+        "blue": blue.as_slice(),
+        "lowerBound": lower_bound,
+        "upperBound": upper_bound,
     })
 }
 
@@ -1826,6 +1947,15 @@ mod tests {
         assert_eq!(metadata["headers"]["OBJECT"], "M42");
         assert_eq!(metadata["format"], "FITS");
         assert_eq!(metadata["colorKind"], "mono");
+        assert_eq!(metadata["inputHistogram"]["lowerBound"], 0.0);
+        assert_eq!(metadata["inputHistogram"]["upperBound"], 65_535.0);
+        for channel in ["red", "green", "blue"] {
+            for histogram in ["inputHistogram", "displayHistogram"] {
+                let bins = metadata[histogram][channel].as_array().unwrap();
+                assert_eq!(bins.len(), 256);
+                assert_eq!(bins.iter().map(|bin| bin.as_u64().unwrap()).sum::<u64>(), 4);
+            }
+        }
     }
 
     #[test]
@@ -1844,6 +1974,15 @@ mod tests {
         assert_eq!(metadata["format"], "PNG");
         assert_eq!(metadata["colorKind"], "rgb-8");
         assert_eq!(metadata["headers"], json!({}));
+        assert_eq!(metadata["inputHistogram"]["lowerBound"], 0.0);
+        assert_eq!(metadata["inputHistogram"]["upperBound"], 255.0);
+        for channel in ["red", "green", "blue"] {
+            for histogram in ["inputHistogram", "displayHistogram"] {
+                let bins = metadata[histogram][channel].as_array().unwrap();
+                assert_eq!(bins.len(), 256);
+                assert_eq!(bins.iter().map(|bin| bin.as_u64().unwrap()).sum::<u64>(), 6);
+            }
+        }
     }
 
     #[test]

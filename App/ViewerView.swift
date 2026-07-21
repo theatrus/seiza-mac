@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 private extension DeepSkyCatalog {
@@ -22,6 +23,7 @@ private extension DeepSkyCatalog {
 struct ViewerView: View {
     let urls: [URL]
     let showsImageBrowser: Bool
+    let exportCoordinator: ImageExportCoordinator
     let onSelectionChange: (URL) -> Void
     let onDropURLs: ([URL]) -> Void
 
@@ -36,11 +38,13 @@ struct ViewerView: View {
         urls: [URL],
         initialIndex: Int = 0,
         showsImageBrowser: Bool = false,
+        exportCoordinator: ImageExportCoordinator,
         onSelectionChange: @escaping (URL) -> Void = { _ in },
         onDropURLs: @escaping ([URL]) -> Void = { _ in }
     ) {
         self.urls = urls
         self.showsImageBrowser = showsImageBrowser
+        self.exportCoordinator = exportCoordinator
         self.onSelectionChange = onSelectionChange
         self.onDropURLs = onDropURLs
         let selectedIndex = min(max(initialIndex, 0), max(urls.count - 1, 0))
@@ -62,6 +66,7 @@ struct ViewerView: View {
 
             ImagePageView(
                 model: model,
+                exportCoordinator: exportCoordinator,
                 showInspector: $showInspector,
                 rgbStretchMode: $rgbStretchMode,
                 position: selectedIndex + 1,
@@ -292,6 +297,7 @@ private struct ImagePageView: View {
 
     @Environment(\.displayScale) private var displayScale
     @ObservedObject private var model: ImageDocumentModel
+    @ObservedObject private var exportCoordinator: ImageExportCoordinator
     @ObservedObject private var catalogSetup = CatalogSetupController.shared
     @State private var zoom = 1.0
     @State private var pinchStartZoom: Double?
@@ -314,9 +320,12 @@ private struct ImagePageView: View {
     @State private var showFieldStars = false
     @State private var showFieldCenter = true
     @State private var hiddenDeepSkyCatalogs = Set<DeepSkyCatalog>()
+    @State private var isExporting = false
+    @State private var exportError: String?
 
     init(
         model: ImageDocumentModel,
+        exportCoordinator: ImageExportCoordinator,
         showInspector: Binding<Bool>,
         rgbStretchMode: Binding<RGBStretchMode>,
         position: Int,
@@ -335,6 +344,7 @@ private struct ImagePageView: View {
         _showInspector = showInspector
         _rgbStretchMode = rgbStretchMode
         _model = ObservedObject(wrappedValue: model)
+        _exportCoordinator = ObservedObject(wrappedValue: exportCoordinator)
     }
 
     var body: some View {
@@ -494,6 +504,20 @@ private struct ImagePageView: View {
                 .help(solvedSolution == nil ? "Solve the image to enable overlays" : "Solve Overlays")
 
                 Button {
+                    presentExportPanel()
+                } label: {
+                    if isExporting {
+                        ProgressView()
+                            .controlSize(.small)
+                            .accessibilityLabel("Exporting image")
+                    } else {
+                        Label("Export", systemImage: "square.and.arrow.up")
+                    }
+                }
+                .disabled(model.image == nil || isExporting)
+                .help("Export Image…")
+
+                Button {
                     changeZoom(by: 1 / Self.zoomStep)
                 } label: {
                     Label("Zoom Out", systemImage: "minus.magnifyingglass")
@@ -537,6 +561,120 @@ private struct ImagePageView: View {
         .onAppear {
             catalogSetup.refreshStatus()
         }
+        .onChange(of: exportCoordinator.requestNumber) { _, _ in
+            guard model.image != nil, !isExporting else {
+                NSSound.beep()
+                return
+            }
+            presentExportPanel()
+        }
+        .alert(
+            "Couldn’t Export Image",
+            isPresented: Binding(
+                get: { exportError != nil },
+                set: { if !$0 { exportError = nil } }
+            ),
+            actions: {
+                Button("OK", role: .cancel) {}
+            },
+            message: {
+                Text(exportError ?? "An unknown error occurred.")
+            }
+        )
+    }
+
+    @MainActor
+    private func presentExportPanel() {
+        guard let image = model.image else {
+            NSSound.beep()
+            return
+        }
+
+        let overlaysAvailable = solvedSolution != nil && hasVisibleOverlays
+        let options = ImageExportOptions(overlaysAvailable: overlaysAvailable)
+        let panel = NSSavePanel()
+        panel.title = "Export Image"
+        panel.prompt = "Export"
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.allowedContentTypes = [options.format.contentType]
+        panel.nameFieldStringValue = model.url.deletingPathExtension()
+            .lastPathComponent + "." + options.format.fileExtension
+        panel.accessoryView = NSHostingView(
+            rootView: ImageExportAccessoryView(
+                options: options,
+                overlaysAvailable: overlaysAvailable
+            )
+        )
+
+        let formatObserver = options.$format.dropFirst().sink { format in
+            panel.allowedContentTypes = [format.contentType]
+            let stem = (panel.nameFieldStringValue as NSString).deletingPathExtension
+            panel.nameFieldStringValue = stem + "." + format.fileExtension
+        }
+        guard panel.runModal() == .OK, let destinationURL = panel.url else {
+            withExtendedLifetime(formatObserver) {}
+            return
+        }
+        withExtendedLifetime(formatObserver) {}
+
+        let exportedImage: CGImage
+        if options.includesVisibleOverlays,
+           let solution = solvedSolution,
+           let composited = renderExportImage(image: image, solution: solution) {
+            exportedImage = composited
+        } else {
+            exportedImage = image
+        }
+
+        isExporting = true
+        let format = options.format
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = Result {
+                try ImageFileWriter.write(
+                    exportedImage,
+                    to: destinationURL,
+                    format: format
+                )
+            }
+            DispatchQueue.main.async {
+                isExporting = false
+                if case .failure(let error) = result {
+                    exportError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func renderExportImage(
+        image: CGImage,
+        solution: SolveResult
+    ) -> CGImage? {
+        let size = CGSize(width: image.width, height: image.height)
+        let renderer = ImageRenderer(
+            content: ExportImageView(
+                image: image,
+                solution: solution,
+                sourceSize: size,
+                showsDeepSky: showDeepSky,
+                showsNamedStars: showNamedStars,
+                showsTransients: showTransients,
+                showsHistoricalTransients: showHistoricalTransients,
+                showsMinorBodies: showMinorBodies,
+                showsCoordinateGrid: showCoordinateGrid,
+                showsCatalogOutlines: showCatalogOutlines,
+                showsObjectLabels: showObjectLabels,
+                showsDetectedStars: showDetectedStars,
+                showsFieldStars: showFieldStars,
+                showsFieldCenter: showFieldCenter,
+                hiddenDeepSkyCatalogs: hiddenDeepSkyCatalogs
+            )
+        )
+        renderer.scale = 1
+        renderer.isOpaque = true
+        renderer.proposedSize = ProposedViewSize(size)
+        return renderer.cgImage
     }
 
     private var solveHelp: String {
@@ -902,6 +1040,52 @@ private struct ImagePageView: View {
     }
 }
 
+private struct ExportImageView: View {
+    let image: CGImage
+    let solution: SolveResult
+    let sourceSize: CGSize
+    let showsDeepSky: Bool
+    let showsNamedStars: Bool
+    let showsTransients: Bool
+    let showsHistoricalTransients: Bool
+    let showsMinorBodies: Bool
+    let showsCoordinateGrid: Bool
+    let showsCatalogOutlines: Bool
+    let showsObjectLabels: Bool
+    let showsDetectedStars: Bool
+    let showsFieldStars: Bool
+    let showsFieldCenter: Bool
+    let hiddenDeepSkyCatalogs: Set<DeepSkyCatalog>
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Image(decorative: image, scale: 1)
+                .interpolation(.none)
+                .resizable()
+                .frame(width: sourceSize.width, height: sourceSize.height)
+
+            SolveOverlayView(
+                solution: solution,
+                sourceSize: sourceSize,
+                showsDeepSky: showsDeepSky,
+                showsNamedStars: showsNamedStars,
+                showsTransients: showsTransients,
+                showsHistoricalTransients: showsHistoricalTransients,
+                showsMinorBodies: showsMinorBodies,
+                showsCoordinateGrid: showsCoordinateGrid,
+                showsCatalogOutlines: showsCatalogOutlines,
+                showsObjectLabels: showsObjectLabels,
+                showsDetectedStars: showsDetectedStars,
+                showsFieldStars: showsFieldStars,
+                showsFieldCenter: showsFieldCenter,
+                hiddenDeepSkyCatalogs: hiddenDeepSkyCatalogs,
+                rendersAsynchronously: false
+            )
+        }
+        .frame(width: sourceSize.width, height: sourceSize.height)
+    }
+}
+
 private struct SolveOverlayView: View {
     private enum Style {
         static let namedStar = Color(red: 1, green: 212.0 / 255.0, blue: 121.0 / 255.0)
@@ -956,9 +1140,10 @@ private struct SolveOverlayView: View {
     let showsFieldStars: Bool
     let showsFieldCenter: Bool
     let hiddenDeepSkyCatalogs: Set<DeepSkyCatalog>
+    var rendersAsynchronously = true
 
     var body: some View {
-        Canvas(rendersAsynchronously: true) { context, size in
+        Canvas(rendersAsynchronously: rendersAsynchronously) { context, size in
             guard sourceSize.width > 0, sourceSize.height > 0 else { return }
             let scaleX = size.width / sourceSize.width
             let scaleY = size.height / sourceSize.height
@@ -1667,6 +1852,129 @@ private struct SolveOverlayView: View {
     }
 }
 
+private struct ImageHistogramView: View {
+    let histogram: ImageHistogram
+    let isMonochrome: Bool
+
+    var body: some View {
+        Canvas { context, size in
+            guard size.width > 0, size.height > 0 else { return }
+
+            var grid = Path()
+            for fraction in [CGFloat(0.25), 0.5, 0.75] {
+                let x = size.width * fraction
+                grid.move(to: CGPoint(x: x, y: 0))
+                grid.addLine(to: CGPoint(x: x, y: size.height))
+            }
+            context.stroke(
+                grid,
+                with: .color(.white.opacity(0.09)),
+                lineWidth: 1
+            )
+
+            let channels = isMonochrome
+                ? [(histogram.red, Color.white)]
+                : [
+                    (histogram.red, Color.red),
+                    (histogram.green, Color.green),
+                    (histogram.blue, Color.blue),
+                ]
+            let maximum = channels
+                .flatMap { $0.0 }
+                .max()
+                .map(Double.init) ?? 0
+            guard maximum > 0 else { return }
+
+            context.blendMode = .plusLighter
+            for (bins, color) in channels {
+                draw(
+                    bins: bins,
+                    color: color,
+                    maximum: maximum,
+                    size: size,
+                    context: &context
+                )
+            }
+        }
+        .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(.white.opacity(0.12), lineWidth: 1)
+        }
+        .accessibilityElement()
+        .accessibilityLabel(isMonochrome ? "Luminance histogram" : "RGB histogram")
+    }
+
+    private func draw(
+        bins: [UInt64],
+        color: Color,
+        maximum: Double,
+        size: CGSize,
+        context: inout GraphicsContext
+    ) {
+        guard bins.count > 1 else { return }
+        let denominator = log1p(maximum)
+        guard denominator > 0 else { return }
+
+        var curve = Path()
+        for (index, count) in bins.enumerated() {
+            let x = CGFloat(index) / CGFloat(bins.count - 1) * size.width
+            let height = CGFloat(log1p(Double(count)) / denominator) * size.height
+            let point = CGPoint(x: x, y: size.height - height)
+            if index == 0 {
+                curve.move(to: point)
+            } else {
+                curve.addLine(to: point)
+            }
+        }
+
+        var area = curve
+        area.addLine(to: CGPoint(x: size.width, y: size.height))
+        area.addLine(to: CGPoint(x: 0, y: size.height))
+        area.closeSubpath()
+        context.fill(area, with: .color(color.opacity(isMonochrome ? 0.3 : 0.2)))
+        context.stroke(curve, with: .color(color.opacity(0.9)), lineWidth: 1)
+    }
+}
+
+private struct LabeledHistogramView: View {
+    let title: String
+    let axisTitle: String
+    let histogram: ImageHistogram
+    let isMonochrome: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.caption.weight(.medium))
+
+            ImageHistogramView(
+                histogram: histogram,
+                isMonochrome: isMonochrome
+            )
+            .frame(height: 88)
+
+            HStack {
+                Text(levelLabel(histogram.lowerBound))
+                Spacer()
+                Text(axisTitle)
+                Spacer()
+                Text(levelLabel(histogram.upperBound))
+            }
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private func levelLabel(_ value: Double) -> String {
+        if value.rounded() == value {
+            return Int(value).formatted()
+        }
+        return value.formatted(.number.precision(.fractionLength(0...2)))
+    }
+}
+
 private struct InspectorView: View {
     @ObservedObject var model: ImageDocumentModel
 
@@ -1682,6 +1990,31 @@ private struct InspectorView: View {
                     }
                     LabeledContent("Median", value: "\(metadata.statistics.median)")
                     LabeledContent("MAD", value: metadata.statistics.mad.formatted(.number.precision(.fractionLength(2))))
+                }
+
+                if metadata.inputHistogram?.isValid == true
+                    || metadata.displayHistogram?.isValid == true {
+                    Section("Histograms") {
+                        VStack(spacing: 12) {
+                            if let histogram = metadata.inputHistogram, histogram.isValid {
+                                LabeledHistogramView(
+                                    title: "Input",
+                                    axisTitle: "Pre-stretch level",
+                                    histogram: histogram,
+                                    isMonochrome: metadata.colorKind.hasPrefix("mono")
+                                )
+                            }
+                            if let histogram = metadata.displayHistogram, histogram.isValid {
+                                LabeledHistogramView(
+                                    title: "Display",
+                                    axisTitle: "Stretched level",
+                                    histogram: histogram,
+                                    isMonochrome: metadata.colorKind.hasPrefix("mono")
+                                )
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
                 }
             }
 

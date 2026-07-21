@@ -6,19 +6,20 @@
   multi-window opening
 - fast mono autostretch plus per-channel Auto, Linked Auto, and Linear RGB
   display modes for planar-RGB and OSC/Bayer images
-- header/statistics inspector
+- header/statistics inspector with paired pre- and post-stretch RGB or luminance histograms
 - blind solve action with security-scoped catalog selection
 - catalog-colored, independently toggleable solve overlays for named stars,
   deep-sky catalogs and OpenNGC contours, transients, acquisition-time comets
   and asteroids, field stars, coordinate grid, labels, and field center
 - HIG-style FITS document icon and Quick Look preview extension
+- source-resolution PNG, JPEG, and TIFF export with optional visible solve overlays
 - signed, notarized Apple-silicon development distribution
 - managed, retry-safe catalog download and repair UI with readiness checks and
   byte-level SHA-256 verification progress
 
 ## Phase 2 — serious inspection
 
-- fit-to-window, pan, pixel loupe, histogram, black/midtone controls
+- pixel loupe, black/midtone controls, and finer stretch controls
 - star-detection overlays and measured HFR/FWHM
 - compass, scale bar, and WCS cursor readout
 - hinted solving from FITS headers before blind-solving fallback

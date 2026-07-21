@@ -1,4 +1,7 @@
+import CoreGraphics
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 import XCTest
 @testable import Seiza
 
@@ -51,6 +54,151 @@ final class DocumentRegistrationTests: XCTestCase {
         XCTAssertEqual(fitsType["CFBundleTypeIconFile"] as? String, "FITSFile")
         XCTAssertNil(imageType["CFBundleTypeIconFile"])
         XCTAssertNotNil(Bundle.main.url(forResource: "FITSFile", withExtension: "icns"))
+    }
+
+    func testQuickLookExtensionDeclaresFinderFITSPreviewSupport() throws {
+        let plugInsURL = try XCTUnwrap(Bundle.main.builtInPlugInsURL)
+        let extensionURL = plugInsURL.appendingPathComponent("SeizaQuickLook.appex")
+        let extensionBundle = try XCTUnwrap(Bundle(url: extensionURL))
+        let extensionInfo = try XCTUnwrap(
+            extensionBundle.infoDictionary?["NSExtension"] as? [String: Any]
+        )
+        let attributes = try XCTUnwrap(
+            extensionInfo["NSExtensionAttributes"] as? [String: Any]
+        )
+
+        XCTAssertEqual(
+            extensionInfo["NSExtensionPointIdentifier"] as? String,
+            "com.apple.quicklook.preview"
+        )
+        XCTAssertEqual(attributes["QLIsDataBasedPreview"] as? Bool, false)
+        XCTAssertEqual(attributes["QLSupportsSearchableItems"] as? Bool, false)
+        XCTAssertEqual(
+            attributes["QLSupportedContentTypes"] as? [String],
+            ["fyi.seiza.fits"]
+        )
+        XCTAssertEqual(
+            extensionInfo["NSExtensionPrincipalClass"] as? String,
+            "SeizaQuickLook.PreviewViewController"
+        )
+    }
+}
+
+final class DisplayHistogramTests: XCTestCase {
+    func testHistogramRequiresCompleteEightBitChannels() {
+        let valid = [UInt64](repeating: 1, count: ImageHistogram.binCount)
+        XCTAssertTrue(
+            ImageHistogram(
+                red: valid,
+                green: valid,
+                blue: valid,
+                lowerBound: 0,
+                upperBound: 255
+            ).isValid
+        )
+        XCTAssertFalse(
+            ImageHistogram(
+                red: Array(valid.dropLast()),
+                green: valid,
+                blue: valid,
+                lowerBound: 0,
+                upperBound: 255
+            ).isValid
+        )
+    }
+}
+
+final class ImageExportTests: XCTestCase {
+    func testWritesPNGJPEGAndTIFFAtSourceDimensions() throws {
+        let image = try makeTestImage()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString,
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        for format in ImageExportFormat.allCases {
+            let url = directory.appendingPathComponent("export.\(format.fileExtension)")
+            try ImageFileWriter.write(image, to: url, format: format)
+
+            let source = try XCTUnwrap(CGImageSourceCreateWithURL(url as CFURL, nil))
+            XCTAssertEqual(CGImageSourceGetType(source) as String?, format.contentType.identifier)
+            let decoded = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+            XCTAssertEqual(decoded.width, 2)
+            XCTAssertEqual(decoded.height, 2)
+        }
+    }
+
+    private func makeTestImage() throws -> CGImage {
+        let pixels: [UInt8] = [
+            255, 0, 0, 255,
+            0, 255, 0, 255,
+            0, 0, 255, 255,
+            255, 255, 255, 255,
+        ]
+        let provider = try XCTUnwrap(
+            CGDataProvider(data: Data(pixels) as CFData)
+        )
+        return try XCTUnwrap(
+            CGImage(
+                width: 2,
+                height: 2,
+                bitsPerComponent: 8,
+                bitsPerPixel: 32,
+                bytesPerRow: 8,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGBitmapInfo(
+                    rawValue: CGImageAlphaInfo.premultipliedLast.rawValue
+                ),
+                provider: provider,
+                decode: nil,
+                shouldInterpolate: false,
+                intent: .defaultIntent
+            )
+        )
+    }
+}
+
+final class RenderBoundaryTests: XCTestCase {
+    func testSyntheticFITSRendersThroughSwiftBoundaryWithHistogram() throws {
+        var fits = Data()
+        for value in [
+            "SIMPLE  =                    T",
+            "BITPIX  =                   16",
+            "NAXIS   =                    2",
+            "NAXIS1  =                    2",
+            "NAXIS2  =                    2",
+            "BZERO   =                32768",
+            "END",
+        ] {
+            let card = value.padding(toLength: 80, withPad: " ", startingAt: 0)
+            fits.append(try XCTUnwrap(card.data(using: .ascii)))
+        }
+        fits.append(Data(repeating: 0x20, count: 2_880 - fits.count))
+        for value in [Int16(0), 100, 1_000, 20_000] {
+            var bigEndian = value.bigEndian
+            withUnsafeBytes(of: &bigEndian) { fits.append(contentsOf: $0) }
+        }
+        fits.append(Data(repeating: 0, count: 5_760 - fits.count))
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString).fits")
+        try fits.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let rendered = try SeizaCore.render(url: url, maxDimension: 4_096)
+        XCTAssertEqual(rendered.image.width, 2)
+        XCTAssertEqual(rendered.image.height, 2)
+        let histogram = try XCTUnwrap(rendered.metadata.displayHistogram)
+        XCTAssertTrue(histogram.isValid)
+        XCTAssertEqual(histogram.red.reduce(0, +), 4)
+        XCTAssertEqual(histogram.green.reduce(0, +), 4)
+        XCTAssertEqual(histogram.blue.reduce(0, +), 4)
+        let inputHistogram = try XCTUnwrap(rendered.metadata.inputHistogram)
+        XCTAssertTrue(inputHistogram.isValid)
+        XCTAssertEqual(inputHistogram.upperBound, 65_535)
+        XCTAssertEqual(inputHistogram.red.reduce(0, +), 4)
     }
 }
 

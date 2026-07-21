@@ -103,7 +103,28 @@ struct ImageMetadata: Decodable {
     let colorKind: String
     let rgbStretchMode: String?
     let statistics: ImageStatistics
+    let inputHistogram: ImageHistogram?
+    let displayHistogram: ImageHistogram?
     let headers: [String: JSONValue]
+}
+
+struct ImageHistogram: Decodable, Equatable {
+    static let binCount = 256
+
+    let red: [UInt64]
+    let green: [UInt64]
+    let blue: [UInt64]
+    let lowerBound: Double
+    let upperBound: Double
+
+    var isValid: Bool {
+        red.count == Self.binCount
+            && green.count == Self.binCount
+            && blue.count == Self.binCount
+            && lowerBound.isFinite
+            && upperBound.isFinite
+            && upperBound > lowerBound
+    }
 }
 
 enum RGBStretchMode: UInt32, CaseIterable, Identifiable {
