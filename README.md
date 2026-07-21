@@ -9,7 +9,7 @@ signed, notarized by Apple, and bundled with a FITS Quick Look extension.
 
 ![Seiza browsing an astronomy-image folder with its thumbnail drawer](docs/images/seiza-gallery.jpg)
 
-![Seiza displaying a stretched FITS image with image statistics and FITS headers](docs/images/seiza-fits-inspector.jpg)
+![Seiza displaying a plate-solved FITS image with a WCS grid, field center, and catalog overlays](docs/images/seiza-solved-fits.jpg)
 
 A fast, native macOS astronomy-image viewer and plate-solving app powered by the
 [Seiza](https://github.com/theatrus/seiza) Rust libraries. There is no Tauri,

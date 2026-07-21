@@ -203,7 +203,7 @@ jobs:
             '' \
             "![Seiza folder browser](${screenshot_base}/seiza-gallery.jpg)" \
             '' \
-            "![Seiza FITS inspector](${screenshot_base}/seiza-fits-inspector.jpg)" \
+            "![Seiza plate-solved FITS view](${screenshot_base}/seiza-solved-fits.jpg)" \
             > release-notes.md
           gh release create "$GITHUB_REF_NAME" \
             --verify-tag \
