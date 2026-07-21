@@ -33,7 +33,7 @@ describes code that has merged but has not been published as a versioned release
 | FITS and raster viewing | Included | Included | Open FITS, JPEG, PNG, and TIFF files or drop them onto an existing window. |
 | Folder browsing | Included | Included | Browse mixed-format folders with a thumbnail drawer, local thumbnail cache, and arrow-key navigation. |
 | FITS display | Included | Included | View mono, planar RGB, and Bayer/OSC data with fast native rendering. |
-| Stretch controls | Basic RGB modes | Expanded | Add, remove, reorder, and edit automatic or manual stages without intermediate 8-bit quantization; preview changes live; undo and redo edits; optionally remove smooth background gradients before stretching; pick GHS symmetry points from the image; and choose linked, per-channel, or luminance-preserving color handling. |
+| Stretch controls | Basic RGB modes | Expanded | Add, remove, reorder, and edit automatic or manual stages without intermediate 8-bit quantization; preview changes live in the default popover or a detachable utility panel; undo and redo edits; optionally remove smooth background gradients before stretching; pick GHS symmetry points from the image; and choose linked, per-channel, or luminance-preserving color handling. |
 | Zoom and inspection | Headers and statistics | Expanded | Fit to window, pan, pinch around the pointer, and compare pre- and post-stretch histograms alongside headers and statistics. |
 | Local plate solving | Included | Included | Run a blind solve only when you press Solve. No image is uploaded. |
 | Catalog setup | Included | Faster installation | Download, verify, install, or repair solver catalogs in Settings with visible progress and reuse the verified cache through hard links when possible. |

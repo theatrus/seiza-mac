@@ -1,17 +1,15 @@
 import SwiftUI
 
 struct FITSStretchControlsView: View {
+    @ObservedObject var model: ImageDocumentModel
     @Binding var stages: [FITSStretchConfiguration]
     @Binding var selectedStageIndex: Int
     @Binding var extractsBackground: Bool
-    let supportsColor: Bool
-    let canUndo: Bool
-    let canRedo: Bool
-    let isPreviewRendering: Bool
-    let previewError: String?
     let undo: () -> Void
     let redo: () -> Void
     let pickSymmetryPoint: () -> Void
+    let popOut: (() -> Void)?
+    let contentMaxHeight: CGFloat?
     let preview: (FITSStretchStack, Bool) -> Void
     let clearPreview: () -> Void
     let save: (FITSStretchStack, Bool) -> Void
@@ -26,6 +24,17 @@ struct FITSStretchControlsView: View {
                 Text("FITS Stretch")
                     .font(.headline)
                 Spacer()
+                if let popOut {
+                    Button {
+                        handledDismissal = true
+                        popOut()
+                    } label: {
+                        Label("Open in Separate Panel", systemImage: "arrow.up.right.square")
+                            .labelStyle(.iconOnly)
+                    }
+                    .controlSize(.small)
+                    .help("Keep Stretch Controls Open in a Separate Panel")
+                }
                 Button("Reset Stage") {
                     stages[selectedStageIndex] = .default
                 }
@@ -51,13 +60,13 @@ struct FITSStretchControlsView: View {
                                 Label("Undo Stretch", systemImage: "arrow.uturn.backward")
                                     .labelStyle(.iconOnly)
                             }
-                            .disabled(!canUndo)
+                            .disabled(!model.stretchHistory.canUndo)
                             .help("Undo last stretch")
                             Button(action: redo) {
                                 Label("Redo Stretch", systemImage: "arrow.uturn.forward")
                                     .labelStyle(.iconOnly)
                             }
-                            .disabled(!canRedo)
+                            .disabled(!model.stretchHistory.canRedo)
                             .help("Redo stretch")
                         }
 
@@ -175,7 +184,7 @@ struct FITSStretchControlsView: View {
                         parameterControls
                     }
 
-                    if supportsColor {
+                    if model.supportsColorStretch {
                         Divider()
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Color")
@@ -201,7 +210,7 @@ struct FITSStretchControlsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    if isPreviewRendering {
+                    if model.isPreviewRendering {
                         HStack(spacing: 8) {
                             ProgressView()
                                 .controlSize(.small)
@@ -209,7 +218,7 @@ struct FITSStretchControlsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                    } else if let previewError {
+                    } else if let previewError = model.previewError {
                         Label(previewError, systemImage: "exclamationmark.triangle")
                             .font(.caption)
                             .foregroundStyle(.orange)
@@ -218,7 +227,7 @@ struct FITSStretchControlsView: View {
                 }
                 .padding(16)
             }
-            .frame(maxHeight: 520)
+            .frame(maxHeight: contentMaxHeight)
 
             Divider()
 
@@ -238,7 +247,7 @@ struct FITSStretchControlsView: View {
             }
             .padding(12)
         }
-        .frame(width: 430)
+        .frame(minWidth: 430, idealWidth: 430)
         .onAppear {
             selectedStageIndex = min(max(selectedStageIndex, 0), stages.count - 1)
             schedulePreview()
