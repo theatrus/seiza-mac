@@ -21,27 +21,30 @@ final class ImageDocumentModel: ObservableObject {
     @Published private(set) var previewImage: CGImage?
     @Published private(set) var image: CGImage?
     @Published private(set) var metadata: ImageMetadata?
-    @Published private(set) var rgbStretchMode: RGBStretchMode
+    @Published private(set) var stretchConfiguration: FITSStretchConfiguration
     private var loadGeneration = 0
 
-    init(url: URL, rgbStretchMode: RGBStretchMode = .auto) {
+    init(
+        url: URL,
+        stretchConfiguration: FITSStretchConfiguration = .default
+    ) {
         self.url = url
-        self.rgbStretchMode = rgbStretchMode
+        self.stretchConfiguration = stretchConfiguration
         previewImage = ImageThumbnailCache.memoryImage(
             for: url,
-            rgbStretchMode: rgbStretchMode
+            stretchConfiguration: stretchConfiguration
         )
         if previewImage == nil {
             ImageThumbnailCache.load(
                 for: url,
-                rgbStretchMode: rgbStretchMode
+                stretchConfiguration: stretchConfiguration
             ) { [weak self] image in
                 guard let image else { return }
                 DispatchQueue.main.async {
                     guard
                         let self,
                         self.image == nil,
-                        self.rgbStretchMode == rgbStretchMode
+                        self.stretchConfiguration == stretchConfiguration
                     else { return }
                     self.previewImage = image
                 }
@@ -50,27 +53,31 @@ final class ImageDocumentModel: ObservableObject {
         load()
     }
 
-    var supportsRGBStretch: Bool {
+    var supportsFITSStretch: Bool {
+        metadata?.format == "FITS"
+    }
+
+    var supportsColorStretch: Bool {
         guard let colorKind = metadata?.colorKind else { return false }
         return colorKind == "planar-rgb" || colorKind == "bayer"
     }
 
-    func setRGBStretchMode(_ mode: RGBStretchMode) {
-        guard mode != rgbStretchMode else { return }
-        rgbStretchMode = mode
+    func setStretchConfiguration(_ configuration: FITSStretchConfiguration) {
+        guard configuration.validationMessage == nil,
+              configuration != stretchConfiguration else { return }
+        stretchConfiguration = configuration
         load()
     }
 
-    func load(targetMedian: Double = 0.2) {
+    func load() {
         loadGeneration &+= 1
         let generation = loadGeneration
         loadState = .loading
         let url = url
-        let rgbStretchMode = rgbStretchMode
+        let stretchConfiguration = stretchConfiguration
         ImageRenderQueue.renderFull(
             url: url,
-            targetMedian: targetMedian,
-            rgbStretchMode: rgbStretchMode
+            stretchConfiguration: stretchConfiguration
         ) { [weak self] result in
             guard let self, self.loadGeneration == generation else { return }
             switch result {

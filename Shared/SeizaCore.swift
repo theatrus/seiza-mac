@@ -127,26 +127,250 @@ struct ImageHistogram: Decodable, Equatable {
     }
 }
 
-enum RGBStretchMode: UInt32, CaseIterable, Identifiable {
-    case auto = 0
-    case linkedAuto = 1
-    case linear = 2
+enum FITSStretchType: String, CaseIterable, Identifiable {
+    case autoMtf
+    case percentileAsinh
+    case linear
+    case asinh
+    case mtf
+    case ghs
+    case identity
 
     var id: Self { self }
 
+    static let automatic: [Self] = [.autoMtf, .percentileAsinh]
+    static let manual: [Self] = [.linear, .asinh, .mtf, .ghs]
+    static let utility: [Self] = [.identity]
+
     var title: String {
         switch self {
-        case .auto: "Auto"
-        case .linkedAuto: "Linked Auto"
+        case .autoMtf: "Auto MTF"
+        case .percentileAsinh: "Percentile Asinh"
         case .linear: "Linear"
+        case .asinh: "Asinh"
+        case .mtf: "Midtones Transfer"
+        case .ghs: "Generalized Hyperbolic"
+        case .identity: "No Stretch"
         }
     }
 
     var help: String {
         switch self {
-        case .auto: "Stretch each RGB channel independently."
-        case .linkedAuto: "Use one shared automatic stretch for all RGB channels."
-        case .linear: "Map the native 16-bit RGB range directly to the display."
+        case .autoMtf:
+            "Choose an MTF curve from the image median and median absolute deviation."
+        case .percentileAsinh:
+            "Choose black and white points from image percentiles, then apply an asinh curve."
+        case .linear:
+            "Map explicit black and white points linearly to the display range."
+        case .asinh:
+            "Apply an asinh curve between explicit black and white points."
+        case .mtf:
+            "Apply explicit shadows, midtone, and highlights parameters."
+        case .ghs:
+            "Apply a manual Generalized Hyperbolic Stretch with protection boundaries."
+        case .identity:
+            "Clamp normalized FITS samples to the display range without a stretch curve."
+        }
+    }
+}
+
+enum FITSStretchColorStrategy: String, CaseIterable, Identifiable, Encodable {
+    case linked
+    case unlinked
+    case luminancePreserving = "luminance-preserving"
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .linked: "Linked Channels"
+        case .unlinked: "Per Channel"
+        case .luminancePreserving: "Preserve Luminance Color"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .linked:
+            "Analyze all channels together and apply one shared curve."
+        case .unlinked:
+            "Analyze and stretch each color channel independently."
+        case .luminancePreserving:
+            "Stretch Rec. 709 luminance while retaining RGB chromaticity."
+        }
+    }
+}
+
+struct FITSStretchConfiguration: Equatable, Encodable {
+    static let `default` = Self()
+
+    var type: FITSStretchType = .autoMtf
+    var colorStrategy: FITSStretchColorStrategy = .unlinked
+    var maxAnalysisSamples = 200_000
+
+    var targetMedian = 0.2
+    var shadowsClip = -2.8
+
+    var blackPercentile = 0.01
+    var whitePercentile = 0.995
+    var strength = 10.0
+
+    var black = 0.0
+    var white = 1.0
+
+    var shadows = 0.0
+    var midtone = 0.25
+    var highlights = 1.0
+
+    var stretchFactor = 1.0
+    var localIntensity = 0.0
+    var symmetryPoint = 0.0
+    var protectShadows = 0.0
+    var protectHighlights = 1.0
+
+    var validationMessage: String? {
+        let finiteValues = [
+            targetMedian, shadowsClip, blackPercentile, whitePercentile,
+            strength, black, white, shadows, midtone, highlights,
+            stretchFactor, localIntensity, symmetryPoint, protectShadows,
+            protectHighlights,
+        ]
+        guard finiteValues.allSatisfy(\.isFinite) else {
+            return "Stretch parameters must be finite numbers."
+        }
+        guard maxAnalysisSamples > 0 else {
+            return "Analysis samples must be greater than zero."
+        }
+
+        switch type {
+        case .autoMtf:
+            guard (0.0..<1.0).contains(targetMedian) else {
+                return "Target median must be between 0 and 1."
+            }
+            guard shadowsClip <= 0 else {
+                return "Shadows clipping must be zero or negative."
+            }
+        case .percentileAsinh:
+            guard (0.0...1.0).contains(blackPercentile),
+                  (0.0...1.0).contains(whitePercentile),
+                  whitePercentile > blackPercentile else {
+                return "White percentile must be greater than black percentile."
+            }
+            guard strength > 0 else { return "Asinh strength must be greater than zero." }
+        case .linear:
+            guard white > black else { return "White point must be greater than black point." }
+        case .asinh:
+            guard white > black else { return "White point must be greater than black point." }
+            guard strength > 0 else { return "Asinh strength must be greater than zero." }
+        case .mtf:
+            guard highlights > shadows else {
+                return "Highlights must be greater than shadows."
+            }
+            guard (0.0..<1.0).contains(midtone), midtone > 0 else {
+                return "Midtone must be between 0 and 1."
+            }
+        case .ghs:
+            guard white > black else { return "White point must be greater than black point." }
+            guard (0.0...20.0).contains(stretchFactor),
+                  (-5.0...15.0).contains(localIntensity),
+                  (0.0...1.0).contains(symmetryPoint),
+                  (0.0...symmetryPoint).contains(protectShadows),
+                  (symmetryPoint...1.0).contains(protectHighlights) else {
+                return "GHS requires 0 ≤ shadow protection ≤ symmetry ≤ highlight protection ≤ 1."
+            }
+        case .identity:
+            break
+        }
+        return nil
+    }
+
+    var jsonData: Data {
+        get throws {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            return try encoder.encode(self)
+        }
+    }
+
+    var cacheIdentifier: String {
+        guard let data = try? jsonData else { return "invalid-stretch-config" }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case model
+        case colorStrategy = "color_strategy"
+        case maxAnalysisSamples = "max_analysis_samples"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(StretchModelPayload(configuration: self), forKey: .model)
+        try container.encode(colorStrategy, forKey: .colorStrategy)
+        try container.encode(maxAnalysisSamples, forKey: .maxAnalysisSamples)
+    }
+}
+
+private struct StretchModelPayload: Encodable {
+    let configuration: FITSStretchConfiguration
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case targetMedian = "target_median"
+        case shadowsClip = "shadows_clip"
+        case blackPercentile = "black_percentile"
+        case whitePercentile = "white_percentile"
+        case strength
+        case black
+        case white
+        case shadows
+        case midtone
+        case highlights
+        case stretchFactor = "stretch_factor"
+        case localIntensity = "local_intensity"
+        case symmetryPoint = "symmetry_point"
+        case protectShadows = "protect_shadows"
+        case protectHighlights = "protect_highlights"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        let configuration = configuration
+        switch configuration.type {
+        case .autoMtf:
+            try container.encode("auto-mtf", forKey: .type)
+            try container.encode(configuration.targetMedian, forKey: .targetMedian)
+            try container.encode(configuration.shadowsClip, forKey: .shadowsClip)
+        case .percentileAsinh:
+            try container.encode("percentile-asinh", forKey: .type)
+            try container.encode(configuration.blackPercentile, forKey: .blackPercentile)
+            try container.encode(configuration.whitePercentile, forKey: .whitePercentile)
+            try container.encode(configuration.strength, forKey: .strength)
+        case .linear:
+            try container.encode("linear", forKey: .type)
+            try container.encode(configuration.black, forKey: .black)
+            try container.encode(configuration.white, forKey: .white)
+        case .asinh:
+            try container.encode("asinh", forKey: .type)
+            try container.encode(configuration.black, forKey: .black)
+            try container.encode(configuration.white, forKey: .white)
+            try container.encode(configuration.strength, forKey: .strength)
+        case .mtf:
+            try container.encode("mtf", forKey: .type)
+            try container.encode(configuration.shadows, forKey: .shadows)
+            try container.encode(configuration.midtone, forKey: .midtone)
+            try container.encode(configuration.highlights, forKey: .highlights)
+        case .ghs:
+            try container.encode("ghs", forKey: .type)
+            try container.encode(configuration.stretchFactor, forKey: .stretchFactor)
+            try container.encode(configuration.localIntensity, forKey: .localIntensity)
+            try container.encode(configuration.symmetryPoint, forKey: .symmetryPoint)
+            try container.encode(configuration.protectShadows, forKey: .protectShadows)
+            try container.encode(configuration.protectHighlights, forKey: .protectHighlights)
+            try container.encode(configuration.black, forKey: .black)
+            try container.encode(configuration.white, forKey: .white)
+        case .identity:
+            try container.encode("identity", forKey: .type)
         }
     }
 }
@@ -409,21 +633,38 @@ enum SeizaCore {
 
     static func render(
         url: URL,
-        targetMedian: Double = 0.2,
-        shadowsClip: Double = -2.8,
         maxDimension: UInt32 = 0,
-        rgbStretchMode: RGBStretchMode = .auto
+        stretchConfiguration: FITSStretchConfiguration = .default
     ) throws -> RenderedImage {
         var errorPointer: UnsafeMutablePointer<CChar>?
-        let handle = url.path.withCString { path in
-            seiza_rendered_image_open_with_rgb_stretch(
-                path,
-                targetMedian,
-                shadowsClip,
-                maxDimension,
-                rgbStretchMode.rawValue,
-                &errorPointer
+        let extensionName = url.pathExtension.lowercased()
+        let isFITS = ["fits", "fit", "fts"].contains(extensionName)
+        let handle: OpaquePointer?
+        if isFITS {
+            let configurationJSON = String(
+                decoding: try stretchConfiguration.jsonData,
+                as: UTF8.self
             )
+            handle = url.path.withCString { path in
+                configurationJSON.withCString { configuration in
+                    seiza_rendered_image_open_with_stretch_config(
+                        path,
+                        configuration,
+                        maxDimension,
+                        &errorPointer
+                    )
+                }
+            }
+        } else {
+            handle = url.path.withCString { path in
+                seiza_rendered_image_open(
+                    path,
+                    0.2,
+                    -2.8,
+                    maxDimension,
+                    &errorPointer
+                )
+            }
         }
         guard let handle else { throw cabiError(&errorPointer) }
         defer { seiza_rendered_image_free(handle) }

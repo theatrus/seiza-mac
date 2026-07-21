@@ -129,6 +129,41 @@ final class DisplayHistogramTests: XCTestCase {
             ).isValid
         )
     }
+
+    func testPlotScaleUsesPopulatedInteriorBinsInsteadOfClippedEndpoints() {
+        var bins = [UInt64](repeating: 0, count: ImageHistogram.binCount)
+        bins[0] = 1_000_000
+        for index in 1...100 {
+            bins[index] = UInt64(index)
+        }
+
+        let ceiling = HistogramPlotScale.ceiling(for: [bins])
+
+        XCTAssertGreaterThanOrEqual(ceiling, 90)
+        XCTAssertLessThanOrEqual(ceiling, 100)
+        XCTAssertEqual(
+            HistogramPlotScale.normalizedHeight(
+                count: UInt64(ceiling / 2),
+                ceiling: ceiling
+            ),
+            0.5,
+            accuracy: 0.02
+        )
+        XCTAssertEqual(
+            HistogramPlotScale.normalizedHeight(
+                count: 1_000_000,
+                ceiling: ceiling
+            ),
+            1
+        )
+    }
+
+    func testPlotScaleFallsBackToEndpointBinsForFullyClippedImages() {
+        var bins = [UInt64](repeating: 0, count: ImageHistogram.binCount)
+        bins[255] = 42
+
+        XCTAssertEqual(HistogramPlotScale.ceiling(for: [bins]), 42)
+    }
 }
 
 final class ImageExportTests: XCTestCase {
@@ -222,18 +257,67 @@ final class RenderBoundaryTests: XCTestCase {
         XCTAssertTrue(inputHistogram.isValid)
         XCTAssertEqual(inputHistogram.upperBound, 65_535)
         XCTAssertEqual(inputHistogram.red.reduce(0, +), 4)
+
+        for stretchType in FITSStretchType.allCases {
+            var configuration = FITSStretchConfiguration.default
+            configuration.type = stretchType
+            let variant = try SeizaCore.render(
+                url: url,
+                maxDimension: 4_096,
+                stretchConfiguration: configuration
+            )
+            XCTAssertEqual(variant.image.width, 2, stretchType.title)
+            XCTAssertEqual(variant.image.height, 2, stretchType.title)
+        }
     }
 }
 
-final class RGBStretchModeTests: XCTestCase {
-    func testCABIValuesAndUserFacingNamesStayStable() {
-        XCTAssertEqual(RGBStretchMode.allCases, [.auto, .linkedAuto, .linear])
-        XCTAssertEqual(RGBStretchMode.auto.rawValue, 0)
-        XCTAssertEqual(RGBStretchMode.linkedAuto.rawValue, 1)
-        XCTAssertEqual(RGBStretchMode.linear.rawValue, 2)
-        XCTAssertEqual(RGBStretchMode.auto.title, "Auto")
-        XCTAssertEqual(RGBStretchMode.linkedAuto.title, "Linked Auto")
-        XCTAssertEqual(RGBStretchMode.linear.title, "Linear")
+final class FITSStretchConfigurationTests: XCTestCase {
+    func testDefaultConfigurationMatchesTheUpstreamTaggedJSONSchema() throws {
+        let configuration = FITSStretchConfiguration.default
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: configuration.jsonData) as? [String: Any]
+        )
+        let model = try XCTUnwrap(json["model"] as? [String: Any])
+
+        XCTAssertEqual(model["type"] as? String, "auto-mtf")
+        XCTAssertEqual(model["target_median"] as? Double, 0.2)
+        XCTAssertEqual(model["shadows_clip"] as? Double, -2.8)
+        XCTAssertEqual(json["color_strategy"] as? String, "unlinked")
+        XCTAssertEqual(json["max_analysis_samples"] as? Int, 200_000)
+        XCTAssertNil(configuration.validationMessage)
+    }
+
+    func testStretchFamiliesRemainGroupedAndEncodeTheirUpstreamNames() throws {
+        XCTAssertEqual(FITSStretchType.automatic, [.autoMtf, .percentileAsinh])
+        XCTAssertEqual(FITSStretchType.manual, [.linear, .asinh, .mtf, .ghs])
+        XCTAssertEqual(FITSStretchType.utility, [.identity])
+
+        let expectedNames = [
+            "auto-mtf", "percentile-asinh", "linear", "asinh", "mtf", "ghs", "identity",
+        ]
+        let encodedNames = try FITSStretchType.allCases.map { type in
+            var configuration = FITSStretchConfiguration.default
+            configuration.type = type
+            let json = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: configuration.jsonData) as? [String: Any]
+            )
+            let model = try XCTUnwrap(json["model"] as? [String: Any])
+            return try XCTUnwrap(model["type"] as? String)
+        }
+        XCTAssertEqual(encodedNames, expectedNames)
+    }
+
+    func testInvalidDependentParametersAreRejectedBeforeRendering() {
+        var configuration = FITSStretchConfiguration.default
+        configuration.type = .ghs
+        configuration.symmetryPoint = 0.25
+        configuration.protectShadows = 0.5
+        XCTAssertNotNil(configuration.validationMessage)
+
+        configuration.protectShadows = 0.1
+        configuration.protectHighlights = 0.9
+        XCTAssertNil(configuration.validationMessage)
     }
 }
 
