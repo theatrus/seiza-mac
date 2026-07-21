@@ -101,9 +101,11 @@ git switch main
 git pull --ff-only origin main
 ```
 
-Wait for the resulting `main` CI run to pass. Confirm the merge contains the
-reviewed change range and that the Xcode marketing version exactly matches the
-planned tag.
+Wait for the resulting `main` CI validation and `Sign latest main DMG` job to
+pass. Download the `Seiza-latest-main` artifact, verify its checksum, and confirm
+the merge contains the reviewed change range and that the Xcode marketing
+version exactly matches the planned tag. This main artifact is an integration
+build; the annotated tag still creates the permanent versioned release.
 
 ## 5. Create and push the release tag
 

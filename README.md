@@ -80,12 +80,16 @@ swift scripts/generate-document-icon.swift
 [![CI](https://github.com/theatrus/seiza-mac/actions/workflows/ci.yml/badge.svg)](https://github.com/theatrus/seiza-mac/actions/workflows/ci.yml)
 
 The repository exercises the Rust rendering/C ABI with unit tests and the
-native application with XCTest. Main-branch CI checks Rust formatting and
+native application with XCTest. Every pull request checks Rust formatting and
 Clippy warnings, runs both test suites, validates the app and extension property
-lists, builds a universal Release application, packages an unsigned development
-DMG, and asks macOS to verify the resulting disk image. Pull requests do not run
-automatically; after owner review, an owner-dispatched workflow builds a signed,
-notarized DMG from the exact approved commit for iteration.
+lists, builds a universal Release application, and verifies an unsigned
+development DMG. Pull-request jobs have read-only repository access and never
+receive signing secrets.
+
+A push to the official `main` branch runs the same checks, then an isolated job
+enters the protected `signing` environment. It Developer ID signs and notarizes
+the validated app and DMG and uploads `Seiza-latest-main` as a 30-day Actions
+artifact. Versioned downloads continue to come from tagged GitHub Releases.
 
 ```sh
 cargo test --workspace --locked

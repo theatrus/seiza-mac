@@ -11,13 +11,18 @@ a GitHub release. The tag must match the Xcode `MARKETING_VERSION`. The release
 job only runs in `theatrus/seiza-mac` for a trusted tag push and enters the
 protected GitHub `signing` environment before it can read credentials.
 
-Normal CI is unsigned and runs on pushes to `main`. Opening or updating a pull
-request does not start CI. A signed PR build only starts when the repository
-owner explicitly dispatches the reviewed-PR workflow, which validates that the
-current head commit is the exact commit the owner approved before it checks out
-or executes PR code. For owner-authored PRs, the owner's manual dispatch is the
-explicit authorization because GitHub does not allow authors to approve their
-own pull requests.
+Normal CI runs for every pull request and push to `main`. Its validation job is
+unsigned, has read-only repository access, and never receives signing secrets.
+After validation passes on an official `main` push, a separate job enters the
+protected `signing` environment and uploads a signed, notarized
+`Seiza-latest-main` DMG artifact. The signing job is skipped for every pull
+request, including pull requests from forks.
+
+An optional signed PR build only starts when the repository owner explicitly
+dispatches the reviewed-PR workflow. It validates that the current head commit
+is the exact commit the owner approved before it checks out or executes PR code.
+For owner-authored PRs, the owner's manual dispatch is the explicit authorization
+because GitHub does not allow authors to approve their own pull requests.
 
 ## Apple credentials
 
@@ -66,9 +71,10 @@ App ID/capability and Developer ID provisioning profile at that time.
 
 In GitHub, open **Settings → Environments**, create an environment named
 `signing`, and select **Selected branches and tags**. Allow the `main` branch
-for owner-dispatched reviewed PR builds and the `v*.*.*` tag pattern for
-releases. A required reviewer is recommended as an additional gate. Add these
-six **environment secrets** to that environment, not to a checked-in file:
+for the latest-main and owner-dispatched reviewed PR builds, and allow the
+`v*.*.*` tag pattern for releases. A required reviewer is recommended as an
+additional gate. Add these six **environment secrets** to that environment, not
+to a checked-in file:
 
 - `APPLE_BUILD_CERTIFICATE`: base64-encoded Developer ID Application `.p12`;
 - `APPLE_BUILD_CERTIFICATE_PASSWORD`: password chosen when exporting the `.p12`;
@@ -113,6 +119,20 @@ The workflow then:
 6. build and Developer ID sign the DMG;
 7. submit, staple, validate, and Gatekeeper-assess the DMG;
 8. create checksums only after stapling, then publish the exact verified files.
+
+## Latest main build
+
+The `CI` workflow runs the complete unsigned validation suite for pull requests
+and `main`. Only a successful push to `main` in `theatrus/seiza-mac` can upload
+the validated unsigned application for the protected signing job. That job
+checks out trusted signing inputs at the same commit, validates the application
+and Quick Look bundle identifiers and universal binary, signs and notarizes the
+app and DMG, and uploads `Seiza-latest-main` with its SHA-256 checksum for 30
+days. It does not create or replace a GitHub Release.
+
+If the `signing` environment requires reviewers, approve that deployment to
+finish the latest-main artifact. A newer `main` push cancels the older in-flight
+CI run so the workflow concentrates signing capacity on the newest commit.
 
 ## Reviewed pull-request builds
 
