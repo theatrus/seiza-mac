@@ -25,11 +25,12 @@ Electron, web view, or local server.
 | Folder browsing | Available | Browse mixed-format folders with a thumbnail drawer, local thumbnail cache, and arrow-key navigation. |
 | FITS display | Available | View mono, planar RGB, and Bayer/OSC data with fast automatic stretching. |
 | RGB controls | Available | Choose per-channel Auto, color-preserving Linked Auto, or Linear display. |
-| Zoom and inspection | Available | Fit to window, pan, pinch around the pointer, and inspect FITS headers and image statistics. |
+| Zoom and inspection | Available | Fit to window, pan, pinch around the pointer, and compare pre- and post-stretch histograms alongside headers and statistics. |
 | Local plate solving | Available | Run a blind solve only when you press Solve. No image is uploaded. |
 | Catalog setup | Available | Download, verify, install, or repair solver catalogs in Settings with visible progress. |
 | Solver overlays | Available | Toggle named and field stars, individual deep-sky catalogs, transients, comets, asteroids, detections, coordinate grid, and field center. |
 | Object outlines | Available | Draw detailed OpenNGC contours with catalog ellipses as a fallback. |
+| Image export | Available | Export the displayed image as PNG, JPEG, or TIFF, with or without the currently visible solve overlays. |
 | Finder Quick Look preview | Available | Select a FITS file in Finder and press Space to see a stretched preview without opening Seiza. |
 | Finder file support | Available | Register `.fits`, `.fit`, and `.fts` files with a dedicated FITS document icon. |
 | Finder icon thumbnails | Planned | Show image content on FITS file icons. Spacebar previews already work through Quick Look. |

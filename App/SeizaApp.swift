@@ -29,6 +29,12 @@ struct SeizaApp: App {
                 }
                 .keyboardShortcut("o")
             }
+            CommandGroup(after: .saveItem) {
+                Button("Export…") {
+                    appDelegate.exportDocument(nil)
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+            }
         }
 
         Settings {
@@ -40,6 +46,7 @@ struct SeizaApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private final class DocumentWindowSession {
         var controller: NSWindowController?
+        let exportCoordinator = ImageExportCoordinator()
         private var accessedURLs: [URL] = []
 
         init(accessURLs: [URL]) {
@@ -91,6 +98,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         open(panel.urls)
     }
 
+    @objc func exportDocument(_ sender: Any?) {
+        guard
+            let window = NSApp.keyWindow ?? NSApp.mainWindow,
+            let session = documentWindows.values.first(where: {
+                $0.controller?.window === window
+            })
+        else {
+            NSSound.beep()
+            return
+        }
+        session.exportCoordinator.requestExport()
+    }
+
     func open(_ url: URL) {
         open([url])
     }
@@ -120,6 +140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installViewer(
             imageURLs: imageURLs,
             openedDirectory: containsDirectory(request.roots),
+            exportCoordinator: session.exportCoordinator,
             in: window
         )
         window.setContentSize(NSSize(width: 1120, height: 760))
@@ -174,6 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installViewer(
             imageURLs: imageURLs,
             openedDirectory: containsDirectory(request.roots),
+            exportCoordinator: replacement.exportCoordinator,
             in: window
         )
         window.makeKeyAndOrderFront(nil)
@@ -186,11 +208,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func installViewer(
         imageURLs: [URL],
         openedDirectory: Bool,
+        exportCoordinator: ImageExportCoordinator,
         in window: NSWindow
     ) {
         let view = ViewerView(
             urls: imageURLs,
             showsImageBrowser: openedDirectory,
+            exportCoordinator: exportCoordinator,
             onSelectionChange: { [weak window] selectedURL in
                 window?.title = selectedURL.lastPathComponent
             },
