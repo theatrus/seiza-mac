@@ -171,7 +171,7 @@ struct SettingsView: View {
                     progressView(progress)
                 }
 
-                Text("Downloads are SHA-256 verified and safe to retry. After downloading, Seiza reads every large catalog from beginning to end while installing it. This verification phase can take several minutes and may appear slower than the download itself.")
+                Text("Downloads are SHA-256 verified and safe to retry. Seiza keeps immutable verified catalog files in its cache and installs them with hard links when possible, avoiding a second copy and hash pass. Cross-filesystem installs fall back to a verified copy.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -252,7 +252,7 @@ struct SettingsView: View {
 
             if progress.phase == .verifying {
                 Label(
-                    "Verifying SHA-256 across the complete catalog. Large files can remain in this phase for several minutes.",
+                    "Verifying SHA-256 integrity for cached catalog data.",
                     systemImage: "checkmark.shield"
                 )
                 .font(.callout)

@@ -15,7 +15,7 @@
 - source-resolution PNG, JPEG, and TIFF export with optional visible solve overlays
 - signed, notarized Apple-silicon development distribution
 - managed, retry-safe catalog download and repair UI with readiness checks and
-  byte-level SHA-256 verification progress
+  verified-cache, hard-link-aware installation progress
 
 ## Phase 2 — serious inspection
 

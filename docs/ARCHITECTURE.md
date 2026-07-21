@@ -55,14 +55,14 @@ cannot be accidentally shared.
 The main app also exposes catalog readiness and setup through the C ABI. Rust's
 verified Seiza download bundles remain the source of dataset manifests and
 cached artifacts. Setup reports typed JSON progress to Swift for manifest,
-download, SHA-256 verification, installation, and completion phases. The final
-materialization pass hashes each complete file while copying it into place, so
-the Settings UI continues to show byte-level progress during the otherwise slow
-post-download verification step. Catalog setup runs on a utility queue and is
-owned by a persistent controller, allowing the Settings window to close without
-canceling it. The sandboxed app has outbound-network and user-selected
-read/write entitlements; selected directories are retained as security-scoped
-bookmarks.
+download, SHA-256 verification, installation, and completion phases. Catalog
+materialization uses the download crate's immutable cache directly: it hard
+links verified cache objects into the configured directory on the same file
+system, avoiding a second copy and hash pass, and falls back to a verified copy
+across file systems. Catalog setup runs on a utility queue and is owned by a
+persistent controller, allowing the Settings window to close without canceling
+it. The sandboxed app has outbound-network and user-selected read/write
+entitlements; selected directories are retained as security-scoped bookmarks.
 
 ## Data and provenance
 

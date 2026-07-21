@@ -122,10 +122,10 @@ while setup continues.
 
 ![Seiza catalog download and verification controls in Settings](docs/images/seiza-catalog-setup.jpg)
 
-After the transfer finishes, Seiza reads every large catalog from beginning to
-end to verify its SHA-256 digest. This phase can take several minutes, but its
-byte counter continues to report progress. Setup is safe to retry and will
-reuse already verified downloads.
+Downloads are SHA-256 verified into Seiza's immutable cache. Setup then hard
+links those verified files into the selected catalog directory when possible,
+avoiding the previous second copy and full hash pass. Cross-filesystem installs
+fall back to a verified copy. Setup is safe to retry and reuses cached data.
 
 The equivalent command-line setup is:
 
