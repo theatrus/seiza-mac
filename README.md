@@ -1,4 +1,4 @@
-# Seiza for macOS
+# Seiza for Mac
 
 **A fast, native FITS and XISF viewer and plate solver for the Mac.**
 
