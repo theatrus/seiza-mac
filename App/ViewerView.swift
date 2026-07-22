@@ -2,6 +2,43 @@ import AppKit
 import Combine
 import SwiftUI
 
+enum ViewportMath {
+    static func clampedOrigin(
+        _ requested: CGPoint,
+        canvasSize: CGSize,
+        viewportSize: CGSize
+    ) -> CGPoint {
+        CGPoint(
+            x: min(max(requested.x, 0), max(canvasSize.width - viewportSize.width, 0)),
+            y: min(max(requested.y, 0), max(canvasSize.height - viewportSize.height, 0))
+        )
+    }
+
+    static func pannedOrigin(
+        from start: CGPoint,
+        translation: CGSize,
+        canvasSize: CGSize,
+        viewportSize: CGSize
+    ) -> CGPoint {
+        clampedOrigin(
+            CGPoint(
+                x: start.x - translation.width,
+                y: start.y - translation.height
+            ),
+            canvasSize: canvasSize,
+            viewportSize: viewportSize
+        )
+    }
+
+    static func wheelZoomFactor(deltaY: CGFloat) -> Double {
+        pow(1.12, Double(min(max(deltaY, -4), 4)))
+    }
+
+    static func nearlyEqual(_ lhs: CGPoint, _ rhs: CGPoint) -> Bool {
+        abs(lhs.x - rhs.x) < 0.75 && abs(lhs.y - rhs.y) < 0.75
+    }
+}
+
 enum ImageProcessingClipboard {
     static let pasteboardType = NSPasteboard.PasteboardType(
         "fyi.seiza.mac.processing-recipe"
@@ -490,6 +527,8 @@ private struct ImagePageView: View {
     @State private var pinchAnchor: ZoomAnchor?
     @State private var scrollPosition = ScrollPosition()
     @State private var visibleContentOrigin = CGPoint.zero
+    @State private var requestedContentOrigin: CGPoint?
+    @State private var dragStartOrigin: CGPoint?
     @Binding private var showInspector: Bool
     @State private var viewportSize = CGSize.zero
     @State private var isFitToWindow = true
@@ -1250,6 +1289,11 @@ private struct ImagePageView: View {
                 viewport: geometry.size,
                 zoom: zoom
             )
+            let effectiveOrigin = requestedContentOrigin ?? visibleContentOrigin
+            let scrollCorrection = CGSize(
+                width: visibleContentOrigin.x - effectiveOrigin.x,
+                height: visibleContentOrigin.y - effectiveOrigin.y
+            )
 
             ScrollView([.horizontal, .vertical]) {
                 ZStack(alignment: .topLeading) {
@@ -1284,7 +1328,10 @@ private struct ImagePageView: View {
                         }
                     }
                     .frame(width: metrics.imageSize.width, height: metrics.imageSize.height)
-                    .offset(x: metrics.imageOrigin.x, y: metrics.imageOrigin.y)
+                    .offset(
+                        x: metrics.imageOrigin.x + scrollCorrection.width,
+                        y: metrics.imageOrigin.y + scrollCorrection.height
+                    )
                 }
                 .frame(width: metrics.canvasSize.width, height: metrics.canvasSize.height)
             }
@@ -1293,8 +1340,34 @@ private struct ImagePageView: View {
                 geometry.visibleRect.origin
             } action: { _, newOrigin in
                 visibleContentOrigin = newOrigin
+                if let requestedContentOrigin,
+                   ViewportMath.nearlyEqual(newOrigin, requestedContentOrigin) {
+                    self.requestedContentOrigin = nil
+                }
             }
             .background(.black.opacity(0.94))
+            .background {
+                ViewportInputMonitor(
+                    isEnabled: !isPickingSymmetryPoint,
+                    onWheelZoom: { deltaY, location in
+                        zoomWithWheel(
+                            deltaY: deltaY,
+                            at: location,
+                            image: image,
+                            viewport: geometry.size
+                        )
+                    },
+                    onDragBegan: beginDragging,
+                    onDragChanged: { translation in
+                        dragViewport(
+                            by: translation,
+                            image: image,
+                            viewport: geometry.size
+                        )
+                    },
+                    onDragEnded: endDragging
+                )
+            }
             .simultaneousGesture(pinchGesture(for: image, viewport: geometry.size))
             .overlay(alignment: .bottomTrailing) {
                 if showsLoadingIndicator {
@@ -1487,12 +1560,13 @@ private struct ImagePageView: View {
             y: min(max(location.y, 0), viewport.height)
         )
         let metrics = canvasMetrics(for: image, viewport: viewport, zoom: zoom)
+        let contentOrigin = requestedContentOrigin ?? visibleContentOrigin
         return ZoomAnchor(
             viewportPoint: viewportPoint,
             imagePoint: CGPoint(
-                x: (visibleContentOrigin.x + viewportPoint.x - metrics.imageOrigin.x)
+                x: (contentOrigin.x + viewportPoint.x - metrics.imageOrigin.x)
                     / metrics.imageSize.width,
-                y: (visibleContentOrigin.y + viewportPoint.y - metrics.imageOrigin.y)
+                y: (contentOrigin.y + viewportPoint.y - metrics.imageOrigin.y)
                     / metrics.imageSize.height
             )
         )
@@ -1505,7 +1579,6 @@ private struct ImagePageView: View {
         viewport: CGSize
     ) {
         let newZoom = clampedZoom(requestedZoom)
-        zoom = newZoom
         let metrics = canvasMetrics(for: image, viewport: viewport, zoom: newZoom)
         let requestedOrigin = CGPoint(
             x: metrics.imageOrigin.x
@@ -1515,21 +1588,68 @@ private struct ImagePageView: View {
                 + anchor.imagePoint.y * metrics.imageSize.height
                 - anchor.viewportPoint.y
         )
-        let maximumOrigin = CGPoint(
-            x: max(metrics.canvasSize.width - viewport.width, 0),
-            y: max(metrics.canvasSize.height - viewport.height, 0)
+        let origin = ViewportMath.clampedOrigin(
+            requestedOrigin,
+            canvasSize: metrics.canvasSize,
+            viewportSize: viewport
         )
-        scrollPosition.scrollTo(
-            point: CGPoint(
-                x: min(max(requestedOrigin.x, 0), maximumOrigin.x),
-                y: min(max(requestedOrigin.y, 0), maximumOrigin.y)
-            )
-        )
+        requestedContentOrigin = ViewportMath.nearlyEqual(origin, visibleContentOrigin)
+            ? nil
+            : origin
+        zoom = newZoom
+        scrollPosition.scrollTo(point: origin)
     }
 
     private func scrollToOrigin() {
-        visibleContentOrigin = .zero
+        requestedContentOrigin = ViewportMath.nearlyEqual(visibleContentOrigin, .zero)
+            ? nil
+            : .zero
         scrollPosition.scrollTo(point: .zero)
+    }
+
+    private func zoomWithWheel(
+        deltaY: CGFloat,
+        at location: CGPoint,
+        image: CGImage,
+        viewport: CGSize
+    ) {
+        guard abs(deltaY) > .ulpOfOne else { return }
+        isFitToWindow = false
+        let anchor = makeZoomAnchor(at: location, image: image, viewport: viewport)
+        applyZoom(
+            zoom * ViewportMath.wheelZoomFactor(deltaY: deltaY),
+            around: anchor,
+            image: image,
+            viewport: viewport
+        )
+    }
+
+    private func beginDragging() {
+        dragStartOrigin = requestedContentOrigin ?? visibleContentOrigin
+    }
+
+    private func dragViewport(
+        by translation: CGSize,
+        image: CGImage,
+        viewport: CGSize
+    ) {
+        guard let dragStartOrigin else { return }
+        isFitToWindow = false
+        let metrics = canvasMetrics(for: image, viewport: viewport, zoom: zoom)
+        let origin = ViewportMath.pannedOrigin(
+            from: dragStartOrigin,
+            translation: translation,
+            canvasSize: metrics.canvasSize,
+            viewportSize: viewport
+        )
+        requestedContentOrigin = ViewportMath.nearlyEqual(origin, visibleContentOrigin)
+            ? nil
+            : origin
+        scrollPosition.scrollTo(point: origin)
+    }
+
+    private func endDragging() {
+        dragStartOrigin = nil
     }
 
     private func canvasMetrics(
@@ -1635,6 +1755,128 @@ private struct ImagePageView: View {
 
     private var hasCatalogOutlines: Bool {
         solvedSolution?.objectPositions.contains { !$0.outlines.isEmpty } == true
+    }
+}
+
+private struct ViewportInputMonitor: NSViewRepresentable {
+    let isEnabled: Bool
+    let onWheelZoom: (CGFloat, CGPoint) -> Void
+    let onDragBegan: () -> Void
+    let onDragChanged: (CGSize) -> Void
+    let onDragEnded: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> PassthroughView {
+        let view = PassthroughView()
+        context.coordinator.view = view
+        context.coordinator.installMonitor()
+        return view
+    }
+
+    func updateNSView(_ nsView: PassthroughView, context: Context) {
+        context.coordinator.view = nsView
+        context.coordinator.isEnabled = isEnabled
+        context.coordinator.onWheelZoom = onWheelZoom
+        context.coordinator.onDragBegan = onDragBegan
+        context.coordinator.onDragChanged = onDragChanged
+        context.coordinator.onDragEnded = onDragEnded
+    }
+
+    static func dismantleNSView(_ nsView: PassthroughView, coordinator: Coordinator) {
+        coordinator.removeMonitor()
+    }
+
+    final class PassthroughView: NSView {
+        override var isFlipped: Bool { true }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            nil
+        }
+    }
+
+    @MainActor
+    final class Coordinator {
+        weak var view: PassthroughView?
+        var isEnabled = true
+        var onWheelZoom: (CGFloat, CGPoint) -> Void = { _, _ in }
+        var onDragBegan: () -> Void = {}
+        var onDragChanged: (CGSize) -> Void = { _ in }
+        var onDragEnded: () -> Void = {}
+
+        private var monitor: Any?
+        private var dragStart: CGPoint?
+
+        func installMonitor() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.scrollWheel, .leftMouseDown, .leftMouseDragged, .leftMouseUp]
+            ) { [weak self] event in
+                self?.handle(event) ?? event
+            }
+        }
+
+        func removeMonitor() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
+            monitor = nil
+            dragStart = nil
+        }
+
+        private func handle(_ event: NSEvent) -> NSEvent? {
+            guard isEnabled, let view, event.window === view.window else {
+                if event.type == .leftMouseUp, dragStart != nil {
+                    dragStart = nil
+                    onDragEnded()
+                }
+                return event
+            }
+
+            let location = view.convert(event.locationInWindow, from: nil)
+            switch event.type {
+            case .scrollWheel:
+                guard view.bounds.contains(location), !event.hasPreciseScrollingDeltas else {
+                    return event
+                }
+                onWheelZoom(event.scrollingDeltaY, location)
+                return nil
+            case .leftMouseDown:
+                guard view.bounds.contains(location), !isOverScroller(event, in: view) else {
+                    return event
+                }
+                dragStart = location
+                onDragBegan()
+                return nil
+            case .leftMouseDragged:
+                guard let dragStart else { return event }
+                onDragChanged(
+                    CGSize(
+                        width: location.x - dragStart.x,
+                        height: location.y - dragStart.y
+                    )
+                )
+                return nil
+            case .leftMouseUp:
+                guard dragStart != nil else { return event }
+                dragStart = nil
+                onDragEnded()
+                return nil
+            default:
+                return event
+            }
+        }
+
+        private func isOverScroller(_ event: NSEvent, in view: NSView) -> Bool {
+            var hitView = view.window?.contentView?.hitTest(event.locationInWindow)
+            while let current = hitView {
+                if current is NSScroller { return true }
+                hitView = current.superview
+            }
+            return false
+        }
     }
 }
 

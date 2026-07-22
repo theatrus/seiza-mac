@@ -67,6 +67,41 @@ final class ImageCollectionTests: XCTestCase {
     }
 }
 
+final class ViewportMathTests: XCTestCase {
+    func testPanTracksMouseMotionAndClampsToCanvas() {
+        let canvas = CGSize(width: 1_200, height: 900)
+        let viewport = CGSize(width: 400, height: 300)
+
+        XCTAssertEqual(
+            ViewportMath.pannedOrigin(
+                from: CGPoint(x: 300, y: 250),
+                translation: CGSize(width: 80, height: -40),
+                canvasSize: canvas,
+                viewportSize: viewport
+            ),
+            CGPoint(x: 220, y: 290)
+        )
+        XCTAssertEqual(
+            ViewportMath.pannedOrigin(
+                from: .zero,
+                translation: CGSize(width: 80, height: 40),
+                canvasSize: canvas,
+                viewportSize: viewport
+            ),
+            .zero
+        )
+    }
+
+    func testWheelZoomDirectionAndStepAreBounded() {
+        XCTAssertGreaterThan(ViewportMath.wheelZoomFactor(deltaY: 1), 1)
+        XCTAssertLessThan(ViewportMath.wheelZoomFactor(deltaY: -1), 1)
+        XCTAssertEqual(
+            ViewportMath.wheelZoomFactor(deltaY: 100),
+            ViewportMath.wheelZoomFactor(deltaY: 4)
+        )
+    }
+}
+
 final class DocumentRegistrationTests: XCTestCase {
     func testAstronomyRegistrationsUseDedicatedDocumentIcon() throws {
         let documentTypes = try XCTUnwrap(
@@ -484,6 +519,39 @@ final class RenderBoundaryTests: XCTestCase {
         XCTAssertTrue(model.supportsAstronomyProcessing)
     }
 
+    func testPlanarColorXISFDoesNotAddColoredEdgePixels() throws {
+        let pixelCount = 12
+        let url = try writeSyntheticXISF(
+            width: 4,
+            height: 3,
+            planes: 3,
+            colorSpace: "RGB",
+            values: Array(repeating: 0.1, count: pixelCount)
+                + Array(repeating: 0.5, count: pixelCount)
+                + Array(repeating: 0.9, count: pixelCount)
+        )
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let rendered = try SeizaCore.render(
+            url: url,
+            processing: FITSImageProcessingConfiguration(
+                stretchStack: FITSStretchStack(stages: [.identity]),
+                extractsBackground: false
+            )
+        )
+        let rgba = try XCTUnwrap(rendered.image.dataProvider?.data as Data?)
+        XCTAssertEqual(rgba.count, pixelCount * 4)
+        let bytes = Array(rgba)
+        let pixels = stride(from: 0, to: bytes.count, by: 4).map {
+            Array(bytes[$0..<$0 + 4])
+        }
+        let reference = try XCTUnwrap(pixels.first)
+        XCTAssertTrue(pixels.allSatisfy { $0 == reference })
+        XCTAssertLessThan(reference[0], reference[1])
+        XCTAssertLessThan(reference[1], reference[2])
+        XCTAssertEqual(reference[3], 255)
+    }
+
     func testBackgroundExtractionRunsBeforeStretchingThroughSwiftBoundary() throws {
         let width = 96
         let height = 72
@@ -759,9 +827,11 @@ final class RenderBoundaryTests: XCTestCase {
     private func writeSyntheticXISF(
         width: Int,
         height: Int,
+        planes: Int = 1,
+        colorSpace: String = "Gray",
         values: [Float32]
     ) throws -> URL {
-        XCTAssertEqual(values.count, width * height)
+        XCTAssertEqual(values.count, width * height * planes)
         var samples = Data()
         for value in values {
             var bitPattern = value.bitPattern.littleEndian
@@ -769,7 +839,7 @@ final class RenderBoundaryTests: XCTestCase {
         }
 
         let imageTemplate = """
-        <Image id="image0" geometry="\(width):\(height):1" sampleFormat="Float32" bounds="0:1" colorSpace="Gray" location="attachment:@OFFSET@:\(samples.count)"><Property id="Observation:Object:Name" type="String">M42</Property></Image>
+        <Image id="image0" geometry="\(width):\(height):\(planes)" sampleFormat="Float32" bounds="0:1" colorSpace="\(colorSpace)" location="attachment:@OFFSET@:\(samples.count)"><Property id="Observation:Object:Name" type="String">M42</Property></Image>
         """
         var attachmentOffset = 0
         var header = ""
