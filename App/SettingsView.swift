@@ -7,6 +7,7 @@ final class CatalogSetupController: ObservableObject {
     @Published private(set) var status: CatalogStatus?
     @Published private(set) var progress: CatalogSetupProgress?
     @Published private(set) var isRunning = false
+    @Published private(set) var isRefreshing = false
     @Published private(set) var errorMessage: String?
 
     private var statusGeneration = 0
@@ -19,6 +20,7 @@ final class CatalogSetupController: ObservableObject {
         statusGeneration &+= 1
         let generation = statusGeneration
         let catalogURL = CatalogAccess.resolve()
+        isRefreshing = true
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let accessing = catalogURL?.startAccessingSecurityScopedResource() ?? false
             defer {
@@ -27,6 +29,7 @@ final class CatalogSetupController: ObservableObject {
             let result = Result { try SeizaCore.catalogStatus(catalogDirectory: catalogURL) }
             DispatchQueue.main.async {
                 guard let self, self.statusGeneration == generation else { return }
+                self.isRefreshing = false
                 switch result {
                 case .success(let status):
                     self.status = status
@@ -86,6 +89,48 @@ final class CatalogSetupController: ObservableObject {
     private init() {}
 }
 
+struct CatalogComponentDisplay: Identifiable, Equatable {
+    let id: String
+    let title: String
+    let available: Bool
+    let path: String?
+
+    static func entries(from status: CatalogStatus) -> [CatalogComponentDisplay] {
+        [
+            CatalogComponentDisplay(
+                id: "stars",
+                title: "Star catalog",
+                available: status.starCatalog.available,
+                path: status.starCatalog.path
+            ),
+            CatalogComponentDisplay(
+                id: "blind-index",
+                title: "Blind index",
+                available: status.blindIndex.available,
+                path: status.blindIndex.path
+            ),
+            CatalogComponentDisplay(
+                id: "objects",
+                title: "Deep-sky objects",
+                available: status.objects.available,
+                path: status.objects.path
+            ),
+            CatalogComponentDisplay(
+                id: "transients",
+                title: "Transients",
+                available: status.transients.available,
+                path: status.transients.path
+            ),
+            CatalogComponentDisplay(
+                id: "minor-bodies",
+                title: "Minor bodies",
+                available: status.minorBodies.available,
+                path: status.minorBodies.path
+            ),
+        ]
+    }
+}
+
 struct SettingsView: View {
     @AppStorage("catalogDirectory") private var catalogDirectory = ""
     @StateObject private var setup = CatalogSetupController.shared
@@ -103,7 +148,7 @@ struct SettingsView: View {
                             .truncationMode(.middle)
                             .textSelection(.enabled)
                         Button("Choose…", action: chooseCatalogDirectory)
-                            .disabled(setup.isRunning)
+                            .disabled(setup.isRunning || setup.isRefreshing)
                         if !catalogDirectory.isEmpty {
                             Button("Use Default") {
                                 CatalogAccess.reset()
@@ -112,7 +157,7 @@ struct SettingsView: View {
                                 setup.clearError()
                                 setup.refreshStatus()
                             }
-                            .disabled(setup.isRunning)
+                            .disabled(setup.isRunning || setup.isRefreshing)
                         }
                     }
                 }
@@ -132,12 +177,53 @@ struct SettingsView: View {
                             missingText: "Incomplete"
                         )
                     }
+
+                    Divider()
+
+                    ForEach(CatalogComponentDisplay.entries(from: status)) { component in
+                        LabeledContent(component.title) {
+                            VStack(alignment: .trailing, spacing: 2) {
+                                Label(
+                                    component.available ? "Ready" : "Not installed",
+                                    systemImage: component.available
+                                        ? "checkmark.circle.fill"
+                                        : "exclamationmark.circle.fill"
+                                )
+                                .foregroundStyle(component.available ? .green : .orange)
+
+                                if let path = component.path, !path.isEmpty {
+                                    Text(NSString(string: path).abbreviatingWithTildeInPath)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                        .textSelection(.enabled)
+                                }
+                            }
+                        }
+                    }
                 } else {
                     LabeledContent("Status") {
                         ProgressView()
                             .controlSize(.small)
                             .accessibilityLabel("Checking catalogs")
                     }
+                }
+
+                HStack {
+                    Spacer()
+                    Button(action: setup.refreshStatus) {
+                        HStack(spacing: 6) {
+                            if setup.isRefreshing {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(systemName: "arrow.clockwise")
+                            }
+                            Text("Refresh Status")
+                        }
+                    }
+                    .disabled(setup.isRunning || setup.isRefreshing)
                 }
             }
 

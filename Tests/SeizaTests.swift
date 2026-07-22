@@ -67,6 +67,142 @@ final class ImageCollectionTests: XCTestCase {
     }
 }
 
+final class ViewportMathTests: XCTestCase {
+    func testPanTracksMouseMotionAndClampsToCanvas() {
+        let canvas = CGSize(width: 1_200, height: 900)
+        let viewport = CGSize(width: 400, height: 300)
+
+        XCTAssertEqual(
+            ViewportMath.pannedOrigin(
+                from: CGPoint(x: 300, y: 250),
+                translation: CGSize(width: 80, height: -40),
+                canvasSize: canvas,
+                viewportSize: viewport
+            ),
+            CGPoint(x: 220, y: 290)
+        )
+        XCTAssertEqual(
+            ViewportMath.pannedOrigin(
+                from: .zero,
+                translation: CGSize(width: 80, height: 40),
+                canvasSize: canvas,
+                viewportSize: viewport
+            ),
+            .zero
+        )
+    }
+
+    func testWheelZoomDirectionAndStepAreBounded() {
+        XCTAssertGreaterThan(ViewportMath.wheelZoomFactor(deltaY: 1), 1)
+        XCTAssertLessThan(ViewportMath.wheelZoomFactor(deltaY: -1), 1)
+        XCTAssertEqual(
+            ViewportMath.wheelZoomFactor(deltaY: 100),
+            ViewportMath.wheelZoomFactor(deltaY: 4)
+        )
+    }
+}
+
+final class ImageHeaderToolsTests: XCTestCase {
+    func testHeadersFilterByKeyOrValueAndCopyInDisplayOrder() {
+        let headers: [String: JSONValue] = [
+            "OBJECT": .string("North America Nebula"),
+            "FILTER": .string("H-alpha"),
+            "EXPTIME": .number(300),
+        ]
+
+        XCTAssertEqual(
+            ImageHeaderTools.entries(from: headers, matching: "").map(\.key),
+            ["EXPTIME", "FILTER", "OBJECT"]
+        )
+        XCTAssertEqual(
+            ImageHeaderTools.entries(from: headers, matching: "filter"),
+            [ImageHeaderEntry(key: "FILTER", value: "H-alpha")]
+        )
+
+        let valueMatch = ImageHeaderTools.entries(from: headers, matching: "nebula")
+        XCTAssertEqual(
+            valueMatch,
+            [ImageHeaderEntry(key: "OBJECT", value: "North America Nebula")]
+        )
+        XCTAssertEqual(
+            ImageHeaderTools.copyText(for: valueMatch),
+            "OBJECT = North America Nebula"
+        )
+    }
+}
+
+final class WCSFileWriterTests: XCTestCase {
+    func testWritesHeaderOnlyFITSWCSWithSIPCards() throws {
+        let wcs = WCSResult(
+            crval: [123.456, -22.5],
+            crpix: [99, 49],
+            cd: [[-0.001, 0.0002], [0.0001, 0.001]],
+            sip: SIPResult(
+                order: 2,
+                a: [1e-6, 2e-6, 3e-6],
+                b: [4e-6, 5e-6, 6e-6],
+                ap: [1e-7, 2e-7, 3e-7, 4e-7, 5e-7, 6e-7],
+                bp: [7e-7, 8e-7, 9e-7, 1e-6, 2e-6, 3e-6]
+            )
+        )
+
+        let data = try WCSFileWriter.data(for: wcs)
+        XCTAssertEqual(data.count, 5_760)
+        XCTAssertEqual(data.count % 2_880, 0)
+        XCTAssertEqual(cardValue("SIMPLE", in: data), "T")
+        XCTAssertEqual(cardValue("NAXIS", in: data), "0")
+        XCTAssertEqual(cardValue("CTYPE1", in: data), "'RA---TAN-SIP'")
+        XCTAssertEqual(cardValue("CTYPE2", in: data), "'DEC--TAN-SIP'")
+        XCTAssertEqual(cardValue("CRPIX1", in: data), "1.0000000000000E+02")
+        XCTAssertEqual(cardValue("CRPIX2", in: data), "5.0000000000000E+01")
+        XCTAssertEqual(cardValue("A_ORDER", in: data), "2")
+        XCTAssertEqual(cardValue("A_0_2", in: data), "1.0000000000000E-06")
+        XCTAssertEqual(cardValue("A_2_0", in: data), "3.0000000000000E-06")
+        XCTAssertEqual(cardValue("AP_0_0", in: data), "1.0000000000000E-07")
+        XCTAssertEqual(cardValue("BP_2_0", in: data), "3.0000000000000E-06")
+        XCTAssertTrue(containsCard("END", in: data))
+    }
+
+    func testRejectsIncompleteWCSAndSuggestsSidecarName() {
+        let invalid = WCSResult(
+            crval: [10],
+            crpix: [20, 30],
+            cd: [[1, 0], [0, 1]],
+            sip: nil
+        )
+
+        XCTAssertThrowsError(try WCSFileWriter.data(for: invalid))
+        XCTAssertEqual(
+            WCSFileWriter.suggestedFilename(
+                for: URL(fileURLWithPath: "/images/frame.001.xisf")
+            ),
+            "frame.001.wcs"
+        )
+    }
+
+    private func cardValue(_ keyword: String, in data: Data) -> String? {
+        guard let header = String(data: data, encoding: .ascii) else { return nil }
+        for offset in stride(from: 0, to: header.count, by: 80) {
+            let start = header.index(header.startIndex, offsetBy: offset)
+            let end = header.index(start, offsetBy: 80)
+            let card = String(header[start..<end])
+            if card.prefix(8).trimmingCharacters(in: .whitespaces) == keyword {
+                return card.dropFirst(10).trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return nil
+    }
+
+    private func containsCard(_ keyword: String, in data: Data) -> Bool {
+        guard let header = String(data: data, encoding: .ascii) else { return false }
+        return stride(from: 0, to: header.count, by: 80).contains { offset in
+            let start = header.index(header.startIndex, offsetBy: offset)
+            let end = header.index(start, offsetBy: 80)
+            return header[start..<end].prefix(8).trimmingCharacters(in: .whitespaces) == keyword
+        }
+    }
+}
+
 final class DocumentRegistrationTests: XCTestCase {
     func testAstronomyRegistrationsUseDedicatedDocumentIcon() throws {
         let documentTypes = try XCTUnwrap(
@@ -484,6 +620,39 @@ final class RenderBoundaryTests: XCTestCase {
         XCTAssertTrue(model.supportsAstronomyProcessing)
     }
 
+    func testPlanarColorXISFDoesNotAddColoredEdgePixels() throws {
+        let pixelCount = 12
+        let url = try writeSyntheticXISF(
+            width: 4,
+            height: 3,
+            planes: 3,
+            colorSpace: "RGB",
+            values: Array(repeating: 0.1, count: pixelCount)
+                + Array(repeating: 0.5, count: pixelCount)
+                + Array(repeating: 0.9, count: pixelCount)
+        )
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let rendered = try SeizaCore.render(
+            url: url,
+            processing: FITSImageProcessingConfiguration(
+                stretchStack: FITSStretchStack(stages: [.identity]),
+                extractsBackground: false
+            )
+        )
+        let rgba = try XCTUnwrap(rendered.image.dataProvider?.data as Data?)
+        XCTAssertEqual(rgba.count, pixelCount * 4)
+        let bytes = Array(rgba)
+        let pixels = stride(from: 0, to: bytes.count, by: 4).map {
+            Array(bytes[$0..<$0 + 4])
+        }
+        let reference = try XCTUnwrap(pixels.first)
+        XCTAssertTrue(pixels.allSatisfy { $0 == reference })
+        XCTAssertLessThan(reference[0], reference[1])
+        XCTAssertLessThan(reference[1], reference[2])
+        XCTAssertEqual(reference[3], 255)
+    }
+
     func testBackgroundExtractionRunsBeforeStretchingThroughSwiftBoundary() throws {
         let width = 96
         let height = 72
@@ -759,9 +928,11 @@ final class RenderBoundaryTests: XCTestCase {
     private func writeSyntheticXISF(
         width: Int,
         height: Int,
+        planes: Int = 1,
+        colorSpace: String = "Gray",
         values: [Float32]
     ) throws -> URL {
-        XCTAssertEqual(values.count, width * height)
+        XCTAssertEqual(values.count, width * height * planes)
         var samples = Data()
         for value in values {
             var bitPattern = value.bitPattern.littleEndian
@@ -769,7 +940,7 @@ final class RenderBoundaryTests: XCTestCase {
         }
 
         let imageTemplate = """
-        <Image id="image0" geometry="\(width):\(height):1" sampleFormat="Float32" bounds="0:1" colorSpace="Gray" location="attachment:@OFFSET@:\(samples.count)"><Property id="Observation:Object:Name" type="String">M42</Property></Image>
+        <Image id="image0" geometry="\(width):\(height):\(planes)" sampleFormat="Float32" bounds="0:1" colorSpace="\(colorSpace)" location="attachment:@OFFSET@:\(samples.count)"><Property id="Observation:Object:Name" type="String">M42</Property></Image>
         """
         var attachmentOffset = 0
         var header = ""
@@ -1207,6 +1378,22 @@ final class CatalogSetupPayloadTests: XCTestCase {
         XCTAssertFalse(status.readyForOverlays)
         XCTAssertTrue(status.starCatalog.available)
         XCTAssertFalse(status.transients.available)
+
+        let components = CatalogComponentDisplay.entries(from: status)
+        XCTAssertEqual(
+            components.map(\.title),
+            ["Star catalog", "Blind index", "Deep-sky objects", "Transients", "Minor bodies"]
+        )
+        XCTAssertEqual(components[0].path, "/tmp/seiza-catalogs/stars-deep-gaia17.bin")
+        XCTAssertEqual(
+            components.first { $0.id == "transients" },
+            CatalogComponentDisplay(
+                id: "transients",
+                title: "Transients",
+                available: false,
+                path: nil
+            )
+        )
     }
 
     func testVerificationProgressRemainsDeterminateAfterDownload() throws {

@@ -85,8 +85,8 @@ is on.
 ## Read the image before and after stretching
 
 Open the inspector with the right-sidebar toolbar button. For FITS and XISF images it
-shows dimensions, encoding, robust input statistics, the active stretch, and
-paired histograms:
+shows dimensions, encoding, full input statistics, the active stretch,
+background removal, deconvolution settings, and paired histograms:
 
 - **Input** is computed from normalized linear samples before stretching.
 - **Display** is computed from the rendered display pixels after the complete
@@ -96,6 +96,11 @@ The plots suppress the visual dominance of clipped endpoint bins without
 changing the recorded counts. This makes the useful distribution readable
 while preserving the distinction between input data and display output.
 
+Image headers can be filtered by keyword or value. **Copy Visible** writes the
+filtered rows to the clipboard as plain `KEY = value` lines. After a solve, the
+same inspector shows elapsed time, detected and matched star counts, WCS
+quality, and overlay diagnostics.
+
 ## Solve only when you ask
 
 Seiza does not solve while opening, browsing, stretching, or exporting an
@@ -103,13 +108,20 @@ image. Press **Solve** when you want a WCS solution and catalog context. The
 inspector then reports the field center, pixel scale, match count, RMS error,
 acquisition time, and overlay counts.
 
+The inspector also has a **Solve Image** button while it shows **Not solved**.
+After a successful solve, use **Export WCS…** there to write a header-only FITS
+`.wcs` sidecar. The file contains the linear WCS and all fitted SIP terms, and
+it leaves the source image unchanged.
+
 ![A solved North America and Pelican Nebula frame with catalog-colored outlines, named stars, WCS grid, histograms, and solve quality](images/seiza-solved-overlays.png)
 
 Solving requires a local Seiza catalog directory. Open **Seiza > Settings**,
 choose the standard package, and use **Download and Install Catalogs**. Setup
 reports manifest, download, verification, installation, and completion
-progress. See [Catalogs and solving](../README.md#catalogs-and-solving) for the
-data layout and command-line equivalents.
+progress. Settings also reports the status and path of the star catalog, blind
+index, deep-sky objects, transients, and minor bodies. See
+[Catalogs and solving](../README.md#catalogs-and-solving) for the data layout
+and command-line equivalents.
 
 ## Choose the sky context you need
 

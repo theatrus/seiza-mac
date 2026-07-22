@@ -135,6 +135,133 @@ enum ImageExportError: LocalizedError {
     }
 }
 
+enum WCSExportError: LocalizedError {
+    case invalidSolution
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidSolution:
+            "The plate solution does not contain a complete WCS record."
+        }
+    }
+}
+
+enum WCSFileWriter {
+    private static let cardLength = 80
+    private static let blockLength = 2_880
+
+    static func suggestedFilename(for sourceURL: URL) -> String {
+        sourceURL.deletingPathExtension().lastPathComponent + ".wcs"
+    }
+
+    static func write(_ wcs: WCSResult, to url: URL) throws {
+        try data(for: wcs).write(to: url, options: .atomic)
+    }
+
+    static func data(for wcs: WCSResult) throws -> Data {
+        guard
+            wcs.crval.count == 2,
+            wcs.crpix.count == 2,
+            wcs.cd.count == 2,
+            wcs.cd.allSatisfy({ $0.count == 2 }),
+            (wcs.crval + wcs.crpix + wcs.cd.flatMap { $0 }).allSatisfy(\.isFinite)
+        else {
+            throw WCSExportError.invalidSolution
+        }
+
+        let projection = wcs.sip == nil ? "TAN" : "TAN-SIP"
+        var cards = [
+            card("SIMPLE", value: "T"),
+            card("BITPIX", value: "8"),
+            card("NAXIS", value: "0"),
+            card("CTYPE1", value: "'RA---\(projection)'"),
+            card("CTYPE2", value: "'DEC--\(projection)'"),
+            card("CUNIT1", value: "'deg'"),
+            card("CUNIT2", value: "'deg'"),
+            card("EQUINOX", number: 2_000),
+            card("CRVAL1", number: wcs.crval[0]),
+            card("CRVAL2", number: wcs.crval[1]),
+            card("CRPIX1", number: wcs.crpix[0] + 1),
+            card("CRPIX2", number: wcs.crpix[1] + 1),
+            card("CD1_1", number: wcs.cd[0][0]),
+            card("CD1_2", number: wcs.cd[0][1]),
+            card("CD2_1", number: wcs.cd[1][0]),
+            card("CD2_2", number: wcs.cd[1][1]),
+        ]
+
+        if let sip = wcs.sip {
+            let forwardTerms = terms(order: sip.order, minimumTotal: 2)
+            let inverseTerms = terms(order: sip.order, minimumTotal: 0)
+            guard
+                (2...5).contains(sip.order),
+                sip.a.count == forwardTerms.count,
+                sip.b.count == forwardTerms.count,
+                sip.ap.count == inverseTerms.count,
+                sip.bp.count == inverseTerms.count,
+                (sip.a + sip.b + sip.ap + sip.bp).allSatisfy(\.isFinite)
+            else {
+                throw WCSExportError.invalidSolution
+            }
+
+            cards.append(card("A_ORDER", value: "\(sip.order)"))
+            cards.append(card("B_ORDER", value: "\(sip.order)"))
+            appendSIPCards(prefix: "A", terms: forwardTerms, values: sip.a, to: &cards)
+            appendSIPCards(prefix: "B", terms: forwardTerms, values: sip.b, to: &cards)
+            cards.append(card("AP_ORDER", value: "\(sip.order)"))
+            cards.append(card("BP_ORDER", value: "\(sip.order)"))
+            appendSIPCards(prefix: "AP", terms: inverseTerms, values: sip.ap, to: &cards)
+            appendSIPCards(prefix: "BP", terms: inverseTerms, values: sip.bp, to: &cards)
+        }
+
+        cards.append("END".padding(toLength: cardLength, withPad: " ", startingAt: 0))
+        var header = cards.joined()
+        let paddedLength = ((header.utf8.count + blockLength - 1) / blockLength) * blockLength
+        header.append(String(repeating: " ", count: paddedLength - header.utf8.count))
+        guard let data = header.data(using: .ascii) else {
+            throw WCSExportError.invalidSolution
+        }
+        return data
+    }
+
+    private static func card(_ keyword: String, number: Double) -> String {
+        card(
+            keyword,
+            value: String(
+                format: "%.13E",
+                locale: Locale(identifier: "en_US_POSIX"),
+                arguments: [number]
+            )
+        )
+    }
+
+    private static func card(_ keyword: String, value: String) -> String {
+        let key = keyword.padding(toLength: 8, withPad: " ", startingAt: 0)
+        let valuePadding = String(repeating: " ", count: max(20 - value.count, 0))
+        let content = key + "= " + valuePadding + value
+        return content.padding(toLength: cardLength, withPad: " ", startingAt: 0)
+    }
+
+    private static func appendSIPCards(
+        prefix: String,
+        terms: [(Int, Int)],
+        values: [Double],
+        to cards: inout [String]
+    ) {
+        for ((p, q), value) in zip(terms, values) {
+            cards.append(card("\(prefix)_\(p)_\(q)", number: value))
+        }
+    }
+
+    private static func terms(order: Int, minimumTotal: Int) -> [(Int, Int)] {
+        guard order >= minimumTotal else { return [] }
+        return (0...order).flatMap { p in
+            (0...(order - p)).compactMap { q in
+                p + q >= minimumTotal ? (p, q) : nil
+            }
+        }
+    }
+}
+
 enum ImageClipboard {
     static func copy(
         _ image: CGImage,

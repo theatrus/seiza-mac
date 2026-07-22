@@ -1,6 +1,44 @@
 import AppKit
 import Combine
 import SwiftUI
+import UniformTypeIdentifiers
+
+enum ViewportMath {
+    static func clampedOrigin(
+        _ requested: CGPoint,
+        canvasSize: CGSize,
+        viewportSize: CGSize
+    ) -> CGPoint {
+        CGPoint(
+            x: min(max(requested.x, 0), max(canvasSize.width - viewportSize.width, 0)),
+            y: min(max(requested.y, 0), max(canvasSize.height - viewportSize.height, 0))
+        )
+    }
+
+    static func pannedOrigin(
+        from start: CGPoint,
+        translation: CGSize,
+        canvasSize: CGSize,
+        viewportSize: CGSize
+    ) -> CGPoint {
+        clampedOrigin(
+            CGPoint(
+                x: start.x - translation.width,
+                y: start.y - translation.height
+            ),
+            canvasSize: canvasSize,
+            viewportSize: viewportSize
+        )
+    }
+
+    static func wheelZoomFactor(deltaY: CGFloat) -> Double {
+        pow(1.12, Double(min(max(deltaY, -4), 4)))
+    }
+
+    static func nearlyEqual(_ lhs: CGPoint, _ rhs: CGPoint) -> Bool {
+        abs(lhs.x - rhs.x) < 0.75 && abs(lhs.y - rhs.y) < 0.75
+    }
+}
 
 enum ImageProcessingClipboard {
     static let pasteboardType = NSPasteboard.PasteboardType(
@@ -490,6 +528,8 @@ private struct ImagePageView: View {
     @State private var pinchAnchor: ZoomAnchor?
     @State private var scrollPosition = ScrollPosition()
     @State private var visibleContentOrigin = CGPoint.zero
+    @State private var requestedContentOrigin: CGPoint?
+    @State private var dragStartOrigin: CGPoint?
     @Binding private var showInspector: Bool
     @State private var viewportSize = CGSize.zero
     @State private var isFitToWindow = true
@@ -507,6 +547,7 @@ private struct ImagePageView: View {
     @State private var hiddenDeepSkyCatalogs = Set<DeepSkyCatalog>()
     @State private var isExporting = false
     @State private var exportError: String?
+    @State private var wcsExportError: String?
     @State private var imageClipboardError: String?
     @State private var copiesImageWhenPreviewFinishes = false
     @State private var processingClipboardError: String?
@@ -552,7 +593,11 @@ private struct ImagePageView: View {
             imagePane
                 .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
             if showInspector {
-                InspectorView(model: model)
+                InspectorView(
+                    model: model,
+                    onSolve: startSolve,
+                    onExportWCS: presentWCSExportPanel
+                )
                     .frame(minWidth: 260, idealWidth: 310, maxWidth: 390)
             }
         }
@@ -618,8 +663,7 @@ private struct ImagePageView: View {
                 }
 
                 Button {
-                    showInspector = true
-                    model.solve(catalogDirectory: CatalogAccess.resolve())
+                    startSolve()
                 } label: {
                     if isSolving {
                         ProgressView()
@@ -800,6 +844,19 @@ private struct ImagePageView: View {
             }
         )
         .alert(
+            "Couldn’t Export WCS",
+            isPresented: Binding(
+                get: { wcsExportError != nil },
+                set: { if !$0 { wcsExportError = nil } }
+            ),
+            actions: {
+                Button("OK", role: .cancel) {}
+            },
+            message: {
+                Text(wcsExportError ?? "An unknown error occurred.")
+            }
+        )
+        .alert(
             "Couldn’t Copy or Paste Adjustments",
             isPresented: Binding(
                 get: { processingClipboardError != nil },
@@ -882,6 +939,15 @@ private struct ImagePageView: View {
             canUndo: model.supportsAstronomyProcessing && model.stretchHistory.canUndo,
             canRedo: model.supportsAstronomyProcessing && model.stretchHistory.canRedo
         )
+    }
+
+    private func startSolve() {
+        guard model.image != nil, !isSolving else {
+            NSSound.beep()
+            return
+        }
+        showInspector = true
+        model.solve(catalogDirectory: CatalogAccess.resolve())
     }
 
     private func performUndo() {
@@ -1147,6 +1213,24 @@ private struct ImagePageView: View {
     }
 
     @MainActor
+    private func presentWCSExportPanel(_ solution: SolveResult) {
+        let panel = NSSavePanel()
+        panel.title = "Export WCS"
+        panel.prompt = "Export"
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.allowedContentTypes = [UTType(filenameExtension: "wcs") ?? .data]
+        panel.nameFieldStringValue = WCSFileWriter.suggestedFilename(for: model.url)
+        guard panel.runModal() == .OK, let destinationURL = panel.url else { return }
+
+        do {
+            try WCSFileWriter.write(solution.wcs, to: destinationURL)
+        } catch {
+            wcsExportError = error.localizedDescription
+        }
+    }
+
+    @MainActor
     private func renderExportImage(
         image: CGImage,
         solution: SolveResult
@@ -1250,6 +1334,11 @@ private struct ImagePageView: View {
                 viewport: geometry.size,
                 zoom: zoom
             )
+            let effectiveOrigin = requestedContentOrigin ?? visibleContentOrigin
+            let scrollCorrection = CGSize(
+                width: visibleContentOrigin.x - effectiveOrigin.x,
+                height: visibleContentOrigin.y - effectiveOrigin.y
+            )
 
             ScrollView([.horizontal, .vertical]) {
                 ZStack(alignment: .topLeading) {
@@ -1284,7 +1373,10 @@ private struct ImagePageView: View {
                         }
                     }
                     .frame(width: metrics.imageSize.width, height: metrics.imageSize.height)
-                    .offset(x: metrics.imageOrigin.x, y: metrics.imageOrigin.y)
+                    .offset(
+                        x: metrics.imageOrigin.x + scrollCorrection.width,
+                        y: metrics.imageOrigin.y + scrollCorrection.height
+                    )
                 }
                 .frame(width: metrics.canvasSize.width, height: metrics.canvasSize.height)
             }
@@ -1293,8 +1385,34 @@ private struct ImagePageView: View {
                 geometry.visibleRect.origin
             } action: { _, newOrigin in
                 visibleContentOrigin = newOrigin
+                if let requestedContentOrigin,
+                   ViewportMath.nearlyEqual(newOrigin, requestedContentOrigin) {
+                    self.requestedContentOrigin = nil
+                }
             }
             .background(.black.opacity(0.94))
+            .background {
+                ViewportInputMonitor(
+                    isEnabled: !isPickingSymmetryPoint,
+                    onWheelZoom: { deltaY, location in
+                        zoomWithWheel(
+                            deltaY: deltaY,
+                            at: location,
+                            image: image,
+                            viewport: geometry.size
+                        )
+                    },
+                    onDragBegan: beginDragging,
+                    onDragChanged: { translation in
+                        dragViewport(
+                            by: translation,
+                            image: image,
+                            viewport: geometry.size
+                        )
+                    },
+                    onDragEnded: endDragging
+                )
+            }
             .simultaneousGesture(pinchGesture(for: image, viewport: geometry.size))
             .overlay(alignment: .bottomTrailing) {
                 if showsLoadingIndicator {
@@ -1487,12 +1605,13 @@ private struct ImagePageView: View {
             y: min(max(location.y, 0), viewport.height)
         )
         let metrics = canvasMetrics(for: image, viewport: viewport, zoom: zoom)
+        let contentOrigin = requestedContentOrigin ?? visibleContentOrigin
         return ZoomAnchor(
             viewportPoint: viewportPoint,
             imagePoint: CGPoint(
-                x: (visibleContentOrigin.x + viewportPoint.x - metrics.imageOrigin.x)
+                x: (contentOrigin.x + viewportPoint.x - metrics.imageOrigin.x)
                     / metrics.imageSize.width,
-                y: (visibleContentOrigin.y + viewportPoint.y - metrics.imageOrigin.y)
+                y: (contentOrigin.y + viewportPoint.y - metrics.imageOrigin.y)
                     / metrics.imageSize.height
             )
         )
@@ -1505,7 +1624,6 @@ private struct ImagePageView: View {
         viewport: CGSize
     ) {
         let newZoom = clampedZoom(requestedZoom)
-        zoom = newZoom
         let metrics = canvasMetrics(for: image, viewport: viewport, zoom: newZoom)
         let requestedOrigin = CGPoint(
             x: metrics.imageOrigin.x
@@ -1515,21 +1633,68 @@ private struct ImagePageView: View {
                 + anchor.imagePoint.y * metrics.imageSize.height
                 - anchor.viewportPoint.y
         )
-        let maximumOrigin = CGPoint(
-            x: max(metrics.canvasSize.width - viewport.width, 0),
-            y: max(metrics.canvasSize.height - viewport.height, 0)
+        let origin = ViewportMath.clampedOrigin(
+            requestedOrigin,
+            canvasSize: metrics.canvasSize,
+            viewportSize: viewport
         )
-        scrollPosition.scrollTo(
-            point: CGPoint(
-                x: min(max(requestedOrigin.x, 0), maximumOrigin.x),
-                y: min(max(requestedOrigin.y, 0), maximumOrigin.y)
-            )
-        )
+        requestedContentOrigin = ViewportMath.nearlyEqual(origin, visibleContentOrigin)
+            ? nil
+            : origin
+        zoom = newZoom
+        scrollPosition.scrollTo(point: origin)
     }
 
     private func scrollToOrigin() {
-        visibleContentOrigin = .zero
+        requestedContentOrigin = ViewportMath.nearlyEqual(visibleContentOrigin, .zero)
+            ? nil
+            : .zero
         scrollPosition.scrollTo(point: .zero)
+    }
+
+    private func zoomWithWheel(
+        deltaY: CGFloat,
+        at location: CGPoint,
+        image: CGImage,
+        viewport: CGSize
+    ) {
+        guard abs(deltaY) > .ulpOfOne else { return }
+        isFitToWindow = false
+        let anchor = makeZoomAnchor(at: location, image: image, viewport: viewport)
+        applyZoom(
+            zoom * ViewportMath.wheelZoomFactor(deltaY: deltaY),
+            around: anchor,
+            image: image,
+            viewport: viewport
+        )
+    }
+
+    private func beginDragging() {
+        dragStartOrigin = requestedContentOrigin ?? visibleContentOrigin
+    }
+
+    private func dragViewport(
+        by translation: CGSize,
+        image: CGImage,
+        viewport: CGSize
+    ) {
+        guard let dragStartOrigin else { return }
+        isFitToWindow = false
+        let metrics = canvasMetrics(for: image, viewport: viewport, zoom: zoom)
+        let origin = ViewportMath.pannedOrigin(
+            from: dragStartOrigin,
+            translation: translation,
+            canvasSize: metrics.canvasSize,
+            viewportSize: viewport
+        )
+        requestedContentOrigin = ViewportMath.nearlyEqual(origin, visibleContentOrigin)
+            ? nil
+            : origin
+        scrollPosition.scrollTo(point: origin)
+    }
+
+    private func endDragging() {
+        dragStartOrigin = nil
     }
 
     private func canvasMetrics(
@@ -1635,6 +1800,128 @@ private struct ImagePageView: View {
 
     private var hasCatalogOutlines: Bool {
         solvedSolution?.objectPositions.contains { !$0.outlines.isEmpty } == true
+    }
+}
+
+private struct ViewportInputMonitor: NSViewRepresentable {
+    let isEnabled: Bool
+    let onWheelZoom: (CGFloat, CGPoint) -> Void
+    let onDragBegan: () -> Void
+    let onDragChanged: (CGSize) -> Void
+    let onDragEnded: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> PassthroughView {
+        let view = PassthroughView()
+        context.coordinator.view = view
+        context.coordinator.installMonitor()
+        return view
+    }
+
+    func updateNSView(_ nsView: PassthroughView, context: Context) {
+        context.coordinator.view = nsView
+        context.coordinator.isEnabled = isEnabled
+        context.coordinator.onWheelZoom = onWheelZoom
+        context.coordinator.onDragBegan = onDragBegan
+        context.coordinator.onDragChanged = onDragChanged
+        context.coordinator.onDragEnded = onDragEnded
+    }
+
+    static func dismantleNSView(_ nsView: PassthroughView, coordinator: Coordinator) {
+        coordinator.removeMonitor()
+    }
+
+    final class PassthroughView: NSView {
+        override var isFlipped: Bool { true }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            nil
+        }
+    }
+
+    @MainActor
+    final class Coordinator {
+        weak var view: PassthroughView?
+        var isEnabled = true
+        var onWheelZoom: (CGFloat, CGPoint) -> Void = { _, _ in }
+        var onDragBegan: () -> Void = {}
+        var onDragChanged: (CGSize) -> Void = { _ in }
+        var onDragEnded: () -> Void = {}
+
+        private var monitor: Any?
+        private var dragStart: CGPoint?
+
+        func installMonitor() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.scrollWheel, .leftMouseDown, .leftMouseDragged, .leftMouseUp]
+            ) { [weak self] event in
+                self?.handle(event) ?? event
+            }
+        }
+
+        func removeMonitor() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
+            monitor = nil
+            dragStart = nil
+        }
+
+        private func handle(_ event: NSEvent) -> NSEvent? {
+            guard isEnabled, let view, event.window === view.window else {
+                if event.type == .leftMouseUp, dragStart != nil {
+                    dragStart = nil
+                    onDragEnded()
+                }
+                return event
+            }
+
+            let location = view.convert(event.locationInWindow, from: nil)
+            switch event.type {
+            case .scrollWheel:
+                guard view.bounds.contains(location), !event.hasPreciseScrollingDeltas else {
+                    return event
+                }
+                onWheelZoom(event.scrollingDeltaY, location)
+                return nil
+            case .leftMouseDown:
+                guard view.bounds.contains(location), !isOverScroller(event, in: view) else {
+                    return event
+                }
+                dragStart = location
+                onDragBegan()
+                return nil
+            case .leftMouseDragged:
+                guard let dragStart else { return event }
+                onDragChanged(
+                    CGSize(
+                        width: location.x - dragStart.x,
+                        height: location.y - dragStart.y
+                    )
+                )
+                return nil
+            case .leftMouseUp:
+                guard dragStart != nil else { return event }
+                dragStart = nil
+                onDragEnded()
+                return nil
+            default:
+                return event
+            }
+        }
+
+        private func isOverScroller(_ event: NSEvent, in view: NSView) -> Bool {
+            var hitView = view.window?.contentView?.hitTest(event.locationInWindow)
+            while let current = hitView {
+                if current is NSScroller { return true }
+                hitView = current.superview
+            }
+            return false
+        }
     }
 }
 
@@ -2635,8 +2922,39 @@ enum ImagePixelSampler {
     }
 }
 
+struct ImageHeaderEntry: Identifiable, Equatable {
+    let key: String
+    let value: String
+
+    var id: String { key }
+}
+
+enum ImageHeaderTools {
+    static func entries(
+        from headers: [String: JSONValue],
+        matching query: String
+    ) -> [ImageHeaderEntry] {
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return headers
+            .map { ImageHeaderEntry(key: $0.key, value: $0.value.description) }
+            .filter { entry in
+                normalizedQuery.isEmpty
+                    || entry.key.localizedCaseInsensitiveContains(normalizedQuery)
+                    || entry.value.localizedCaseInsensitiveContains(normalizedQuery)
+            }
+            .sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending }
+    }
+
+    static func copyText(for entries: [ImageHeaderEntry]) -> String {
+        entries.map { "\($0.key) = \($0.value)" }.joined(separator: "\n")
+    }
+}
+
 private struct InspectorView: View {
     @ObservedObject var model: ImageDocumentModel
+    let onSolve: () -> Void
+    let onExportWCS: (SolveResult) -> Void
+    @State private var headerQuery = ""
 
     var body: some View {
         List {
@@ -2658,9 +2976,44 @@ private struct InspectorView: View {
                                 value: model.stretchConfiguration.colorStrategy.title
                             )
                         }
+                        LabeledContent(
+                            "Background",
+                            value: model.extractsBackground ? "Gradient removed" : "Original"
+                        )
+                        if let deconvolution = model.deconvolutionConfiguration {
+                            LabeledContent("Deconvolution", value: "Light Richardson–Lucy")
+                            LabeledContent(
+                                "PSF FWHM",
+                                value: deconvolution.psfFWHMPixels.formatted(
+                                    .number.precision(.fractionLength(2))
+                                ) + " px"
+                            )
+                            LabeledContent(
+                                "Restoration",
+                                value: "\(deconvolution.iterations) iterations · "
+                                    + deconvolution.amount.formatted(
+                                        .percent.precision(.fractionLength(0))
+                                    )
+                            )
+                        } else {
+                            LabeledContent("Deconvolution", value: "Off")
+                        }
                     }
-                    LabeledContent("Median", value: "\(metadata.statistics.median)")
-                    LabeledContent("MAD", value: metadata.statistics.mad.formatted(.number.precision(.fractionLength(2))))
+                    LabeledContent("Minimum", value: metadata.statistics.minimum.formatted())
+                    LabeledContent("Maximum", value: metadata.statistics.maximum.formatted())
+                    LabeledContent(
+                        "Mean",
+                        value: metadata.statistics.mean.formatted(
+                            .number.precision(.fractionLength(2))
+                        )
+                    )
+                    LabeledContent("Median", value: metadata.statistics.median.formatted())
+                    LabeledContent(
+                        "MAD",
+                        value: metadata.statistics.mad.formatted(
+                            .number.precision(.fractionLength(2))
+                        )
+                    )
                 }
 
                 if metadata.inputHistogram?.isValid == true
@@ -2695,21 +3048,60 @@ private struct InspectorView: View {
 
             if let headers = model.metadata?.headers, !headers.isEmpty {
                 Section("Image headers") {
-                    ForEach(headers.keys.sorted(), id: \.self) { key in
-                        LabeledContent(key, value: headers[key]?.description ?? "")
+                    HStack {
+                        TextField("Search by keyword or value", text: $headerQuery)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityLabel("Search image headers")
+                        Button {
+                            copyHeaders(visibleHeaders)
+                        } label: {
+                            Label("Copy Visible", systemImage: "doc.on.doc")
+                        }
+                        .disabled(visibleHeaders.isEmpty)
+                    }
+
+                    if visibleHeaders.isEmpty {
+                        Text("No headers match this search.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(visibleHeaders) { entry in
+                            LabeledContent(entry.key, value: entry.value)
+                                .textSelection(.enabled)
+                        }
                     }
                 }
             }
         }
         .listStyle(.sidebar)
+        .onChange(of: model.url) { _, _ in
+            headerQuery = ""
+        }
+    }
+
+    private var visibleHeaders: [ImageHeaderEntry] {
+        guard let headers = model.metadata?.headers else { return [] }
+        return ImageHeaderTools.entries(from: headers, matching: headerQuery)
+    }
+
+    private func copyHeaders(_ entries: [ImageHeaderEntry]) {
+        guard !entries.isEmpty else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(ImageHeaderTools.copyText(for: entries), forType: .string)
     }
 
     @ViewBuilder
     private var solveDetails: some View {
         switch model.solveState {
         case .idle:
-            Text("Not solved")
-                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Not solved")
+                    .foregroundStyle(.secondary)
+                Button(action: onSolve) {
+                    Label("Solve Image", systemImage: "scope")
+                }
+                .disabled(model.image == nil)
+            }
         case .solving:
             ProgressView("Solving…")
         case .failed(let message):
@@ -2722,10 +3114,17 @@ private struct InspectorView: View {
                 }
             }
         case .solved(let solution):
+            LabeledContent(
+                "Elapsed",
+                value: (Double(solution.elapsedMilliseconds) / 1_000).formatted(
+                    .number.precision(.fractionLength(2))
+                ) + " s"
+            )
             LabeledContent("RA", value: solution.centerRaDegrees.formatted(.number.precision(.fractionLength(5))) + "°")
             LabeledContent("Dec", value: solution.centerDecDegrees.formatted(.number.precision(.fractionLength(5))) + "°")
             LabeledContent("Scale", value: solution.scaleArcsecPerPixel.formatted(.number.precision(.fractionLength(3))) + "″/px")
             LabeledContent("Matches", value: "\(solution.matchedStars)")
+            LabeledContent("Detected", value: solution.detectedStars.formatted())
             LabeledContent("RMS", value: solution.rmsArcsec.formatted(.number.precision(.fractionLength(2))) + "″")
             if let captureTime = solution.captureTime {
                 LabeledContent("Acquired", value: captureTime)
@@ -2738,6 +3137,14 @@ private struct InspectorView: View {
             } else {
                 LabeledContent("Sky objects", value: "\(solution.objectPositions.count)")
             }
+            LabeledContent(
+                "Detected diagnostics",
+                value: solution.detectedStarPositions.count.formatted()
+            )
+            LabeledContent(
+                "Catalog diagnostics",
+                value: solution.catalogStarPositions.count.formatted()
+            )
             if let error = solution.objectCatalogError {
                 Text("Object overlay unavailable: \(error)")
                     .font(.caption)
@@ -2754,8 +3161,11 @@ private struct InspectorView: View {
                     }
                 }
             }
-            LabeledContent("Detected diagnostics", value: "\(solution.detectedStarPositions.count)")
-            LabeledContent("Catalog diagnostics", value: "\(solution.catalogStarPositions.count)")
+            Button {
+                onExportWCS(solution)
+            } label: {
+                Label("Export WCS…", systemImage: "square.and.arrow.up")
+            }
         }
     }
 
