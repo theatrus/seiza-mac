@@ -68,6 +68,31 @@ final class ImageProcessingClipboardCoordinator: ObservableObject {
     }
 }
 
+final class ImageEditCommandCoordinator: ObservableObject {
+    @Published private(set) var canUndo = false
+    @Published private(set) var canRedo = false
+    @Published private(set) var undoRequestNumber = 0
+    @Published private(set) var redoRequestNumber = 0
+    var availabilityDidChange: (() -> Void)?
+
+    func updateAvailability(canUndo: Bool, canRedo: Bool) {
+        guard self.canUndo != canUndo || self.canRedo != canRedo else { return }
+        self.canUndo = canUndo
+        self.canRedo = canRedo
+        availabilityDidChange?()
+    }
+
+    func requestUndo() {
+        guard canUndo else { return }
+        undoRequestNumber &+= 1
+    }
+
+    func requestRedo() {
+        guard canRedo else { return }
+        redoRequestNumber &+= 1
+    }
+}
+
 private extension DeepSkyCatalog {
     var overlayColor: Color {
         switch self {
@@ -90,6 +115,7 @@ struct ViewerView: View {
     let urls: [URL]
     let showsImageBrowser: Bool
     let exportCoordinator: ImageExportCoordinator
+    let editCoordinator: ImageEditCommandCoordinator
     let processingClipboardCoordinator: ImageProcessingClipboardCoordinator
     let onSelectionChange: (URL) -> Void
     let onDropURLs: ([URL]) -> Void
@@ -105,6 +131,7 @@ struct ViewerView: View {
         initialIndex: Int = 0,
         showsImageBrowser: Bool = false,
         exportCoordinator: ImageExportCoordinator,
+        editCoordinator: ImageEditCommandCoordinator,
         processingClipboardCoordinator: ImageProcessingClipboardCoordinator,
         onSelectionChange: @escaping (URL) -> Void = { _ in },
         onDropURLs: @escaping ([URL]) -> Void = { _ in }
@@ -112,6 +139,7 @@ struct ViewerView: View {
         self.urls = urls
         self.showsImageBrowser = showsImageBrowser
         self.exportCoordinator = exportCoordinator
+        self.editCoordinator = editCoordinator
         self.processingClipboardCoordinator = processingClipboardCoordinator
         self.onSelectionChange = onSelectionChange
         self.onDropURLs = onDropURLs
@@ -135,6 +163,7 @@ struct ViewerView: View {
             ImagePageView(
                 model: model,
                 exportCoordinator: exportCoordinator,
+                editCoordinator: editCoordinator,
                 processingClipboardCoordinator: processingClipboardCoordinator,
                 showInspector: $showInspector,
                 position: selectedIndex + 1,
@@ -453,6 +482,7 @@ private struct ImagePageView: View {
     @Environment(\.displayScale) private var displayScale
     @ObservedObject private var model: ImageDocumentModel
     @ObservedObject private var exportCoordinator: ImageExportCoordinator
+    @ObservedObject private var editCoordinator: ImageEditCommandCoordinator
     @ObservedObject private var processingClipboardCoordinator: ImageProcessingClipboardCoordinator
     @ObservedObject private var catalogSetup = CatalogSetupController.shared
     @State private var zoom = 1.0
@@ -492,6 +522,7 @@ private struct ImagePageView: View {
     init(
         model: ImageDocumentModel,
         exportCoordinator: ImageExportCoordinator,
+        editCoordinator: ImageEditCommandCoordinator,
         processingClipboardCoordinator: ImageProcessingClipboardCoordinator,
         showInspector: Binding<Bool>,
         position: Int,
@@ -510,6 +541,7 @@ private struct ImagePageView: View {
         _showInspector = showInspector
         _model = ObservedObject(wrappedValue: model)
         _exportCoordinator = ObservedObject(wrappedValue: exportCoordinator)
+        _editCoordinator = ObservedObject(wrappedValue: editCoordinator)
         _processingClipboardCoordinator = ObservedObject(
             wrappedValue: processingClipboardCoordinator
         )
@@ -553,18 +585,16 @@ private struct ImagePageView: View {
                     .help("Next Image (→)")
                 }
 
-                Button(action: model.undoStretch) {
+                Button(action: performUndo) {
                     Label("Undo Stretch", systemImage: "arrow.uturn.backward")
                 }
-                .disabled(!model.supportsFITSStretch || !model.stretchHistory.canUndo)
-                .keyboardShortcut("z", modifiers: .command)
+                .disabled(!editCoordinator.canUndo)
                 .help("Undo Last Stretch (⌘Z)")
 
-                Button(action: model.redoStretch) {
+                Button(action: performRedo) {
                     Label("Redo Stretch", systemImage: "arrow.uturn.forward")
                 }
-                .disabled(!model.supportsFITSStretch || !model.stretchHistory.canRedo)
-                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .disabled(!editCoordinator.canRedo)
                 .help("Redo Stretch (⇧⌘Z)")
 
                 Button {
@@ -746,34 +776,16 @@ private struct ImagePageView: View {
             if let image = model.image ?? model.previewImage {
                 applyFitZoom(image: image, viewport: viewportSize)
             }
+            synchronizeEditAvailability()
         }
         .onAppear {
             catalogSetup.refreshStatus()
+            synchronizeEditAvailability()
         }
         .onDisappear {
             stretchPanelPresenter.close()
         }
-        .onChange(of: exportCoordinator.requestNumber) { _, _ in
-            guard model.image != nil, !isExporting else {
-                NSSound.beep()
-                return
-            }
-            presentExportPanel()
-        }
-        .onChange(of: exportCoordinator.copyRequestNumber) { _, _ in
-            requestImageCopy()
-        }
-        .onChange(of: model.isPreviewRendering) { _, isRendering in
-            guard !isRendering, copiesImageWhenPreviewFinishes else { return }
-            copiesImageWhenPreviewFinishes = false
-            copyFullResolutionImage()
-        }
-        .onChange(of: processingClipboardCoordinator.copyRequestNumber) { _, _ in
-            copyImageProcessing()
-        }
-        .onChange(of: processingClipboardCoordinator.pasteRequestNumber) { _, _ in
-            pasteImageProcessing()
-        }
+        .background { commandObservers }
         .alert(
             "Couldn’t Export Image",
             isPresented: Binding(
@@ -815,6 +827,44 @@ private struct ImagePageView: View {
         )
     }
 
+    private var commandObservers: some View {
+        Color.clear
+            .onChange(of: exportCoordinator.requestNumber) { _, _ in
+                guard model.image != nil, !isExporting else {
+                    NSSound.beep()
+                    return
+                }
+                presentExportPanel()
+            }
+            .onChange(of: exportCoordinator.copyRequestNumber) { _, _ in
+                requestImageCopy()
+            }
+            .onChange(of: editCoordinator.undoRequestNumber) { _, _ in
+                performUndo()
+            }
+            .onChange(of: editCoordinator.redoRequestNumber) { _, _ in
+                performRedo()
+            }
+            .onChange(of: model.stretchHistory) { _, _ in
+                synchronizeEditAvailability()
+            }
+            .onChange(of: model.supportsFITSStretch) { _, _ in
+                synchronizeEditAvailability()
+            }
+            .onChange(of: model.isPreviewRendering) { _, isRendering in
+                guard !isRendering, copiesImageWhenPreviewFinishes else { return }
+                copiesImageWhenPreviewFinishes = false
+                copyFullResolutionImage()
+            }
+            .onChange(of: processingClipboardCoordinator.copyRequestNumber) { _, _ in
+                copyImageProcessing()
+            }
+            .onChange(of: processingClipboardCoordinator.pasteRequestNumber) { _, _ in
+                pasteImageProcessing()
+            }
+            .allowsHitTesting(false)
+    }
+
     private func requestImageCopy() {
         guard model.image != nil else {
             NSSound.beep()
@@ -825,6 +875,25 @@ private struct ImagePageView: View {
         } else {
             copyFullResolutionImage()
         }
+    }
+
+    private func synchronizeEditAvailability() {
+        editCoordinator.updateAvailability(
+            canUndo: model.supportsFITSStretch && model.stretchHistory.canUndo,
+            canRedo: model.supportsFITSStretch && model.stretchHistory.canRedo
+        )
+    }
+
+    private func performUndo() {
+        guard model.supportsFITSStretch, model.stretchHistory.canUndo else { return }
+        model.undoStretch()
+        beginStretchEditing()
+    }
+
+    private func performRedo() {
+        guard model.supportsFITSStretch, model.stretchHistory.canRedo else { return }
+        model.redoStretch()
+        beginStretchEditing()
     }
 
     @MainActor
@@ -900,14 +969,8 @@ private struct ImagePageView: View {
             selectedStageIndex: $selectedStretchStageIndex,
             extractsBackground: $extractsBackgroundDraft,
             deconvolution: $deconvolutionDraft,
-            undo: {
-                model.undoStretch()
-                beginStretchEditing()
-            },
-            redo: {
-                model.redoStretch()
-                beginStretchEditing()
-            },
+            undo: performUndo,
+            redo: performRedo,
             pickSymmetryPoint: {
                 returnsToStretchPanelAfterPicking = presentation == .panel
                 dismissStretchEditor(presentation)

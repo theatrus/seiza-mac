@@ -695,6 +695,30 @@ final class RenderBoundaryTests: XCTestCase {
 }
 
 final class FITSStretchConfigurationTests: XCTestCase {
+    func testImageEditCoordinatorSharesAvailabilityAndRequests() {
+        let coordinator = ImageEditCommandCoordinator()
+        var availabilityChanges = 0
+        coordinator.availabilityDidChange = { availabilityChanges += 1 }
+
+        coordinator.updateAvailability(canUndo: true, canRedo: false)
+        coordinator.requestUndo()
+        coordinator.requestRedo()
+
+        XCTAssertTrue(coordinator.canUndo)
+        XCTAssertFalse(coordinator.canRedo)
+        XCTAssertEqual(coordinator.undoRequestNumber, 1)
+        XCTAssertEqual(coordinator.redoRequestNumber, 0)
+        XCTAssertEqual(availabilityChanges, 1)
+
+        coordinator.updateAvailability(canUndo: false, canRedo: true)
+        coordinator.requestUndo()
+        coordinator.requestRedo()
+
+        XCTAssertEqual(coordinator.undoRequestNumber, 1)
+        XCTAssertEqual(coordinator.redoRequestNumber, 1)
+        XCTAssertEqual(availabilityChanges, 2)
+    }
+
     func testPreviewRenderPlanTracksVisiblePixelsAtTheCurrentZoom() {
         let fitPlan = ImagePreviewRenderPlan.make(
             sourceWidth: 12_000,

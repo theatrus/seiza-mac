@@ -52,6 +52,11 @@ In the live stack editor you can:
 - open the same editor in a persistent, resizable utility panel with the
   pop-out button.
 
+The toolbar, stretch panel, and **Edit > Undo Stretch / Redo Stretch** use the
+same per-window history. Their enabled state stays synchronized as you edit or
+move between directory frames, and the menu owns the standard **Command-Z** and
+**Shift-Command-Z** shortcuts.
+
 ![A two-stage Generalized Hyperbolic and Linear stretch with background extraction enabled](images/seiza-stretch-stack.png)
 
 Automatic methods include Auto MTF and Percentile Asinh. Manual methods include

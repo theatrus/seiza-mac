@@ -23,6 +23,17 @@ struct SeizaApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
+            CommandGroup(replacing: .undoRedo) {
+                Button("Undo Stretch") {
+                    appDelegate.undoImageEdit(nil)
+                }
+                .keyboardShortcut("z")
+
+                Button("Redo Stretch") {
+                    appDelegate.redoImageEdit(nil)
+                }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+            }
             CommandGroup(replacing: .appInfo) {
                 Button("About Seiza") {
                     appDelegate.showAboutPanel(nil)
@@ -66,10 +77,11 @@ struct SeizaApp: App {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
     private final class DocumentWindowSession {
         var controller: NSWindowController?
         let exportCoordinator = ImageExportCoordinator()
+        let editCoordinator = ImageEditCommandCoordinator()
         let processingClipboardCoordinator = ImageProcessingClipboardCoordinator()
         private var accessedURLs: [URL] = []
 
@@ -86,6 +98,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var documentWindows: [URL: DocumentWindowSession] = [:]
     private weak var welcomeWindow: NSWindow?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        DispatchQueue.main.async { [weak self] in
+            self?.installEditMenuRouting()
+        }
+    }
 
     func registerWelcomeWindow() {
         DispatchQueue.main.async { [weak self] in
@@ -146,6 +164,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         session.processingClipboardCoordinator.requestCopy()
     }
 
+    @objc func undoImageEdit(_ sender: Any?) {
+        guard let session = activeDocumentSession, session.editCoordinator.canUndo else {
+            NSSound.beep()
+            return
+        }
+        session.editCoordinator.requestUndo()
+    }
+
+    @objc func redoImageEdit(_ sender: Any?) {
+        guard let session = activeDocumentSession, session.editCoordinator.canRedo else {
+            NSSound.beep()
+            return
+        }
+        session.editCoordinator.requestRedo()
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(undoImageEdit(_:)):
+            return activeDocumentSession?.editCoordinator.canUndo == true
+        case #selector(redoImageEdit(_:)):
+            return activeDocumentSession?.editCoordinator.canRedo == true
+        default:
+            return true
+        }
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        routeEditCommands(in: menu)
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        routeEditCommands(in: menu)
+    }
+
     @objc func pasteImageAdjustments(_ sender: Any?) {
         guard let session = activeDocumentSession else {
             NSSound.beep()
@@ -180,11 +233,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let existing = documentWindows[windowKey]?.controller {
             existing.showWindow(nil)
             existing.window?.makeKeyAndOrderFront(nil)
+            refreshEditCommandAvailability()
             closeWelcomeWindow()
             return
         }
 
         let session = DocumentWindowSession(accessURLs: request.accessURLs)
+        observeEditAvailability(for: session)
         let imageURLs = ImageCollection.collect(from: request.roots)
         guard !imageURLs.isEmpty else {
             presentNoSupportedImagesAlert()
@@ -199,6 +254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             imageURLs: imageURLs,
             openedDirectory: containsDirectory(request.roots),
             exportCoordinator: session.exportCoordinator,
+            editCoordinator: session.editCoordinator,
             processingClipboardCoordinator: session.processingClipboardCoordinator,
             in: window
         )
@@ -207,6 +263,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.styleMask.insert([.resizable, .titled, .closable, .miniaturizable])
         window.tabbingMode = .automatic
         window.titlebarSeparatorStyle = .none
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshEditCommandAvailability()
+        }
         NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification,
             object: window,
@@ -222,6 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         closeWelcomeWindow()
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        refreshEditCommandAvailability()
     }
 
     func replaceContents(of window: NSWindow, with urls: [URL]) {
@@ -236,6 +300,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let replacement = DocumentWindowSession(accessURLs: request.accessURLs)
+        observeEditAvailability(for: replacement)
         let imageURLs = ImageCollection.collect(from: request.roots)
         guard !imageURLs.isEmpty else {
             presentNoSupportedImagesAlert()
@@ -255,10 +320,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             imageURLs: imageURLs,
             openedDirectory: containsDirectory(request.roots),
             exportCoordinator: replacement.exportCoordinator,
+            editCoordinator: replacement.editCoordinator,
             processingClipboardCoordinator: replacement.processingClipboardCoordinator,
             in: window
         )
         window.makeKeyAndOrderFront(nil)
+        refreshEditCommandAvailability()
     }
 
     func documentWindow(for root: URL) -> NSWindow? {
@@ -269,6 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         imageURLs: [URL],
         openedDirectory: Bool,
         exportCoordinator: ImageExportCoordinator,
+        editCoordinator: ImageEditCommandCoordinator,
         processingClipboardCoordinator: ImageProcessingClipboardCoordinator,
         in window: NSWindow
     ) {
@@ -276,6 +344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             urls: imageURLs,
             showsImageBrowser: openedDirectory,
             exportCoordinator: exportCoordinator,
+            editCoordinator: editCoordinator,
             processingClipboardCoordinator: processingClipboardCoordinator,
             onSelectionChange: { [weak window] selectedURL in
                 window?.title = selectedURL.lastPathComponent
@@ -295,8 +364,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var activeDocumentSession: DocumentWindowSession? {
-        guard let window = NSApp.keyWindow ?? NSApp.mainWindow else { return nil }
-        return documentWindows.values.first { $0.controller?.window === window }
+        let candidateWindows = [NSApp.keyWindow, NSApp.mainWindow].compactMap { $0 }
+        for window in candidateWindows {
+            if let session = documentWindows.values.first(where: {
+                $0.controller?.window === window
+            }) {
+                return session
+            }
+        }
+        return nil
+    }
+
+    private func observeEditAvailability(for session: DocumentWindowSession) {
+        session.editCoordinator.availabilityDidChange = { [weak self, weak session] in
+            guard let self, let session, self.isActive(session) else { return }
+            self.refreshEditCommandAvailability()
+        }
+    }
+
+    private func isActive(_ session: DocumentWindowSession) -> Bool {
+        guard let documentWindow = session.controller?.window else { return false }
+        if documentWindow.isKeyWindow || documentWindow.isMainWindow {
+            return true
+        }
+        if let keyWindow = NSApp.keyWindow,
+           keyWindow.parent === documentWindow || keyWindow.sheetParent === documentWindow {
+            return true
+        }
+        let visibleSessions = documentWindows.values.filter {
+            $0.controller?.window?.isVisible == true
+        }
+        return visibleSessions.count == 1 && visibleSessions[0] === session
+    }
+
+    private func refreshEditCommandAvailability() {
+        installEditMenuRouting()
+        NSApp.mainMenu?.item(withTitle: "Edit")?.submenu?.update()
+    }
+
+    private func installEditMenuRouting() {
+        guard let editMenu = NSApp.mainMenu?.item(withTitle: "Edit")?.submenu else { return }
+        editMenu.delegate = self
+        routeEditCommands(in: editMenu)
+    }
+
+    private func routeEditCommands(in editMenu: NSMenu) {
+        if let undoItem = editMenu.item(withTitle: "Undo Stretch") {
+            undoItem.target = self
+            undoItem.action = #selector(undoImageEdit(_:))
+            undoItem.keyEquivalent = "z"
+            undoItem.keyEquivalentModifierMask = [.command]
+            undoItem.isEnabled = activeDocumentSession?.editCoordinator.canUndo == true
+        }
+        if let redoItem = editMenu.item(withTitle: "Redo Stretch") {
+            redoItem.target = self
+            redoItem.action = #selector(redoImageEdit(_:))
+            redoItem.keyEquivalent = "z"
+            redoItem.keyEquivalentModifierMask = [.command, .shift]
+            redoItem.isEnabled = activeDocumentSession?.editCoordinator.canRedo == true
+        }
     }
 
     private func normalizedRoots(from urls: [URL]) -> (roots: [URL], accessURLs: [URL]) {
@@ -325,6 +451,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }) {
             documentWindows.removeValue(forKey: entry.key)
         }
+        refreshEditCommandAvailability()
     }
 
     private func presentNoSupportedImagesAlert() {
