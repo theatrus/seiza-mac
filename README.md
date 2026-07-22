@@ -12,8 +12,7 @@ you ask it to.
 ## Project status
 
 - **Latest public release:** [v0.3.0](https://github.com/theatrus/seiza-mac/releases/tag/v0.3.0), signed and notarized for Apple silicon and Intel.
-- **Current `main`:** unreleased. It adds repaired Finder Quick Look previews, paired histograms, 8- and 16-bit image export, full-resolution clipboard copy, faster catalog installation, exact core version reporting, and a live full-precision stretch editor with background-gradient removal, light stellar deconvolution, stage reordering, copy/paste, undo/redo, and a detachable utility panel.
-- **In development:** XISF input across document opening, mixed directories, full-precision processing, 16-bit export, solving, and Finder Quick Look. It uses the reader merged in [Seiza PR #78](https://github.com/theatrus/seiza/pull/78).
+- **Current `main`:** unreleased. It adds repaired Finder Quick Look previews, paired histograms, 8- and 16-bit image export, full-resolution clipboard copy, faster catalog installation, exact core version reporting, and a live full-precision stretch editor with background-gradient removal, light stellar deconvolution, stage reordering, copy/paste, undo/redo, and a detachable utility panel. It also adds XISF opening, mixed-directory browsing, full-precision processing, solving, export, and Quick Look through the reader merged in [Seiza PR #78](https://github.com/theatrus/seiza/pull/78).
 - **Next focus:** the serious-inspection work in [the roadmap](docs/ROADMAP.md), including a real pixel loupe and measured image-quality overlays.
 
 ## See what is in the frame
@@ -42,26 +41,26 @@ Electron, web view, or local server.
 
 The release column describes the downloadable v0.3.0 build. The `main` column
 describes merged but unreleased code, including the live-processing UI shown in
-the screenshots above. The development column adds native XISF workflows.
+the screenshots above and native XISF workflows.
 
-| Feature | v0.3.0 release | Current `main` | Development | What you get |
-| --- | --- | --- | --- | --- |
-| Astronomy and raster viewing | FITS and raster | Same | Adds XISF | Open FITS, XISF, JPEG, PNG, and TIFF files or drop them onto an existing window. |
-| Folder browsing | Included | Included | Adds XISF | Browse mixed-format folders with a thumbnail drawer, local thumbnail cache, and arrow-key navigation. |
-| Astronomy display | FITS | FITS | FITS and XISF | View mono, planar RGB, and Bayer/OSC data with fast native rendering. |
-| Stretch controls | Basic RGB modes | Live FITS stack editor | Adds XISF | Add, remove, reorder, and edit automatic or manual stages without intermediate 8-bit quantization; render a zoom-aware responsive preview followed by a source-resolution refinement; carry the committed recipe through directory frames or copy and paste it between windows; undo and redo edits; pick GHS symmetry points from the image; and choose linked, per-channel, or luminance-preserving color handling. |
-| Background extraction | Not included | Available for FITS | Adds XISF | Fit and subtract a smooth gradient from linear mono or RGB samples before display stretching, while reusing the corrected preview as stretch controls change. |
-| Light deconvolution | Not included | Available for FITS | Adds XISF | Apply conservative damped Richardson–Lucy restoration to linear mono or RGB astronomy data before stretching, using a measured stellar PSF FWHM and guarded noise/ringing controls. Nothing runs unless you enable it. |
-| Zoom and inspection | Headers and statistics | Expanded | Same | Fit to window, pan, pinch around the pointer, and compare pre- and post-stretch histograms alongside headers and statistics. |
-| Local plate solving | Included | Included | Adds XISF | Run a blind solve only when you press Solve. No image is uploaded. |
-| Catalog setup | Included | Faster installation | Same | Download, verify, install, or repair solver catalogs in Settings with visible progress and reuse the verified cache through hard links when possible. |
-| Solver overlays | Included | Included | Same | Toggle named and field stars, individual deep-sky catalogs, transients, comets, asteroids, detections, coordinate grid, and field center. |
-| Object outlines | Included | Included | Same | Draw detailed OpenNGC contours with catalog ellipses as a fallback. |
-| Image export and copy | Not included | Native 16-bit PNG/TIFF | Adds XISF input | Export at source dimensions with or without visible solve overlays, or copy the full-resolution displayed image and visible overlays to the Mac clipboard. PNG and TIFF can preserve 16 bits per channel directly from the full-precision Seiza render; JPEG remains 8-bit. |
-| Finder Quick Look preview | Known Finder issue | FITS fixed | Adds XISF | Select a FITS or XISF file in Finder and press Space to see a stretched preview without opening Seiza. |
-| Finder file support | FITS | FITS | Adds XISF | Register `.fits`, `.fit`, `.fts`, and `.xisf` files with a dedicated astronomy document icon. |
-| Finder icon thumbnails | Planned | Planned | Planned | Show image content on FITS file icons. Spacebar previews already work through Quick Look on `main`. |
-| FITS cubes and multiple extensions | Planned | Planned | Planned | Navigate image planes and HDUs inside one FITS file. |
+| Feature | v0.3.0 release | Current `main` | What you get |
+| --- | --- | --- | --- |
+| Astronomy and raster viewing | FITS and raster | Adds XISF | Open FITS, XISF, JPEG, PNG, and TIFF files or drop them onto an existing window. |
+| Folder browsing | Included | Adds XISF | Browse mixed-format folders with a thumbnail drawer, local thumbnail cache, and arrow-key navigation. |
+| Astronomy display | FITS | FITS and XISF | View mono, planar RGB, and Bayer/OSC data with fast native rendering. |
+| Stretch controls | Basic RGB modes | FITS and XISF stack editor | Add, remove, reorder, and edit automatic or manual stages without intermediate 8-bit quantization; render a zoom-aware responsive preview followed by a source-resolution refinement; carry the committed recipe through directory frames or copy and paste it between windows; undo and redo edits; pick GHS symmetry points from the image; and choose linked, per-channel, or luminance-preserving color handling. |
+| Background extraction | Not included | FITS and XISF | Fit and subtract a smooth gradient from linear mono or RGB samples before display stretching, while reusing the corrected preview as stretch controls change. |
+| Light deconvolution | Not included | FITS and XISF | Apply conservative damped Richardson–Lucy restoration to linear mono or RGB astronomy data before stretching, using a measured stellar PSF FWHM and guarded noise/ringing controls. Nothing runs unless you enable it. |
+| Zoom and inspection | Headers and statistics | Expanded | Fit to window, pan, pinch around the pointer, and compare pre- and post-stretch histograms alongside headers and statistics. |
+| Local plate solving | Included | Adds XISF | Run a blind solve only when you press Solve. No image is uploaded. |
+| Catalog setup | Included | Faster installation | Download, verify, install, or repair solver catalogs in Settings with visible progress and reuse the verified cache through hard links when possible. |
+| Solver overlays | Included | Included | Toggle named and field stars, individual deep-sky catalogs, transients, comets, asteroids, detections, coordinate grid, and field center. |
+| Object outlines | Included | Included | Draw detailed OpenNGC contours with catalog ellipses as a fallback. |
+| Image export and copy | Not included | Native 16-bit PNG/TIFF; adds XISF input | Export at source dimensions with or without visible solve overlays, or copy the full-resolution displayed image and visible overlays to the Mac clipboard. PNG and TIFF can preserve 16 bits per channel directly from the full-precision Seiza render; JPEG remains 8-bit. |
+| Finder Quick Look preview | Known Finder issue | FITS and XISF | Select a FITS or XISF file in Finder and press Space to see a stretched preview without opening Seiza. |
+| Finder file support | FITS | FITS and XISF | Register `.fits`, `.fit`, `.fts`, and `.xisf` files with a dedicated astronomy document icon. |
+| Finder icon thumbnails | Planned | Planned | Show image content on astronomy file icons. Spacebar previews already work through Quick Look on `main`. |
+| FITS cubes and multiple extensions | Planned | Planned | Navigate image planes and HDUs inside one FITS file. |
 
 ## Download
 
@@ -178,7 +177,7 @@ Satellite overlays are intentionally deferred.
 
 ## Finder integration
 
-The development build registers FITS and XISF files and its Quick Look extension with macOS.
+Builds from current `main` register FITS and XISF files and the Quick Look extension with macOS.
 Select a `.fits`, `.fit`, `.fts`, or `.xisf` file in Finder and press Space to see a
 stretched preview without opening the app.
 
