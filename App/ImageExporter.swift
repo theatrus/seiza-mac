@@ -54,9 +54,14 @@ enum ImageExportBitDepth: Int, CaseIterable, Identifiable {
 
 final class ImageExportCoordinator: ObservableObject {
     @Published private(set) var requestNumber = 0
+    @Published private(set) var copyRequestNumber = 0
 
     func requestExport() {
         requestNumber &+= 1
+    }
+
+    func requestCopy() {
+        copyRequestNumber &+= 1
     }
 }
 
@@ -114,6 +119,7 @@ enum ImageExportError: LocalizedError {
     case couldNotCreateDestination
     case couldNotComposite
     case couldNotEncode
+    case couldNotCopy
 
     var errorDescription: String? {
         switch self {
@@ -123,6 +129,29 @@ enum ImageExportError: LocalizedError {
             "The visible overlays could not be composited at the requested bit depth."
         case .couldNotEncode:
             "ImageIO could not encode the image in the selected format."
+        case .couldNotCopy:
+            "The full-resolution image could not be placed on the clipboard."
+        }
+    }
+}
+
+enum ImageClipboard {
+    static func copy(
+        _ image: CGImage,
+        to pasteboard: NSPasteboard = .general
+    ) throws {
+        let png = try ImageFileWriter.data(image, format: .png)
+        let tiff = try ImageFileWriter.data(image, format: .tiff)
+        let item = NSPasteboardItem()
+        guard
+            item.setData(png, forType: .png),
+            item.setData(tiff, forType: .tiff)
+        else {
+            throw ImageExportError.couldNotCopy
+        }
+        pasteboard.clearContents()
+        guard pasteboard.writeObjects([item]) else {
+            throw ImageExportError.couldNotCopy
         }
     }
 }
@@ -201,5 +230,25 @@ enum ImageFileWriter {
         guard CGImageDestinationFinalize(destination) else {
             throw ImageExportError.couldNotEncode
         }
+    }
+
+    static func data(
+        _ image: CGImage,
+        format: ImageExportFormat
+    ) throws -> Data {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            data,
+            format.contentType.identifier as CFString,
+            1,
+            nil
+        ) else {
+            throw ImageExportError.couldNotCreateDestination
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw ImageExportError.couldNotEncode
+        }
+        return data as Data
     }
 }

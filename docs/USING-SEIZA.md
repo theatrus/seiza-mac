@@ -17,7 +17,17 @@ window.
 Directory windows include a thumbnail drawer and accept the left and right
 arrow keys. Seiza caches thumbnails locally and preloads nearby entries, so
 moving through a long sequence does not require each thumbnail to be decoded
-again. A directory may mix FITS and ordinary raster images.
+again. A directory may mix FITS and ordinary raster images. The last committed
+FITS processing recipe carries forward as you move between frames, so a stack
+chosen for one exposure becomes the starting point for the next. Automatic
+stages still measure every image independently. The stretch undo and redo
+timeline follows the recipe through the directory, so moving to another frame
+does not discard your recent adjustments.
+
+Use **Edit > Copy Adjustments** (**Shift-Command-C**) and **Paste Adjustments**
+(**Shift-Command-V**) to move the complete committed recipe between non-adjacent
+frames or separate Seiza windows. The clipboard includes the stretch stack,
+background extraction, and deconvolution settings; pasting is one undoable edit.
 
 ![Seiza browsing 299 FITS frames with cached thumbnails and live stretch controls](images/seiza-directory-stretch.png)
 
@@ -37,9 +47,15 @@ In the live stack editor you can:
 - move a stage earlier or later with the arrow controls;
 - remove a stage with its × button;
 - undo or redo committed stretch changes;
+- copy and paste committed adjustments between images or windows;
 - subtract a smooth background gradient before the first stage; and
 - open the same editor in a persistent, resizable utility panel with the
   pop-out button.
+
+The toolbar, stretch panel, and **Edit > Undo Stretch / Redo Stretch** use the
+same per-window history. Their enabled state stays synchronized as you edit or
+move between directory frames, and the menu owns the standard **Command-Z** and
+**Shift-Command-Z** shortcuts.
 
 ![A two-stage Generalized Hyperbolic and Linear stretch with background extraction enabled](images/seiza-stretch-stack.png)
 
@@ -49,19 +65,21 @@ can sample its symmetry point directly from the displayed image. Color FITS
 data can use linked channels, independent channels, or luminance-preserving
 color handling.
 
-Edits are debounced and rendered on a bounded preview away from the main thread.
-Newer edits replace obsolete preview work. **Save Changes** commits the complete
-draft stack as one undoable operation and restores the full-resolution render;
-**Cancel** returns to the committed image.
+Edits are debounced and rendered away from the main thread. The responsive pass
+uses enough pixels for the current zoom and Retina display, then immediately
+refines the same draft at source resolution. Newer edits cancel obsolete queued
+work. Once that refinement is ready, **Save Changes** commits it directly as one
+undoable operation; **Cancel** returns to the committed image.
 
 Seiza also offers **Apply light deconvolution** in the same linear-processing
 section. Enable it only when you have measured the FWHM of
 unsaturated stars in source-image pixels. Seiza applies background correction
 first, then conservative damped Richardson–Lucy restoration, then the display
 stretch. The default four iterations and 35% amount are deliberately light;
-larger values can amplify noise or draw dark rings around stars. Live previews
-scale the PSF for their bounded resolution, while **Save Changes** renders the
-source at full resolution. Deconvolution never runs unless the toggle is on.
+larger values can amplify noise or draw dark rings around stars. The responsive
+pass scales the PSF for its working resolution; its full-resolution refinement
+uses the measured source-pixel value. Deconvolution never runs unless the toggle
+is on.
 
 ## Read the image before and after stretching
 
@@ -119,6 +137,12 @@ channel, with an 8-bit option; JPEG is always 8-bit. You can export the image by
 itself or include the currently visible solve overlays without reducing a
 16-bit export to 8-bit. A 16-bit export is rendered directly from the committed
 full-precision processing stack even when a smaller live preview is on screen.
+
+Choose **Edit > Copy Image** or press **Command-C** while the viewer has focus to
+place the full source-resolution displayed image on the Mac clipboard as PNG and
+TIFF. Visible solve overlays are composited exactly as they appear in the
+viewer. If a live stretch refinement is still running, Seiza waits for its
+full-resolution pass instead of copying the temporary bounded preview.
 
 ## Finder Quick Look
 

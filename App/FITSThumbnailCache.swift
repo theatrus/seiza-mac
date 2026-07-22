@@ -439,12 +439,17 @@ enum ImageRenderQueue {
     }
 }
 
-/// A serial, latest-only queue for interactive controls. Pending previews are
+/// A serial, latest-only queue for interactive controls. It delivers a bounded
+/// responsive pass followed by a source-resolution pass. Pending work is
 /// cancelled when a newer request arrives; an already-running C ABI call is
-/// allowed to finish, but its result is discarded and only the newest queued
-/// request is delivered.
+/// allowed to finish, but its obsolete result is discarded.
 final class LatestImagePreviewRenderer {
-    typealias Completion = (Result<RenderedImage, Error>) -> Void
+    enum Pass: Equatable {
+        case responsive
+        case fullResolution
+    }
+
+    typealias Completion = (Pass, Result<RenderedImage, Error>) -> Void
 
     private let operations: OperationQueue = {
         let queue = OperationQueue()
@@ -456,16 +461,41 @@ final class LatestImagePreviewRenderer {
 
     func render(
         url: URL,
-        processing: FITSImageProcessingConfiguration,
-        maxDimension: UInt32,
+        responsiveProcessing: FITSImageProcessingConfiguration,
+        fullResolutionProcessing: FITSImageProcessingConfiguration,
+        plan: ImagePreviewRenderPlan,
         completion: @escaping Completion
     ) {
         operations.cancelAllOperations()
+
+        if !plan.needsFullResolutionRefinement {
+            operations.addOperation(
+                ImagePreviewOperation(
+                    url: url,
+                    processing: fullResolutionProcessing,
+                    maxDimension: 0,
+                    pass: .fullResolution,
+                    completion: completion
+                )
+            )
+            return
+        }
+
         operations.addOperation(
             ImagePreviewOperation(
                 url: url,
-                processing: processing,
-                maxDimension: maxDimension,
+                processing: responsiveProcessing,
+                maxDimension: plan.responsiveMaxDimension,
+                pass: .responsive,
+                completion: completion
+            )
+        )
+        operations.addOperation(
+            ImagePreviewOperation(
+                url: url,
+                processing: fullResolutionProcessing,
+                maxDimension: 0,
+                pass: .fullResolution,
                 completion: completion
             )
         )
@@ -480,17 +510,20 @@ private final class ImagePreviewOperation: Operation, @unchecked Sendable {
     private let url: URL
     private let processing: FITSImageProcessingConfiguration
     private let maxDimension: UInt32
+    private let pass: LatestImagePreviewRenderer.Pass
     private let completion: LatestImagePreviewRenderer.Completion
 
     init(
         url: URL,
         processing: FITSImageProcessingConfiguration,
         maxDimension: UInt32,
+        pass: LatestImagePreviewRenderer.Pass,
         completion: @escaping LatestImagePreviewRenderer.Completion
     ) {
         self.url = url
         self.processing = processing
         self.maxDimension = maxDimension
+        self.pass = pass
         self.completion = completion
     }
 
@@ -508,7 +541,7 @@ private final class ImagePreviewOperation: Operation, @unchecked Sendable {
         guard !isCancelled else { return }
         OperationQueue.main.addOperation { [self] in
             guard !isCancelled else { return }
-            self.completion(result)
+            self.completion(pass, result)
         }
     }
 }

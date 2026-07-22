@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -215,6 +216,20 @@ final class ImageExportTests: XCTestCase {
                 XCTAssertEqual(decoded.height, 2)
             }
         }
+    }
+
+    func testCopiesFullResolutionImageToMacPasteboard() throws {
+        let image = try makeTestImage()
+        let pasteboard = NSPasteboard(name: .init("fyi.seiza.tests.\(UUID().uuidString)"))
+
+        try ImageClipboard.copy(image, to: pasteboard)
+
+        let png = try XCTUnwrap(pasteboard.data(forType: .png))
+        XCTAssertNotNil(pasteboard.data(forType: .tiff))
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(png as CFData, nil))
+        let decoded = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        XCTAssertEqual(decoded.width, image.width)
+        XCTAssertEqual(decoded.height, image.height)
     }
 
     func testJPEGOnlyOffersEightBitExport() {
@@ -569,7 +584,7 @@ final class RenderBoundaryTests: XCTestCase {
     }
 
     @MainActor
-    func testLatestInteractivePreviewWinsAfterRapidEdits() async throws {
+    func testLatestProgressivePreviewWinsAfterRapidEditsAndCommitsWithoutReload() async throws {
         let width = 96
         let height = 72
         var values = [Int16]()
@@ -591,11 +606,9 @@ final class RenderBoundaryTests: XCTestCase {
         latestStretch.targetMedian = 0.27
         let expected = try SeizaCore.render(
             url: url,
-            maxDimension: 2_048,
             processing: FITSImageProcessingConfiguration(
                 stretchStack: FITSStretchStack(stages: [latestStretch]),
-                extractsBackground: false,
-                interactivePreview: true
+                extractsBackground: false
             )
         )
 
@@ -612,6 +625,21 @@ final class RenderBoundaryTests: XCTestCase {
         try await waitUntil("latest interactive preview") {
             !model.isPreviewRendering
                 && model.image?.dataProvider?.data as Data? == expectedPixels
+        }
+        XCTAssertEqual(
+            model.fullResolutionDisplayImage?.dataProvider?.data as Data?,
+            expectedPixels
+        )
+
+        model.replaceStretchStack(
+            with: FITSStretchStack(stages: [latestStretch]),
+            extractsBackground: false
+        )
+
+        if case .loaded = model.loadState {
+            XCTAssertEqual(model.exportImage?.dataProvider?.data as Data?, expectedPixels)
+        } else {
+            XCTFail("Saving a refined preview should not start another render")
         }
     }
 
@@ -667,6 +695,70 @@ final class RenderBoundaryTests: XCTestCase {
 }
 
 final class FITSStretchConfigurationTests: XCTestCase {
+    func testImageEditCoordinatorSharesAvailabilityAndRequests() {
+        let coordinator = ImageEditCommandCoordinator()
+        var availabilityChanges = 0
+        coordinator.availabilityDidChange = { availabilityChanges += 1 }
+
+        coordinator.updateAvailability(canUndo: true, canRedo: false)
+        coordinator.requestUndo()
+        coordinator.requestRedo()
+
+        XCTAssertTrue(coordinator.canUndo)
+        XCTAssertFalse(coordinator.canRedo)
+        XCTAssertEqual(coordinator.undoRequestNumber, 1)
+        XCTAssertEqual(coordinator.redoRequestNumber, 0)
+        XCTAssertEqual(availabilityChanges, 1)
+
+        coordinator.updateAvailability(canUndo: false, canRedo: true)
+        coordinator.requestUndo()
+        coordinator.requestRedo()
+
+        XCTAssertEqual(coordinator.undoRequestNumber, 1)
+        XCTAssertEqual(coordinator.redoRequestNumber, 1)
+        XCTAssertEqual(availabilityChanges, 2)
+    }
+
+    func testPreviewRenderPlanTracksVisiblePixelsAtTheCurrentZoom() {
+        let fitPlan = ImagePreviewRenderPlan.make(
+            sourceWidth: 12_000,
+            sourceHeight: 8_000,
+            zoom: 0.1,
+            displayScale: 2
+        )
+        XCTAssertEqual(fitPlan.responsiveMaxDimension, 2_400)
+        XCTAssertTrue(fitPlan.needsFullResolutionRefinement)
+
+        let zoomedPlan = ImagePreviewRenderPlan.make(
+            sourceWidth: 12_000,
+            sourceHeight: 8_000,
+            zoom: 0.25,
+            displayScale: 2
+        )
+        XCTAssertEqual(zoomedPlan.responsiveMaxDimension, 6_000)
+        XCTAssertTrue(zoomedPlan.needsFullResolutionRefinement)
+
+        let sourceResolutionPlan = ImagePreviewRenderPlan.make(
+            sourceWidth: 12_000,
+            sourceHeight: 8_000,
+            zoom: 0.5,
+            displayScale: 2
+        )
+        XCTAssertEqual(sourceResolutionPlan.responsiveMaxDimension, 0)
+        XCTAssertFalse(sourceResolutionPlan.needsFullResolutionRefinement)
+    }
+
+    func testPreviewRenderPlanFallsBackToTheBoundedBaselineWithoutMetadata() {
+        let plan = ImagePreviewRenderPlan.make(
+            sourceWidth: nil,
+            sourceHeight: nil,
+            zoom: 0.1,
+            displayScale: 2
+        )
+        XCTAssertEqual(plan.responsiveMaxDimension, 2_048)
+        XCTAssertTrue(plan.needsFullResolutionRefinement)
+    }
+
     func testDefaultConfigurationMatchesTheUpstreamTaggedJSONSchema() throws {
         let configuration = FITSStretchConfiguration.default
         let json = try XCTUnwrap(
@@ -776,6 +868,48 @@ final class FITSStretchConfigurationTests: XCTestCase {
         XCTAssertNotEqual(interactivePreview.cacheIdentifier, withBackground.cacheIdentifier)
     }
 
+    func testProcessingRecipeRoundTripsThroughTheMacPasteboard() throws {
+        var ghs = FITSStretchConfiguration.default
+        ghs.type = .ghs
+        ghs.stretchFactor = 4.2
+        ghs.localIntensity = 1.5
+        ghs.symmetryPoint = 0.2
+        ghs.protectShadows = 0.05
+        ghs.protectHighlights = 0.9
+        var deconvolution = FITSDeconvolutionConfiguration.default
+        deconvolution.iterations = 3
+        let processing = FITSImageProcessingConfiguration(
+            stretchStack: FITSStretchStack(stages: [.default, ghs]),
+            extractsBackground: true,
+            deconvolution: deconvolution
+        )
+        let pasteboard = NSPasteboard(name: .init("fyi.seiza.tests.\(UUID().uuidString)"))
+
+        try ImageProcessingClipboard.copy(processing, to: pasteboard)
+
+        XCTAssertEqual(try ImageProcessingClipboard.read(from: pasteboard), processing)
+        XCTAssertNotNil(pasteboard.string(forType: .string))
+    }
+
+    func testEveryStretchModelRoundTripsThroughRecipeJSON() throws {
+        for type in FITSStretchType.allCases {
+            var stage = FITSStretchConfiguration.default
+            stage.type = type
+            let processing = FITSImageProcessingConfiguration(
+                stretchStack: FITSStretchStack(stages: [stage]),
+                extractsBackground: false
+            )
+
+            let data = try JSONEncoder().encode(processing)
+            let decoded = try JSONDecoder().decode(
+                FITSImageProcessingConfiguration.self,
+                from: data
+            )
+
+            XCTAssertEqual(decoded, processing, type.title)
+        }
+    }
+
     func testDeconvolutionConfigurationRejectsUnsafeOrInvalidValues() {
         var configuration = FITSDeconvolutionConfiguration.default
         XCTAssertNil(configuration.validationMessage)
@@ -825,6 +959,74 @@ final class FITSStretchConfigurationTests: XCTestCase {
         XCTAssertEqual(history.appliedStages.map(\.type), [.autoMtf, .linear, .identity])
         XCTAssertTrue(history.undo())
         XCTAssertEqual(history.appliedStages.map(\.type), [.autoMtf, .linear, .autoMtf])
+    }
+
+    func testStretchHistoryCanStartFromACarriedDirectoryRecipe() {
+        var linear = FITSStretchConfiguration.default
+        linear.type = .linear
+        linear.black = 0.1
+        linear.white = 0.8
+        let stack = FITSStretchStack(stages: [.default, linear])
+
+        let history = FITSStretchHistory(stack: stack)
+
+        XCTAssertEqual(history.stack, stack)
+        XCTAssertFalse(history.canUndo)
+        XCTAssertFalse(history.canRedo)
+    }
+
+    @MainActor
+    func testDocumentModelStartsFromTheCompleteCarriedProcessingRecipe() {
+        var linear = FITSStretchConfiguration.default
+        linear.type = .linear
+        var deconvolution = FITSDeconvolutionConfiguration.default
+        deconvolution.iterations = 3
+        let processing = FITSImageProcessingConfiguration(
+            stretchStack: FITSStretchStack(stages: [.default, linear]),
+            extractsBackground: true,
+            deconvolution: deconvolution
+        )
+        let missingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString).fits")
+
+        let model = ImageDocumentModel(
+            url: missingURL,
+            processingConfiguration: processing
+        )
+
+        XCTAssertEqual(model.processingConfiguration, processing)
+        XCTAssertFalse(model.stretchHistory.canUndo)
+    }
+
+    @MainActor
+    func testDocumentModelPreservesDirectoryStretchUndoAndRedoHistory() {
+        var linear = FITSStretchConfiguration.default
+        linear.type = .linear
+        linear.black = 0.1
+        linear.white = 0.9
+        var history = FITSStretchHistory()
+        history.apply(linear)
+        XCTAssertTrue(history.undo())
+        XCTAssertTrue(history.canRedo)
+        XCTAssertTrue(history.redo())
+        let processing = FITSImageProcessingConfiguration(
+            stretchStack: history.stack,
+            extractsBackground: false
+        )
+        let missingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString).fits")
+
+        let model = ImageDocumentModel(
+            url: missingURL,
+            processingConfiguration: processing,
+            stretchHistory: history
+        )
+
+        XCTAssertTrue(model.stretchHistory.canUndo)
+        XCTAssertFalse(model.stretchHistory.canRedo)
+        model.undoStretch()
+        XCTAssertEqual(model.stretchHistory.stack, .default)
+        XCTAssertTrue(model.stretchHistory.canRedo)
     }
 
     func testStretchHistoryCommitsRemovedAndReorderedStagesAsOneUndoStep() {
