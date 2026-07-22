@@ -7,11 +7,16 @@ import XCTest
 @testable import Seiza
 
 final class SeizaBuildInfoTests: XCTestCase {
-    func testAboutDetailsReportTheLockedUpstreamCore() throws {
+    func testAboutDetailsReportTheLockedRegistryPackage() throws {
         let commit = SeizaCore.gitCommit
+        let packageVersion = SeizaCore.packageVersion
+        let checksum = SeizaCore.packageChecksum
         XCTAssertNotEqual(SeizaCore.version, "unknown")
         XCTAssertEqual(commit.count, 40)
         XCTAssertTrue(commit.allSatisfy(\.isHexDigit))
+        XCTAssertEqual(packageVersion, "0.12.0")
+        XCTAssertEqual(checksum.count, 64)
+        XCTAssertTrue(checksum.allSatisfy(\.isHexDigit))
 
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -21,7 +26,9 @@ final class SeizaBuildInfoTests: XCTestCase {
             encoding: .utf8
         )
         XCTAssertTrue(lock.contains("name = \"seiza-cabi\""))
-        XCTAssertTrue(lock.contains("#\(commit)"))
+        XCTAssertTrue(lock.contains("version = \"\(packageVersion)\""))
+        XCTAssertTrue(lock.contains("checksum = \"\(checksum)\""))
+        XCTAssertFalse(lock.contains("git+https://github.com/theatrus/seiza"))
         XCTAssertEqual(
             AboutDetails.seizaCoreDescription,
             "Seiza Core \(SeizaCore.version)\nCommit \(commit)"

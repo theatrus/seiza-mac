@@ -967,6 +967,16 @@ enum SeizaCore {
         return String(cString: pointer)
     }
 
+    static var packageVersion: String {
+        guard let pointer = seiza_mac_core_package_version() else { return "unknown" }
+        return String(cString: pointer)
+    }
+
+    static var packageChecksum: String {
+        guard let pointer = seiza_mac_core_package_checksum() else { return "unknown" }
+        return String(cString: pointer)
+    }
+
     static func catalogStatus(catalogDirectory: URL?) throws -> CatalogStatus {
         var errorPointer: UnsafeMutablePointer<CChar>?
         let resultPointer: UnsafeMutablePointer<CChar>? = if let catalogDirectory {
