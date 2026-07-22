@@ -22,7 +22,7 @@ the cached background-prepared preview across deconvolution edits.
 
 Source-resolution 16-bit PNG and TIFF export over the native RGBA16 boundary
 from [Seiza PR #77](https://github.com/theatrus/seiza/pull/77) is now on `main`.
-Current development adds XISF document registration, mixed-directory browsing,
+Current `main` adds XISF document registration, mixed-directory browsing,
 full-precision rendering and processing, solving, 16-bit export, and Finder
 Quick Look through the reader merged in [Seiza PR #78](https://github.com/theatrus/seiza/pull/78).
 
@@ -51,7 +51,7 @@ Quick Look through the reader merged in [Seiza PR #78](https://github.com/theatr
 ## Phase 2 — serious inspection (in progress)
 
 - source-resolution 16-bit PNG and TIFF export with 16-bit overlay compositing (complete on `main`)
-- XISF document, directory, rendering, solving, export, and Quick Look input support (in development)
+- XISF document, directory, rendering, solving, export, and Quick Look input support (complete on `main`)
 - optional conservative stellar deconvolution with live bounded previews (complete on `main`)
 - pixel loupe, black/midtone controls, and finer stretch controls
 - star-detection overlays and measured HFR/FWHM
