@@ -108,6 +108,11 @@ image. Press **Solve** when you want a WCS solution and catalog context. The
 inspector then reports the field center, pixel scale, match count, RMS error,
 acquisition time, and overlay counts.
 
+The inspector also has a **Solve Image** button while it shows **Not solved**.
+After a successful solve, use **Export WCS…** there to write a header-only FITS
+`.wcs` sidecar. The file contains the linear WCS and all fitted SIP terms, and
+it leaves the source image unchanged.
+
 ![A solved North America and Pelican Nebula frame with catalog-colored outlines, named stars, WCS grid, histograms, and solve quality](images/seiza-solved-overlays.png)
 
 Solving requires a local Seiza catalog directory. Open **Seiza > Settings**,

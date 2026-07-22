@@ -53,6 +53,7 @@ the screenshots above and native XISF workflows.
 | Light deconvolution | Not included | FITS and XISF | Apply conservative damped Richardson–Lucy restoration to linear mono or RGB astronomy data before stretching, using a measured stellar PSF FWHM and guarded noise/ringing controls. Nothing runs unless you enable it. |
 | Zoom and inspection | Headers and statistics | Expanded | Fit to window, pan, pinch around the pointer, compare pre- and post-stretch histograms, inspect full image and processing details, and search or copy image headers. |
 | Local plate solving | Included | Adds XISF | Run a blind solve only when you press Solve. No image is uploaded. |
+| WCS export | Not included | Included | Export a solved image's linear or SIP solution as a standard header-only FITS `.wcs` sidecar. |
 | Catalog setup | Included | Faster installation | Download, verify, install, or repair solver catalogs in Settings with visible progress; inspect each catalog component and path; and reuse the verified cache through hard links when possible. |
 | Solver overlays | Included | Included | Toggle named and field stars, individual deep-sky catalogs, transients, comets, asteroids, detections, coordinate grid, and field center. |
 | Object outlines | Included | Included | Draw detailed OpenNGC contours with catalog ellipses as a fallback. |

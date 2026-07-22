@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum ViewportMath {
     static func clampedOrigin(
@@ -546,6 +547,7 @@ private struct ImagePageView: View {
     @State private var hiddenDeepSkyCatalogs = Set<DeepSkyCatalog>()
     @State private var isExporting = false
     @State private var exportError: String?
+    @State private var wcsExportError: String?
     @State private var imageClipboardError: String?
     @State private var copiesImageWhenPreviewFinishes = false
     @State private var processingClipboardError: String?
@@ -591,7 +593,11 @@ private struct ImagePageView: View {
             imagePane
                 .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
             if showInspector {
-                InspectorView(model: model)
+                InspectorView(
+                    model: model,
+                    onSolve: startSolve,
+                    onExportWCS: presentWCSExportPanel
+                )
                     .frame(minWidth: 260, idealWidth: 310, maxWidth: 390)
             }
         }
@@ -657,8 +663,7 @@ private struct ImagePageView: View {
                 }
 
                 Button {
-                    showInspector = true
-                    model.solve(catalogDirectory: CatalogAccess.resolve())
+                    startSolve()
                 } label: {
                     if isSolving {
                         ProgressView()
@@ -839,6 +844,19 @@ private struct ImagePageView: View {
             }
         )
         .alert(
+            "Couldn’t Export WCS",
+            isPresented: Binding(
+                get: { wcsExportError != nil },
+                set: { if !$0 { wcsExportError = nil } }
+            ),
+            actions: {
+                Button("OK", role: .cancel) {}
+            },
+            message: {
+                Text(wcsExportError ?? "An unknown error occurred.")
+            }
+        )
+        .alert(
             "Couldn’t Copy or Paste Adjustments",
             isPresented: Binding(
                 get: { processingClipboardError != nil },
@@ -921,6 +939,15 @@ private struct ImagePageView: View {
             canUndo: model.supportsAstronomyProcessing && model.stretchHistory.canUndo,
             canRedo: model.supportsAstronomyProcessing && model.stretchHistory.canRedo
         )
+    }
+
+    private func startSolve() {
+        guard model.image != nil, !isSolving else {
+            NSSound.beep()
+            return
+        }
+        showInspector = true
+        model.solve(catalogDirectory: CatalogAccess.resolve())
     }
 
     private func performUndo() {
@@ -1182,6 +1209,24 @@ private struct ImagePageView: View {
                     exportError = error.localizedDescription
                 }
             }
+        }
+    }
+
+    @MainActor
+    private func presentWCSExportPanel(_ solution: SolveResult) {
+        let panel = NSSavePanel()
+        panel.title = "Export WCS"
+        panel.prompt = "Export"
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.allowedContentTypes = [UTType(filenameExtension: "wcs") ?? .data]
+        panel.nameFieldStringValue = WCSFileWriter.suggestedFilename(for: model.url)
+        guard panel.runModal() == .OK, let destinationURL = panel.url else { return }
+
+        do {
+            try WCSFileWriter.write(solution.wcs, to: destinationURL)
+        } catch {
+            wcsExportError = error.localizedDescription
         }
     }
 
@@ -2907,6 +2952,8 @@ enum ImageHeaderTools {
 
 private struct InspectorView: View {
     @ObservedObject var model: ImageDocumentModel
+    let onSolve: () -> Void
+    let onExportWCS: (SolveResult) -> Void
     @State private var headerQuery = ""
 
     var body: some View {
@@ -3047,8 +3094,14 @@ private struct InspectorView: View {
     private var solveDetails: some View {
         switch model.solveState {
         case .idle:
-            Text("Not solved")
-                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Not solved")
+                    .foregroundStyle(.secondary)
+                Button(action: onSolve) {
+                    Label("Solve Image", systemImage: "scope")
+                }
+                .disabled(model.image == nil)
+            }
         case .solving:
             ProgressView("Solving…")
         case .failed(let message):
@@ -3107,6 +3160,11 @@ private struct InspectorView: View {
                             .textSelection(.enabled)
                     }
                 }
+            }
+            Button {
+                onExportWCS(solution)
+            } label: {
+                Label("Export WCS…", systemImage: "square.and.arrow.up")
             }
         }
     }

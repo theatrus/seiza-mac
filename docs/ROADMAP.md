@@ -58,7 +58,7 @@ Quick Look through the reader merged in [Seiza PR #78](https://github.com/theatr
 - compass, scale bar, and WCS cursor readout
 - hinted solving from FITS headers before blind-solving fallback
 - cancellation and in-process catalog/index caching
-- sidecar export with typed provenance and FITS WCS card export
+- typed solve provenance sidecars; header-only FITS WCS export is complete on `main`
 
 ## Phase 3 — system integration (later)
 

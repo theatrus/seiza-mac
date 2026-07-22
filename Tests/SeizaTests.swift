@@ -131,6 +131,78 @@ final class ImageHeaderToolsTests: XCTestCase {
     }
 }
 
+final class WCSFileWriterTests: XCTestCase {
+    func testWritesHeaderOnlyFITSWCSWithSIPCards() throws {
+        let wcs = WCSResult(
+            crval: [123.456, -22.5],
+            crpix: [99, 49],
+            cd: [[-0.001, 0.0002], [0.0001, 0.001]],
+            sip: SIPResult(
+                order: 2,
+                a: [1e-6, 2e-6, 3e-6],
+                b: [4e-6, 5e-6, 6e-6],
+                ap: [1e-7, 2e-7, 3e-7, 4e-7, 5e-7, 6e-7],
+                bp: [7e-7, 8e-7, 9e-7, 1e-6, 2e-6, 3e-6]
+            )
+        )
+
+        let data = try WCSFileWriter.data(for: wcs)
+        XCTAssertEqual(data.count, 5_760)
+        XCTAssertEqual(data.count % 2_880, 0)
+        XCTAssertEqual(cardValue("SIMPLE", in: data), "T")
+        XCTAssertEqual(cardValue("NAXIS", in: data), "0")
+        XCTAssertEqual(cardValue("CTYPE1", in: data), "'RA---TAN-SIP'")
+        XCTAssertEqual(cardValue("CTYPE2", in: data), "'DEC--TAN-SIP'")
+        XCTAssertEqual(cardValue("CRPIX1", in: data), "1.0000000000000E+02")
+        XCTAssertEqual(cardValue("CRPIX2", in: data), "5.0000000000000E+01")
+        XCTAssertEqual(cardValue("A_ORDER", in: data), "2")
+        XCTAssertEqual(cardValue("A_0_2", in: data), "1.0000000000000E-06")
+        XCTAssertEqual(cardValue("A_2_0", in: data), "3.0000000000000E-06")
+        XCTAssertEqual(cardValue("AP_0_0", in: data), "1.0000000000000E-07")
+        XCTAssertEqual(cardValue("BP_2_0", in: data), "3.0000000000000E-06")
+        XCTAssertTrue(containsCard("END", in: data))
+    }
+
+    func testRejectsIncompleteWCSAndSuggestsSidecarName() {
+        let invalid = WCSResult(
+            crval: [10],
+            crpix: [20, 30],
+            cd: [[1, 0], [0, 1]],
+            sip: nil
+        )
+
+        XCTAssertThrowsError(try WCSFileWriter.data(for: invalid))
+        XCTAssertEqual(
+            WCSFileWriter.suggestedFilename(
+                for: URL(fileURLWithPath: "/images/frame.001.xisf")
+            ),
+            "frame.001.wcs"
+        )
+    }
+
+    private func cardValue(_ keyword: String, in data: Data) -> String? {
+        guard let header = String(data: data, encoding: .ascii) else { return nil }
+        for offset in stride(from: 0, to: header.count, by: 80) {
+            let start = header.index(header.startIndex, offsetBy: offset)
+            let end = header.index(start, offsetBy: 80)
+            let card = String(header[start..<end])
+            if card.prefix(8).trimmingCharacters(in: .whitespaces) == keyword {
+                return card.dropFirst(10).trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return nil
+    }
+
+    private func containsCard(_ keyword: String, in data: Data) -> Bool {
+        guard let header = String(data: data, encoding: .ascii) else { return false }
+        return stride(from: 0, to: header.count, by: 80).contains { offset in
+            let start = header.index(header.startIndex, offsetBy: offset)
+            let end = header.index(start, offsetBy: 80)
+            return header[start..<end].prefix(8).trimmingCharacters(in: .whitespaces) == keyword
+        }
+    }
+}
+
 final class DocumentRegistrationTests: XCTestCase {
     func testAstronomyRegistrationsUseDedicatedDocumentIcon() throws {
         let documentTypes = try XCTUnwrap(
