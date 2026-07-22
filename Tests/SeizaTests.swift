@@ -102,6 +102,35 @@ final class ViewportMathTests: XCTestCase {
     }
 }
 
+final class ImageHeaderToolsTests: XCTestCase {
+    func testHeadersFilterByKeyOrValueAndCopyInDisplayOrder() {
+        let headers: [String: JSONValue] = [
+            "OBJECT": .string("North America Nebula"),
+            "FILTER": .string("H-alpha"),
+            "EXPTIME": .number(300),
+        ]
+
+        XCTAssertEqual(
+            ImageHeaderTools.entries(from: headers, matching: "").map(\.key),
+            ["EXPTIME", "FILTER", "OBJECT"]
+        )
+        XCTAssertEqual(
+            ImageHeaderTools.entries(from: headers, matching: "filter"),
+            [ImageHeaderEntry(key: "FILTER", value: "H-alpha")]
+        )
+
+        let valueMatch = ImageHeaderTools.entries(from: headers, matching: "nebula")
+        XCTAssertEqual(
+            valueMatch,
+            [ImageHeaderEntry(key: "OBJECT", value: "North America Nebula")]
+        )
+        XCTAssertEqual(
+            ImageHeaderTools.copyText(for: valueMatch),
+            "OBJECT = North America Nebula"
+        )
+    }
+}
+
 final class DocumentRegistrationTests: XCTestCase {
     func testAstronomyRegistrationsUseDedicatedDocumentIcon() throws {
         let documentTypes = try XCTUnwrap(
@@ -1277,6 +1306,22 @@ final class CatalogSetupPayloadTests: XCTestCase {
         XCTAssertFalse(status.readyForOverlays)
         XCTAssertTrue(status.starCatalog.available)
         XCTAssertFalse(status.transients.available)
+
+        let components = CatalogComponentDisplay.entries(from: status)
+        XCTAssertEqual(
+            components.map(\.title),
+            ["Star catalog", "Blind index", "Deep-sky objects", "Transients", "Minor bodies"]
+        )
+        XCTAssertEqual(components[0].path, "/tmp/seiza-catalogs/stars-deep-gaia17.bin")
+        XCTAssertEqual(
+            components.first { $0.id == "transients" },
+            CatalogComponentDisplay(
+                id: "transients",
+                title: "Transients",
+                available: false,
+                path: nil
+            )
+        )
     }
 
     func testVerificationProgressRemainsDeterminateAfterDownload() throws {

@@ -2877,8 +2877,37 @@ enum ImagePixelSampler {
     }
 }
 
+struct ImageHeaderEntry: Identifiable, Equatable {
+    let key: String
+    let value: String
+
+    var id: String { key }
+}
+
+enum ImageHeaderTools {
+    static func entries(
+        from headers: [String: JSONValue],
+        matching query: String
+    ) -> [ImageHeaderEntry] {
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return headers
+            .map { ImageHeaderEntry(key: $0.key, value: $0.value.description) }
+            .filter { entry in
+                normalizedQuery.isEmpty
+                    || entry.key.localizedCaseInsensitiveContains(normalizedQuery)
+                    || entry.value.localizedCaseInsensitiveContains(normalizedQuery)
+            }
+            .sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending }
+    }
+
+    static func copyText(for entries: [ImageHeaderEntry]) -> String {
+        entries.map { "\($0.key) = \($0.value)" }.joined(separator: "\n")
+    }
+}
+
 private struct InspectorView: View {
     @ObservedObject var model: ImageDocumentModel
+    @State private var headerQuery = ""
 
     var body: some View {
         List {
@@ -2900,9 +2929,44 @@ private struct InspectorView: View {
                                 value: model.stretchConfiguration.colorStrategy.title
                             )
                         }
+                        LabeledContent(
+                            "Background",
+                            value: model.extractsBackground ? "Gradient removed" : "Original"
+                        )
+                        if let deconvolution = model.deconvolutionConfiguration {
+                            LabeledContent("Deconvolution", value: "Light Richardson–Lucy")
+                            LabeledContent(
+                                "PSF FWHM",
+                                value: deconvolution.psfFWHMPixels.formatted(
+                                    .number.precision(.fractionLength(2))
+                                ) + " px"
+                            )
+                            LabeledContent(
+                                "Restoration",
+                                value: "\(deconvolution.iterations) iterations · "
+                                    + deconvolution.amount.formatted(
+                                        .percent.precision(.fractionLength(0))
+                                    )
+                            )
+                        } else {
+                            LabeledContent("Deconvolution", value: "Off")
+                        }
                     }
-                    LabeledContent("Median", value: "\(metadata.statistics.median)")
-                    LabeledContent("MAD", value: metadata.statistics.mad.formatted(.number.precision(.fractionLength(2))))
+                    LabeledContent("Minimum", value: metadata.statistics.minimum.formatted())
+                    LabeledContent("Maximum", value: metadata.statistics.maximum.formatted())
+                    LabeledContent(
+                        "Mean",
+                        value: metadata.statistics.mean.formatted(
+                            .number.precision(.fractionLength(2))
+                        )
+                    )
+                    LabeledContent("Median", value: metadata.statistics.median.formatted())
+                    LabeledContent(
+                        "MAD",
+                        value: metadata.statistics.mad.formatted(
+                            .number.precision(.fractionLength(2))
+                        )
+                    )
                 }
 
                 if metadata.inputHistogram?.isValid == true
@@ -2937,13 +3001,46 @@ private struct InspectorView: View {
 
             if let headers = model.metadata?.headers, !headers.isEmpty {
                 Section("Image headers") {
-                    ForEach(headers.keys.sorted(), id: \.self) { key in
-                        LabeledContent(key, value: headers[key]?.description ?? "")
+                    HStack {
+                        TextField("Search by keyword or value", text: $headerQuery)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityLabel("Search image headers")
+                        Button {
+                            copyHeaders(visibleHeaders)
+                        } label: {
+                            Label("Copy Visible", systemImage: "doc.on.doc")
+                        }
+                        .disabled(visibleHeaders.isEmpty)
+                    }
+
+                    if visibleHeaders.isEmpty {
+                        Text("No headers match this search.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(visibleHeaders) { entry in
+                            LabeledContent(entry.key, value: entry.value)
+                                .textSelection(.enabled)
+                        }
                     }
                 }
             }
         }
         .listStyle(.sidebar)
+        .onChange(of: model.url) { _, _ in
+            headerQuery = ""
+        }
+    }
+
+    private var visibleHeaders: [ImageHeaderEntry] {
+        guard let headers = model.metadata?.headers else { return [] }
+        return ImageHeaderTools.entries(from: headers, matching: headerQuery)
+    }
+
+    private func copyHeaders(_ entries: [ImageHeaderEntry]) {
+        guard !entries.isEmpty else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(ImageHeaderTools.copyText(for: entries), forType: .string)
     }
 
     @ViewBuilder
@@ -2964,10 +3061,17 @@ private struct InspectorView: View {
                 }
             }
         case .solved(let solution):
+            LabeledContent(
+                "Elapsed",
+                value: (Double(solution.elapsedMilliseconds) / 1_000).formatted(
+                    .number.precision(.fractionLength(2))
+                ) + " s"
+            )
             LabeledContent("RA", value: solution.centerRaDegrees.formatted(.number.precision(.fractionLength(5))) + "°")
             LabeledContent("Dec", value: solution.centerDecDegrees.formatted(.number.precision(.fractionLength(5))) + "°")
             LabeledContent("Scale", value: solution.scaleArcsecPerPixel.formatted(.number.precision(.fractionLength(3))) + "″/px")
             LabeledContent("Matches", value: "\(solution.matchedStars)")
+            LabeledContent("Detected", value: solution.detectedStars.formatted())
             LabeledContent("RMS", value: solution.rmsArcsec.formatted(.number.precision(.fractionLength(2))) + "″")
             if let captureTime = solution.captureTime {
                 LabeledContent("Acquired", value: captureTime)
@@ -2980,6 +3084,14 @@ private struct InspectorView: View {
             } else {
                 LabeledContent("Sky objects", value: "\(solution.objectPositions.count)")
             }
+            LabeledContent(
+                "Detected diagnostics",
+                value: solution.detectedStarPositions.count.formatted()
+            )
+            LabeledContent(
+                "Catalog diagnostics",
+                value: solution.catalogStarPositions.count.formatted()
+            )
             if let error = solution.objectCatalogError {
                 Text("Object overlay unavailable: \(error)")
                     .font(.caption)
@@ -2996,8 +3108,6 @@ private struct InspectorView: View {
                     }
                 }
             }
-            LabeledContent("Detected diagnostics", value: "\(solution.detectedStarPositions.count)")
-            LabeledContent("Catalog diagnostics", value: "\(solution.catalogStarPositions.count)")
         }
     }
 
