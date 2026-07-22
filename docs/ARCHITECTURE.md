@@ -31,12 +31,13 @@ roots to the new ones.
 
 ## C ABI
 
-The app depends on `seiza-cabi` directly from the main Seiza repository.
+The app depends on the published `seiza-cabi` crate from crates.io.
 `Rust/seiza-mac-core` is only a static-link host; it does not copy the C ABI
-implementation. It also exports the exact Seiza Git commit selected by
-`Cargo.lock` for the About panel. The upstream C ABI exports opaque image
-handles, borrowed byte buffers, owned UTF-8 strings, and JSON records. No Rust
-layout, allocator-owned memory, or panic is allowed to cross the ABI:
+implementation. It reads Cargo's VCS metadata from the published crate and
+exports its exact Seiza Git commit for the About panel. The upstream C ABI
+exports opaque image handles, borrowed byte buffers, owned UTF-8 strings, and
+JSON records. No Rust layout, allocator-owned memory, or panic is allowed to
+cross the ABI:
 
 - rendered RGBA8 or native-endian RGBA16 samples remain owned by their distinct
   opaque handles until Swift copies them;
@@ -151,5 +152,5 @@ Debug builds compile the host architecture. Release builds can pass both
 `arm64 x86_64` in `ARCHS`; `scripts/build-rust.sh` creates the two Rust slices
 and combines them with `lipo`. The resulting app and embedded extension need a
 single signing team, hardened runtime, notarization, and normal macOS app
-distribution. Cargo builds the pinned upstream ABI directly, so an XCFramework
-is unnecessary for the current source-based integration.
+distribution. Cargo builds the locked crates.io ABI directly, so an
+XCFramework is unnecessary for the current source-based integration.
