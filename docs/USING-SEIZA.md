@@ -54,8 +54,7 @@ Newer edits replace obsolete preview work. **Save Changes** commits the complete
 draft stack as one undoable operation and restores the full-resolution render;
 **Cancel** returns to the committed image.
 
-The development build in [PR #13](https://github.com/theatrus/seiza-mac/pull/13)
-also offers **Apply light deconvolution** in the same linear-processing
+Seiza also offers **Apply light deconvolution** in the same linear-processing
 section. Enable it only when you have measured the FWHM of
 unsaturated stars in source-image pixels. Seiza applies background correction
 first, then conservative damped Richardson–Lucy restoration, then the display
@@ -115,9 +114,11 @@ pixels. Satellite overlays are not included yet.
 ## Export the result
 
 Choose **File > Export** or press **Shift-Command-E**. Seiza writes PNG, JPEG,
-or TIFF at the source image dimensions. You can export the displayed image by
-itself or include the currently visible solve overlays. The committed
-full-resolution render is used even when a smaller live preview is on screen.
+or TIFF at the source image dimensions. PNG and TIFF default to 16 bits per
+channel, with an 8-bit option; JPEG is always 8-bit. You can export the image by
+itself or include the currently visible solve overlays without reducing a
+16-bit export to 8-bit. A 16-bit export is rendered directly from the committed
+full-precision processing stack even when a smaller live preview is on screen.
 
 ## Finder Quick Look
 

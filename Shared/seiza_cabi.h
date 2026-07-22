@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 typedef struct SeizaRenderedImage SeizaRenderedImage;
+typedef struct SeizaRenderedImage16 SeizaRenderedImage16;
 typedef void (*SeizaCatalogSetupProgressCallback)(const char *, void *);
 
 #ifdef __cplusplus
@@ -48,6 +49,27 @@ SeizaRenderedImage *seiza_rendered_image_open_with_stretch_config(
     uint32_t max_dimension,
     char **error_out);
 
+SeizaRenderedImage16 *seiza_rendered_image16_open(
+    const char *path,
+    double target_median,
+    double shadows_clip,
+    uint32_t max_dimension,
+    char **error_out);
+
+SeizaRenderedImage16 *seiza_rendered_image16_open_with_rgb_stretch(
+    const char *path,
+    double target_median,
+    double shadows_clip,
+    uint32_t max_dimension,
+    uint32_t rgb_stretch_mode,
+    char **error_out);
+
+SeizaRenderedImage16 *seiza_rendered_image16_open_with_stretch_config(
+    const char *path,
+    const char *config_json,
+    uint32_t max_dimension,
+    char **error_out);
+
 uint32_t seiza_rendered_image_width(const SeizaRenderedImage *image);
 uint32_t seiza_rendered_image_height(const SeizaRenderedImage *image);
 const uint8_t *seiza_rendered_image_rgba(const SeizaRenderedImage *image);
@@ -56,6 +78,13 @@ const uint8_t *seiza_rendered_image_bgra(const SeizaRenderedImage *image);
 size_t seiza_rendered_image_bgra_length(const SeizaRenderedImage *image);
 const char *seiza_rendered_image_metadata_json(const SeizaRenderedImage *image);
 void seiza_rendered_image_free(SeizaRenderedImage *image);
+
+uint32_t seiza_rendered_image16_width(const SeizaRenderedImage16 *image);
+uint32_t seiza_rendered_image16_height(const SeizaRenderedImage16 *image);
+const uint16_t *seiza_rendered_image16_rgba(const SeizaRenderedImage16 *image);
+size_t seiza_rendered_image16_rgba_length(const SeizaRenderedImage16 *image);
+const char *seiza_rendered_image16_metadata_json(const SeizaRenderedImage16 *image);
+void seiza_rendered_image16_free(SeizaRenderedImage16 *image);
 
 char *seiza_solve_image_json(
     const char *path,

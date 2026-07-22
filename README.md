@@ -12,9 +12,9 @@ you ask it to.
 ## Project status
 
 - **Latest public release:** [v0.3.0](https://github.com/theatrus/seiza-mac/releases/tag/v0.3.0), signed and notarized for Apple silicon and Intel.
-- **Current `main`:** unreleased. It adds repaired Finder Quick Look previews, paired histograms, image export, faster catalog installation, exact core version reporting, and a live full-precision stretch editor with background-gradient removal, stage reordering, undo/redo, and a detachable utility panel.
-- **In development:** [PR #13](https://github.com/theatrus/seiza-mac/pull/13) adds optional conservative stellar deconvolution on linear FITS pixels, with live controls for measured PSF FWHM, iterations, amount, noise damping, and correction limits. It uses the render composition merged in [Seiza PR #76](https://github.com/theatrus/seiza/pull/76).
-- **Next focus:** the serious-inspection work in [the roadmap](docs/ROADMAP.md), starting with a real pixel loupe and measured image-quality overlays.
+- **Current `main`:** unreleased. It adds repaired Finder Quick Look previews, paired histograms, image export, faster catalog installation, exact core version reporting, and a live full-precision stretch editor with background-gradient removal, light stellar deconvolution, stage reordering, undo/redo, and a detachable utility panel.
+- **In development:** native 16-bit PNG and TIFF export directly from Seiza's full-precision render pipeline, including 16-bit compositing for visible solve overlays. It uses the RGBA16 boundary merged in [Seiza PR #77](https://github.com/theatrus/seiza/pull/77).
+- **Next focus:** XISF input, followed by the serious-inspection work in [the roadmap](docs/ROADMAP.md), including a real pixel loupe and measured image-quality overlays.
 
 ## See what is in the frame
 
@@ -42,8 +42,8 @@ Electron, web view, or local server.
 
 The release column describes the downloadable v0.3.0 build. The `main` column
 describes merged but unreleased code, including the live-processing UI shown in
-the screenshots above. The development column describes the active
-[deconvolution PR](https://github.com/theatrus/seiza-mac/pull/13).
+the screenshots above. The development column describes the native 16-bit
+export work.
 
 | Feature | v0.3.0 release | Current `main` | Development | What you get |
 | --- | --- | --- | --- | --- |
@@ -52,13 +52,13 @@ the screenshots above. The development column describes the active
 | FITS display | Included | Included | Same | View mono, planar RGB, and Bayer/OSC data with fast native rendering. |
 | Stretch controls | Basic RGB modes | Live stack editor | Same | Add, remove, reorder, and edit automatic or manual stages without intermediate 8-bit quantization; preview changes live in the default popover or a detachable utility panel; undo and redo edits; pick GHS symmetry points from the image; and choose linked, per-channel, or luminance-preserving color handling. |
 | Background extraction | Not included | Available | Same | Fit and subtract a smooth gradient from linear mono or RGB samples before display stretching, while reusing the corrected preview as stretch controls change. |
-| Light deconvolution | Not included | Not included | Available | Apply conservative damped Richardson–Lucy restoration to linear mono or RGB FITS data before stretching, using a measured stellar PSF FWHM and guarded noise/ringing controls. Nothing runs unless you enable it. |
+| Light deconvolution | Not included | Available | Same | Apply conservative damped Richardson–Lucy restoration to linear mono or RGB FITS data before stretching, using a measured stellar PSF FWHM and guarded noise/ringing controls. Nothing runs unless you enable it. |
 | Zoom and inspection | Headers and statistics | Expanded | Same | Fit to window, pan, pinch around the pointer, and compare pre- and post-stretch histograms alongside headers and statistics. |
 | Local plate solving | Included | Included | Same | Run a blind solve only when you press Solve. No image is uploaded. |
 | Catalog setup | Included | Faster installation | Same | Download, verify, install, or repair solver catalogs in Settings with visible progress and reuse the verified cache through hard links when possible. |
 | Solver overlays | Included | Included | Same | Toggle named and field stars, individual deep-sky catalogs, transients, comets, asteroids, detections, coordinate grid, and field center. |
 | Object outlines | Included | Included | Same | Draw detailed OpenNGC contours with catalog ellipses as a fallback. |
-| Image export | Not included | Available | Same | Export the displayed image as PNG, JPEG, or TIFF, with or without the currently visible solve overlays. |
+| Image export | Not included | 8-bit PNG/JPEG/TIFF | Native 16-bit PNG/TIFF | Export at source dimensions with or without visible solve overlays. PNG and TIFF can preserve 16 bits per channel directly from the full-precision Seiza render; JPEG remains 8-bit. |
 | Finder Quick Look preview | Known Finder issue | Fixed | Same | Select a FITS file in Finder and press Space to see a stretched preview without opening Seiza. |
 | Finder file support | Included | Included | Same | Register `.fits`, `.fit`, and `.fts` files with a dedicated FITS document icon. |
 | Finder icon thumbnails | Planned | Planned | Planned | Show image content on FITS file icons. Spacebar previews already work through Quick Look on `main`. |

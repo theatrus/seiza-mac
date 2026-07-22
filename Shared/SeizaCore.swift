@@ -902,6 +902,98 @@ enum SeizaCore {
         return RenderedImage(image: image, metadata: metadata)
     }
 
+    /// Renders directly into native-endian RGBA16 for high-bit-depth export.
+    /// Display and thumbnail callers continue to use `render`, so they do not
+    /// allocate this larger buffer.
+    static func render16(
+        url: URL,
+        maxDimension: UInt32 = 0,
+        processing: FITSImageProcessingConfiguration = .default
+    ) throws -> RenderedImage {
+        var errorPointer: UnsafeMutablePointer<CChar>?
+        let extensionName = url.pathExtension.lowercased()
+        let isFITS = ["fits", "fit", "fts"].contains(extensionName)
+        let handle: OpaquePointer?
+        if isFITS {
+            let configurationJSON = String(
+                decoding: try processing.jsonData,
+                as: UTF8.self
+            )
+            handle = url.path.withCString { path in
+                configurationJSON.withCString { configuration in
+                    seiza_rendered_image16_open_with_stretch_config(
+                        path,
+                        configuration,
+                        maxDimension,
+                        &errorPointer
+                    )
+                }
+            }
+        } else {
+            handle = url.path.withCString { path in
+                seiza_rendered_image16_open(
+                    path,
+                    0.2,
+                    -2.8,
+                    maxDimension,
+                    &errorPointer
+                )
+            }
+        }
+        guard let handle else { throw cabiError(&errorPointer) }
+        defer { seiza_rendered_image16_free(handle) }
+
+        let width = Int(seiza_rendered_image16_width(handle))
+        let height = Int(seiza_rendered_image16_height(handle))
+        let elementCount = seiza_rendered_image16_rgba_length(handle)
+        let pixelCount = width.multipliedReportingOverflow(by: height)
+        let expectedElementCount = pixelCount.partialValue.multipliedReportingOverflow(by: 4)
+        let byteCount = elementCount.multipliedReportingOverflow(
+            by: MemoryLayout<UInt16>.stride
+        )
+        guard
+            width > 0,
+            height > 0,
+            !pixelCount.overflow,
+            !expectedElementCount.overflow,
+            elementCount == expectedElementCount.partialValue,
+            !byteCount.overflow,
+            let samples = seiza_rendered_image16_rgba(handle),
+            let metadataBytes = seiza_rendered_image16_metadata_json(handle)
+        else {
+            throw SeizaCoreError.invalidCABIResponse
+        }
+
+        let data = Data(bytes: samples, count: byteCount.partialValue)
+        var bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue)
+        #if _endian(little)
+        bitmapInfo.insert(.byteOrder16Little)
+        #else
+        bitmapInfo.insert(.byteOrder16Big)
+        #endif
+        guard
+            let provider = CGDataProvider(data: data as CFData),
+            let image = CGImage(
+                width: width,
+                height: height,
+                bitsPerComponent: 16,
+                bitsPerPixel: 64,
+                bytesPerRow: width * 8,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: bitmapInfo,
+                provider: provider,
+                decode: nil,
+                shouldInterpolate: false,
+                intent: .defaultIntent
+            )
+        else {
+            throw SeizaCoreError.invalidCABIResponse
+        }
+        let metadataData = Data(bytes: metadataBytes, count: strlen(metadataBytes))
+        let metadata = try JSONDecoder().decode(ImageMetadata.self, from: metadataData)
+        return RenderedImage(image: image, metadata: metadata)
+    }
+
     static func solve(
         url: URL,
         catalogDirectory: URL?,
