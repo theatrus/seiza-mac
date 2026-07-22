@@ -26,7 +26,7 @@ Confirm that the intended release version has not already been tagged or
 published:
 
 ```sh
-version=0.3.0
+version=0.4.0
 git rev-parse "v${version}" 2>/dev/null && exit 1 || true
 gh release view "v${version}" && exit 1 || true
 ```
@@ -38,9 +38,9 @@ Create a release branch and update all version surfaces:
 - `MARKETING_VERSION` for the app and Quick Look extension;
 - `CURRENT_PROJECT_VERSION` for the app and extension;
 - `Rust/seiza-mac-core/Cargo.toml` and `Cargo.lock`;
-- the pinned upstream `seiza-cabi` revision when the release intentionally
-  adopts a newer Seiza core (the About panel reads its version and exact commit
-  from the linked code and lockfile);
+- the published `seiza-cabi` version and lockfile checksum when the release
+  adopts a newer Seiza core (the About panel reads its package version and
+  source commit from the linked crate);
 - the current-version DMG link and screenshots in `README.md`; and
 - release notes or workflow behavior when the release format changes.
 
@@ -114,7 +114,7 @@ build; the annotated tag still creates the permanent versioned release.
 Create an annotated tag on the verified `main` commit:
 
 ```sh
-version=0.3.0
+version=0.4.0
 test "$(git branch --show-current)" = main
 test -z "$(git status --short)"
 git tag -a "v${version}" -m "Seiza ${version}"

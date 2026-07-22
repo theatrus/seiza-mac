@@ -4,9 +4,7 @@ Seiza is built for two jobs: moving quickly through real observing data and
 getting trustworthy sky context when you ask for it. Image loading, stretching,
 catalog access, and solving all stay on the Mac.
 
-The screenshots in this guide show the current unreleased `main` build. The
-downloadable v0.3.0 release and current `main` are compared in the
-[README feature matrix](../README.md#feature-matrix).
+The screenshots in this guide show Seiza 0.4.0.
 
 ## Open one image or a directory
 
@@ -159,7 +157,7 @@ full-resolution pass instead of copying the temporary bounded preview.
 
 ## Finder Quick Look
 
-After installing a build from current `main`, select a `.fits`, `.fit`, `.fts`, or
+After installing Seiza, select a `.fits`, `.fit`, `.fts`, or
 `.xisf` file in Finder and press Space. The bundled Quick Look extension makes
 a bounded stretched preview
 without launching the full viewer or opening solver catalogs.
