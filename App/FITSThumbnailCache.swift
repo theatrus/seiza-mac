@@ -211,7 +211,7 @@ enum ImageThumbnailCache {
             canonicalURL.path,
             String(values?.fileSize ?? 0),
             String(values?.contentModificationDate?.timeIntervalSince1970 ?? 0),
-            "fits-processing:\(processing.cacheIdentifier)",
+            "astronomy-processing:\(processing.cacheIdentifier)",
         ].joined(separator: "\n")
         let digest = SHA256.hash(data: Data(signature.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()

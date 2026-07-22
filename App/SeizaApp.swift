@@ -135,7 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
-        panel.message = "Choose FITS, JPEG, PNG, or TIFF images, or a folder containing them."
+        panel.message = "Choose FITS, XISF, JPEG, PNG, or TIFF images, or a folder containing them."
         guard panel.runModal() == .OK else { return }
         open(panel.urls)
     }
@@ -457,7 +457,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private func presentNoSupportedImagesAlert() {
         let alert = NSAlert()
         alert.messageText = "No Supported Images Found"
-        alert.informativeText = "Choose a folder containing FITS, JPEG, PNG, or TIFF images."
+        alert.informativeText = "Choose a folder containing FITS, XISF, JPEG, PNG, or TIFF images."
         alert.alertStyle = .informational
         alert.runModal()
     }

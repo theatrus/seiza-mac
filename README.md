@@ -1,9 +1,9 @@
 # Seiza for macOS
 
-**A fast, native FITS viewer and plate solver for the Mac.**
+**A fast, native FITS and XISF viewer and plate solver for the Mac.**
 
 Open one image or a whole night of captures. Step through them instantly. Stretch
-FITS data, inspect headers, plate-solve a frame, and see the stars and deep-sky
+FITS or XISF data, inspect headers, plate-solve a frame, and see the stars and deep-sky
 objects in it. Everything runs locally, and Seiza never solves an image until
 you ask it to.
 
@@ -12,9 +12,9 @@ you ask it to.
 ## Project status
 
 - **Latest public release:** [v0.3.0](https://github.com/theatrus/seiza-mac/releases/tag/v0.3.0), signed and notarized for Apple silicon and Intel.
-- **Current `main`:** unreleased. It adds repaired Finder Quick Look previews, paired histograms, image export, faster catalog installation, exact core version reporting, and a live full-precision stretch editor with background-gradient removal, light stellar deconvolution, stage reordering, undo/redo, and a detachable utility panel.
-- **In development:** native 16-bit PNG and TIFF export directly from Seiza's full-precision render pipeline, including 16-bit compositing for visible solve overlays. It uses the RGBA16 boundary merged in [Seiza PR #77](https://github.com/theatrus/seiza/pull/77).
-- **Next focus:** XISF input, followed by the serious-inspection work in [the roadmap](docs/ROADMAP.md), including a real pixel loupe and measured image-quality overlays.
+- **Current `main`:** unreleased. It adds repaired Finder Quick Look previews, paired histograms, 8- and 16-bit image export, full-resolution clipboard copy, faster catalog installation, exact core version reporting, and a live full-precision stretch editor with background-gradient removal, light stellar deconvolution, stage reordering, copy/paste, undo/redo, and a detachable utility panel.
+- **In development:** XISF input across document opening, mixed directories, full-precision processing, 16-bit export, solving, and Finder Quick Look. It uses the reader merged in [Seiza PR #78](https://github.com/theatrus/seiza/pull/78).
+- **Next focus:** the serious-inspection work in [the roadmap](docs/ROADMAP.md), including a real pixel loupe and measured image-quality overlays.
 
 ## See what is in the frame
 
@@ -26,7 +26,7 @@ the input and display histograms and solve quality visible.
 
 ## Review a whole night without leaving the viewer
 
-Open a directory, move through hundreds of mixed FITS and raster frames with
+Open a directory, move through hundreds of mixed FITS, XISF, and raster frames with
 the arrow keys, and use cached thumbnails to keep the sequence moving. Stretch
 controls stay live over the image and can detach into a persistent panel.
 
@@ -42,25 +42,24 @@ Electron, web view, or local server.
 
 The release column describes the downloadable v0.3.0 build. The `main` column
 describes merged but unreleased code, including the live-processing UI shown in
-the screenshots above. The development column describes the native 16-bit
-export work.
+the screenshots above. The development column adds native XISF workflows.
 
 | Feature | v0.3.0 release | Current `main` | Development | What you get |
 | --- | --- | --- | --- | --- |
-| FITS and raster viewing | Included | Included | Same | Open FITS, JPEG, PNG, and TIFF files or drop them onto an existing window. |
-| Folder browsing | Included | Included | Same | Browse mixed-format folders with a thumbnail drawer, local thumbnail cache, and arrow-key navigation. |
-| FITS display | Included | Included | Same | View mono, planar RGB, and Bayer/OSC data with fast native rendering. |
-| Stretch controls | Basic RGB modes | Live stack editor | Same | Add, remove, reorder, and edit automatic or manual stages without intermediate 8-bit quantization; render a zoom-aware responsive preview followed by a source-resolution refinement; carry the committed recipe through directory frames or copy and paste it between windows; undo and redo edits; pick GHS symmetry points from the image; and choose linked, per-channel, or luminance-preserving color handling. |
-| Background extraction | Not included | Available | Same | Fit and subtract a smooth gradient from linear mono or RGB samples before display stretching, while reusing the corrected preview as stretch controls change. |
-| Light deconvolution | Not included | Available | Same | Apply conservative damped Richardson–Lucy restoration to linear mono or RGB FITS data before stretching, using a measured stellar PSF FWHM and guarded noise/ringing controls. Nothing runs unless you enable it. |
+| Astronomy and raster viewing | FITS and raster | Same | Adds XISF | Open FITS, XISF, JPEG, PNG, and TIFF files or drop them onto an existing window. |
+| Folder browsing | Included | Included | Adds XISF | Browse mixed-format folders with a thumbnail drawer, local thumbnail cache, and arrow-key navigation. |
+| Astronomy display | FITS | FITS | FITS and XISF | View mono, planar RGB, and Bayer/OSC data with fast native rendering. |
+| Stretch controls | Basic RGB modes | Live FITS stack editor | Adds XISF | Add, remove, reorder, and edit automatic or manual stages without intermediate 8-bit quantization; render a zoom-aware responsive preview followed by a source-resolution refinement; carry the committed recipe through directory frames or copy and paste it between windows; undo and redo edits; pick GHS symmetry points from the image; and choose linked, per-channel, or luminance-preserving color handling. |
+| Background extraction | Not included | Available for FITS | Adds XISF | Fit and subtract a smooth gradient from linear mono or RGB samples before display stretching, while reusing the corrected preview as stretch controls change. |
+| Light deconvolution | Not included | Available for FITS | Adds XISF | Apply conservative damped Richardson–Lucy restoration to linear mono or RGB astronomy data before stretching, using a measured stellar PSF FWHM and guarded noise/ringing controls. Nothing runs unless you enable it. |
 | Zoom and inspection | Headers and statistics | Expanded | Same | Fit to window, pan, pinch around the pointer, and compare pre- and post-stretch histograms alongside headers and statistics. |
-| Local plate solving | Included | Included | Same | Run a blind solve only when you press Solve. No image is uploaded. |
+| Local plate solving | Included | Included | Adds XISF | Run a blind solve only when you press Solve. No image is uploaded. |
 | Catalog setup | Included | Faster installation | Same | Download, verify, install, or repair solver catalogs in Settings with visible progress and reuse the verified cache through hard links when possible. |
 | Solver overlays | Included | Included | Same | Toggle named and field stars, individual deep-sky catalogs, transients, comets, asteroids, detections, coordinate grid, and field center. |
 | Object outlines | Included | Included | Same | Draw detailed OpenNGC contours with catalog ellipses as a fallback. |
-| Image export and copy | Not included | 8-bit PNG/JPEG/TIFF | Native 16-bit PNG/TIFF | Export at source dimensions with or without visible solve overlays, or copy the full-resolution displayed image and visible overlays to the Mac clipboard. PNG and TIFF can preserve 16 bits per channel directly from the full-precision Seiza render; JPEG remains 8-bit. |
-| Finder Quick Look preview | Known Finder issue | Fixed | Same | Select a FITS file in Finder and press Space to see a stretched preview without opening Seiza. |
-| Finder file support | Included | Included | Same | Register `.fits`, `.fit`, and `.fts` files with a dedicated FITS document icon. |
+| Image export and copy | Not included | Native 16-bit PNG/TIFF | Adds XISF input | Export at source dimensions with or without visible solve overlays, or copy the full-resolution displayed image and visible overlays to the Mac clipboard. PNG and TIFF can preserve 16 bits per channel directly from the full-precision Seiza render; JPEG remains 8-bit. |
+| Finder Quick Look preview | Known Finder issue | FITS fixed | Adds XISF | Select a FITS or XISF file in Finder and press Space to see a stretched preview without opening Seiza. |
+| Finder file support | FITS | FITS | Adds XISF | Register `.fits`, `.fit`, `.fts`, and `.xisf` files with a dedicated astronomy document icon. |
 | Finder icon thumbnails | Planned | Planned | Planned | Show image content on FITS file icons. Spacebar previews already work through Quick Look on `main`. |
 | FITS cubes and multiple extensions | Planned | Planned | Planned | Navigate image planes and HDUs inside one FITS file. |
 
@@ -96,7 +95,7 @@ DerivedData/Build/Products/Debug/Seiza.app
 
 Open `Seiza.xcodeproj` to run and sign it with a local development team.
 
-The app and FITS document icons are generated from the checked-in colorful
+The app and astronomy document icons are generated from the checked-in colorful
 Seiza website mark. Regenerate them on macOS with:
 
 ```sh
@@ -139,7 +138,7 @@ environment setup.
 ## Catalogs and solving
 
 Previewing images does not require catalog data, and Seiza never starts a solve
-until you press Solve. Blind solving any supported FITS or raster image requires
+until you press Solve. Blind solving any supported FITS, XISF, or raster image requires
 a complete Seiza catalog directory containing a star catalog and blind index.
 
 Open **Seiza > Settings** (`Command-,`), leave **Standard blind solving**
@@ -171,7 +170,7 @@ If you created a catalog directory on the command line, choose that directory
 in Seiza's Settings. The sandbox permission is retained as a security-scoped
 bookmark. The main object catalog supplies named-star and deep-sky overlays,
 `transients.bin` supplies dated transient overlays, and `minor-bodies.bin`
-supplies comet and asteroid positions at the FITS acquisition time. Solving and
+supplies comet and asteroid positions at the image acquisition time. Solving and
 catalog loading
 only begin when the user presses Solve. If the required star catalog or blind
 index is missing, Solve explains the problem and links back to Catalog Settings.
@@ -179,8 +178,8 @@ Satellite overlays are intentionally deferred.
 
 ## Finder integration
 
-Installing Seiza registers FITS files and its Quick Look extension with macOS.
-Select a `.fits`, `.fit`, or `.fts` file in Finder and press Space to see a
+The development build registers FITS and XISF files and its Quick Look extension with macOS.
+Select a `.fits`, `.fit`, `.fts`, or `.xisf` file in Finder and press Space to see a
 stretched preview without opening the app.
 
 Always-visible image thumbnails on Finder file icons require a separate

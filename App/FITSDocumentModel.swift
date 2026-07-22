@@ -131,8 +131,9 @@ final class ImageDocumentModel: ObservableObject {
         load()
     }
 
-    var supportsFITSStretch: Bool {
-        metadata?.format == "FITS"
+    var supportsAstronomyProcessing: Bool {
+        guard let format = metadata?.format else { return false }
+        return format == "FITS" || format == "XISF"
     }
 
     var supportsColorStretch: Bool {

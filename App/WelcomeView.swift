@@ -30,7 +30,7 @@ struct WelcomeView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            Text("Drop FITS, JPEG, PNG, TIFF, or a folder here")
+            Text("Drop FITS, XISF, JPEG, PNG, TIFF, or a folder here")
                 .font(.callout)
                 .foregroundStyle(.tertiary)
         }
