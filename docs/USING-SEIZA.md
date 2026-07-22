@@ -4,7 +4,7 @@ Seiza is built for two jobs: moving quickly through real observing data and
 getting trustworthy sky context when you ask for it. Image loading, stretching,
 catalog access, and solving all stay on the Mac.
 
-The screenshots in this guide show Seiza 0.4.0.
+The screenshots in this guide show Seiza for Mac 0.4.0.
 
 ## Open one image or a directory
 

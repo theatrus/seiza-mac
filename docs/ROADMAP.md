@@ -2,7 +2,7 @@
 
 ## Current state
 
-Seiza 0.4.0 completes the native viewer base. It opens FITS, XISF, and raster
+Seiza for Mac 0.4.0 completes the native viewer base. It opens FITS, XISF, and raster
 images; browses mixed folders; renders full-precision stretch stacks; removes
 background gradients; applies optional light deconvolution; solves on demand;
 draws catalog overlays; exports images and WCS data; and previews FITS and XISF

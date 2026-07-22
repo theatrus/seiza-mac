@@ -1,4 +1,4 @@
-# Releasing Seiza for macOS
+# Releasing Seiza for Mac
 
 This is the operational checklist for a production release. Credential setup,
 the protected `signing` environment, and the Quick Look signing model are
@@ -117,7 +117,7 @@ Create an annotated tag on the verified `main` commit:
 version=0.4.0
 test "$(git branch --show-current)" = main
 test -z "$(git status --short)"
-git tag -a "v${version}" -m "Seiza ${version}"
+git tag -a "v${version}" -m "Seiza for Mac ${version}"
 git push origin "v${version}"
 ```
 

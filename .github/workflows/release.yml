@@ -187,7 +187,7 @@ jobs:
           release_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
           screenshot_base="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/docs/images"
           printf '%s\n' \
-            '## Seiza for macOS' \
+            '## Seiza for Mac' \
             '' \
             'This universal application and disk image are Developer ID signed, notarized by Apple, and stapled for normal Gatekeeper installation.' \
             '' \
@@ -210,7 +210,7 @@ jobs:
             > release-notes.md
           gh release create "$GITHUB_REF_NAME" \
             --verify-tag \
-            --title "Seiza ${GITHUB_REF_NAME}" \
+            --title "Seiza for Mac ${GITHUB_REF_NAME}" \
             --notes-file release-notes.md \
             dist/Seiza-* \
             dist/SHA256SUMS.txt
