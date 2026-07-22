@@ -170,7 +170,7 @@ enum FITSStretchType: String, CaseIterable, Identifiable {
         case .ghs:
             "Apply a manual Generalized Hyperbolic Stretch with protection boundaries."
         case .identity:
-            "Clamp normalized FITS samples to the display range without a stretch curve."
+            "Clamp normalized astronomy samples to the display range without a stretch curve."
         }
     }
 }
@@ -953,6 +953,10 @@ enum SeizaCoreError: LocalizedError {
 }
 
 enum SeizaCore {
+    private static let astronomyImageExtensions: Set<String> = [
+        "fits", "fit", "fts", "xisf",
+    ]
+
     static var version: String {
         guard let pointer = seiza_core_version() else { return "unknown" }
         return String(cString: pointer)
@@ -1015,9 +1019,9 @@ enum SeizaCore {
     ) throws -> RenderedImage {
         var errorPointer: UnsafeMutablePointer<CChar>?
         let extensionName = url.pathExtension.lowercased()
-        let isFITS = ["fits", "fit", "fts"].contains(extensionName)
+        let usesAstronomyPipeline = astronomyImageExtensions.contains(extensionName)
         let handle: OpaquePointer?
-        if isFITS {
+        if usesAstronomyPipeline {
             let configurationJSON = String(
                 decoding: try processing.jsonData,
                 as: UTF8.self
@@ -1093,9 +1097,9 @@ enum SeizaCore {
     ) throws -> RenderedImage {
         var errorPointer: UnsafeMutablePointer<CChar>?
         let extensionName = url.pathExtension.lowercased()
-        let isFITS = ["fits", "fit", "fts"].contains(extensionName)
+        let usesAstronomyPipeline = astronomyImageExtensions.contains(extensionName)
         let handle: OpaquePointer?
-        if isFITS {
+        if usesAstronomyPipeline {
             let configurationJSON = String(
                 decoding: try processing.jsonData,
                 as: UTF8.self

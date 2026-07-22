@@ -10,15 +10,16 @@ downloadable v0.3.0 release, current `main`, and active development work are com
 
 ## Open one image or a directory
 
-Choose **File > Open** and select a FITS, JPEG, PNG, or TIFF image. You can also
+Choose **File > Open** and select a FITS, XISF, JPEG, PNG, or TIFF image. You can also
 select a directory or drop a new image or directory onto an existing viewer
 window.
 
 Directory windows include a thumbnail drawer and accept the left and right
 arrow keys. Seiza caches thumbnails locally and preloads nearby entries, so
 moving through a long sequence does not require each thumbnail to be decoded
-again. A directory may mix FITS and ordinary raster images. The last committed
-FITS processing recipe carries forward as you move between frames, so a stack
+again. A directory may mix FITS, XISF, and ordinary raster images. The last
+committed astronomy processing recipe carries forward as you move between
+frames, so a stack
 chosen for one exposure becomes the starting point for the next. Automatic
 stages still measure every image independently. The stretch undo and redo
 timeline follows the recipe through the directory, so moving to another frame
@@ -34,7 +35,7 @@ background extraction, and deconvolution settings; pasting is one undoable edit.
 The viewer starts each image fitted to the available window. Pinch around the
 pointer to zoom, drag or scroll to pan, and press **Command-0** to fit again.
 
-## Build a FITS stretch
+## Build an astronomy stretch
 
 Click the **Stretch** toolbar button to open the compact editor. Stages run from
 top to bottom and keep floating-point data between them; Seiza only makes an
@@ -61,7 +62,7 @@ move between directory frames, and the menu owns the standard **Command-Z** and
 
 Automatic methods include Auto MTF and Percentile Asinh. Manual methods include
 Linear, Asinh, Midtones Transfer, and Generalized Hyperbolic Stretch (GHS). GHS
-can sample its symmetry point directly from the displayed image. Color FITS
+can sample its symmetry point directly from the displayed image. Color FITS or XISF
 data can use linked channels, independent channels, or luminance-preserving
 color handling.
 
@@ -83,7 +84,7 @@ is on.
 
 ## Read the image before and after stretching
 
-Open the inspector with the right-sidebar toolbar button. For FITS images it
+Open the inspector with the right-sidebar toolbar button. For FITS and XISF images it
 shows dimensions, encoding, robust input statistics, the active stretch, and
 paired histograms:
 
@@ -146,6 +147,7 @@ full-resolution pass instead of copying the temporary bounded preview.
 
 ## Finder Quick Look
 
-After installing Seiza, select a `.fits`, `.fit`, or `.fts` file in Finder and
-press Space. The bundled Quick Look extension makes a bounded stretched preview
+After installing the development build, select a `.fits`, `.fit`, `.fts`, or
+`.xisf` file in Finder and press Space. The bundled Quick Look extension makes
+a bounded stretched preview
 without launching the full viewer or opening solver catalogs.

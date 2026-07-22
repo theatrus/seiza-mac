@@ -607,11 +607,11 @@ private struct ImagePageView: View {
                 } label: {
                     Label("Stretch", systemImage: "slider.horizontal.3")
                 }
-                .disabled(!model.supportsFITSStretch)
+                .disabled(!model.supportsAstronomyProcessing)
                 .help(
-                    model.supportsFITSStretch
+                    model.supportsAstronomyProcessing
                         ? "Stretch: \(model.stretchConfiguration.type.title)"
-                        : "Stretch controls are available for FITS images"
+                        : "Stretch controls are available for FITS and XISF images"
                 )
                 .popover(isPresented: $showStretchControls, arrowEdge: .bottom) {
                     stretchEditor(presentation: .popover)
@@ -848,7 +848,7 @@ private struct ImagePageView: View {
             .onChange(of: model.stretchHistory) { _, _ in
                 synchronizeEditAvailability()
             }
-            .onChange(of: model.supportsFITSStretch) { _, _ in
+            .onChange(of: model.supportsAstronomyProcessing) { _, _ in
                 synchronizeEditAvailability()
             }
             .onChange(of: model.isPreviewRendering) { _, isRendering in
@@ -879,19 +879,19 @@ private struct ImagePageView: View {
 
     private func synchronizeEditAvailability() {
         editCoordinator.updateAvailability(
-            canUndo: model.supportsFITSStretch && model.stretchHistory.canUndo,
-            canRedo: model.supportsFITSStretch && model.stretchHistory.canRedo
+            canUndo: model.supportsAstronomyProcessing && model.stretchHistory.canUndo,
+            canRedo: model.supportsAstronomyProcessing && model.stretchHistory.canRedo
         )
     }
 
     private func performUndo() {
-        guard model.supportsFITSStretch, model.stretchHistory.canUndo else { return }
+        guard model.supportsAstronomyProcessing, model.stretchHistory.canUndo else { return }
         model.undoStretch()
         beginStretchEditing()
     }
 
     private func performRedo() {
-        guard model.supportsFITSStretch, model.stretchHistory.canRedo else { return }
+        guard model.supportsAstronomyProcessing, model.stretchHistory.canRedo else { return }
         model.redoStretch()
         beginStretchEditing()
     }
@@ -924,7 +924,7 @@ private struct ImagePageView: View {
     }
 
     private func copyImageProcessing() {
-        guard model.supportsFITSStretch else {
+        guard model.supportsAstronomyProcessing else {
             NSSound.beep()
             return
         }
@@ -936,7 +936,7 @@ private struct ImagePageView: View {
     }
 
     private func pasteImageProcessing() {
-        guard model.supportsFITSStretch else {
+        guard model.supportsAstronomyProcessing else {
             NSSound.beep()
             return
         }
@@ -2645,7 +2645,7 @@ private struct InspectorView: View {
                     LabeledContent("Dimensions", value: "\(metadata.width) × \(metadata.height)")
                     LabeledContent("Format", value: metadata.format)
                     LabeledContent("Encoding", value: metadata.colorKind)
-                    if model.supportsFITSStretch {
+                    if model.supportsAstronomyProcessing {
                         LabeledContent(
                             "Stretch",
                             value: model.stretchHistory.appliedStages.count == 1
@@ -2694,7 +2694,7 @@ private struct InspectorView: View {
             }
 
             if let headers = model.metadata?.headers, !headers.isEmpty {
-                Section("FITS headers") {
+                Section("Image headers") {
                     ForEach(headers.keys.sorted(), id: \.self) { key in
                         LabeledContent(key, value: headers[key]?.description ?? "")
                     }

@@ -3,21 +3,22 @@
 ## Product boundary
 
 `Seiza.app` is a native SwiftUI/AppKit macOS application. It registers FITS,
-JPEG, PNG, and TIFF document types, owns document windows and settings, and
+XISF, JPEG, PNG, and TIFF document types, owns document windows and settings, and
 performs expensive work off the main thread. A directory window may contain
 any mixture of those formats. `SeizaQuickLook.appex` is a small data-based
-Quick Look preview provider for FITS, which macOS does not decode itself. Both
+Quick Look preview provider for FITS and XISF, which macOS does not decode itself. Both
 compile the same Swift wrapper and statically link the same Rust C ABI.
 
 ```text
 Seiza.app ───────────────┐
                         ├─ Swift SeizaCore ─ C ABI ─ upstream seiza-cabi
 SeizaQuickLook.appex ────┘                                  ├─ seiza-fits
+                                                            ├─ seiza-xisf
                                                             ├─ image
                                                             └─ seiza
 ```
 
-The Quick Look extension only decodes FITS, stretches it, and bounds the output
+The Quick Look extension only decodes FITS or XISF, stretches it, and bounds the output
 to a 4096-pixel maximum dimension. It does not open catalogs or plate-solve.
 That keeps system previews responsive and isolates catalog access to the main
 app. macOS continues to provide its built-in previews for raster formats.
@@ -58,13 +59,13 @@ including them does not down-convert the source. This boundary is based on the
 rendered pixels rather than the source extension, allowing another supported
 high-depth input such as XISF to reuse it.
 
-FITS display rendering sends a non-empty, ordered stack of validated stretch
+FITS and XISF display rendering sends a non-empty, ordered stack of validated stretch
 configurations to the C ABI. Rust keeps intermediate stage data in `f32` and
 only converts the final result to RGBA, so the Swift undo/redo history never
 introduces 8-bit interstage quantization. The toolbar groups automatic MTF and
 percentile Asinh separately from manual Linear, Asinh, MTF, and Generalized
 Hyperbolic Stretch controls, with an identity option for normalized data. GHS
-can sample its symmetry point from the displayed image. Color FITS can analyze
+can sample its symmetry point from the displayed image. Color FITS and XISF can analyze
 linked or per-channel data, or stretch luminance while preserving RGB
 chromaticity. An optional background step fits and subtracts a smooth model
 from the linear mono or RGB samples. Optional deconvolution then applies
@@ -95,7 +96,7 @@ change. Its source-pixel PSF FWHM is scaled to the bounded preview dimensions;
 the committed render uses the original value at full resolution.
 
 Raster JPEG, PNG, and TIFF pixels remain color-managed display data and bypass
-the FITS stretch pipeline. Thumbnail-cache and background-render job identities
+the astronomy stretch pipeline. Thumbnail-cache and background-render job identities
 include the complete, deterministically encoded processing request, so only
 truly identical stretch, background, and deconvolution renders share work or
 cached pixels.
@@ -122,7 +123,7 @@ entitlements; selected directories are retained as security-scoped bookmarks.
 
 The app keeps these values distinct:
 
-- original source format and, when present, FITS headers;
+- original source format and, when present, astronomy image headers;
 - derived display pixels and stretch settings;
 - detected image stars;
 - a solved WCS with solver quality and elapsed time;
@@ -140,7 +141,7 @@ solve parameters, and WCS/SIP output.
 
 The main catalog supplies deep-sky objects and named stars. Transients and
 minor bodies are opened from their dedicated catalog files only after an
-explicit solve. Minor-body coordinates are calculated for the FITS acquisition
+explicit solve. Minor-body coordinates are calculated for the image acquisition
 time and are unavailable when no usable timestamp exists. Satellite prediction
 is outside the current application boundary.
 

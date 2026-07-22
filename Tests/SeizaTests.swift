@@ -38,7 +38,10 @@ final class ImageCollectionTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        for name in ["frame10.fits", "frame2.FIT", "preview.jpg", "notes.txt", ".hidden.png"] {
+        for name in [
+            "frame10.fits", "frame2.FIT", "integration.XISF", "preview.jpg",
+            "notes.txt", ".hidden.png",
+        ] {
             XCTAssertTrue(FileManager.default.createFile(
                 atPath: directory.appendingPathComponent(name).path,
                 contents: Data()
@@ -50,18 +53,22 @@ final class ImageCollectionTests: XCTestCase {
         )
 
         let names = ImageCollection.collect(from: [directory]).map(\.lastPathComponent)
-        XCTAssertEqual(names, ["frame2.FIT", "frame10.fits", "preview.jpg"])
+        XCTAssertEqual(
+            names,
+            ["frame2.FIT", "frame10.fits", "integration.XISF", "preview.jpg"]
+        )
     }
 
     func testSupportedExtensionMatchingIsCaseInsensitive() {
         XCTAssertTrue(ImageCollection.isSupportedImage(URL(fileURLWithPath: "/tmp/a.FTS")))
+        XCTAssertTrue(ImageCollection.isSupportedImage(URL(fileURLWithPath: "/tmp/a.XISF")))
         XCTAssertTrue(ImageCollection.isSupportedImage(URL(fileURLWithPath: "/tmp/a.TIFF")))
         XCTAssertFalse(ImageCollection.isSupportedImage(URL(fileURLWithPath: "/tmp/a.svg")))
     }
 }
 
 final class DocumentRegistrationTests: XCTestCase {
-    func testFITSRegistrationUsesDedicatedDocumentIcon() throws {
+    func testAstronomyRegistrationsUseDedicatedDocumentIcon() throws {
         let documentTypes = try XCTUnwrap(
             Bundle.main.infoDictionary?["CFBundleDocumentTypes"]
                 as? [[String: Any]]
@@ -70,17 +77,22 @@ final class DocumentRegistrationTests: XCTestCase {
             let contentTypes = declaration["LSItemContentTypes"] as? [String]
             return contentTypes?.contains("fyi.seiza.fits") == true
         })
+        let xisfType = try XCTUnwrap(documentTypes.first { declaration in
+            let contentTypes = declaration["LSItemContentTypes"] as? [String]
+            return contentTypes?.contains("fyi.seiza.xisf") == true
+        })
         let imageType = try XCTUnwrap(documentTypes.first { declaration in
             let contentTypes = declaration["LSItemContentTypes"] as? [String]
             return contentTypes?.contains("public.jpeg") == true
         })
 
         XCTAssertEqual(fitsType["CFBundleTypeIconFile"] as? String, "FITSFile")
+        XCTAssertEqual(xisfType["CFBundleTypeIconFile"] as? String, "FITSFile")
         XCTAssertNil(imageType["CFBundleTypeIconFile"])
         XCTAssertNotNil(Bundle.main.url(forResource: "FITSFile", withExtension: "icns"))
     }
 
-    func testQuickLookExtensionDeclaresFinderFITSPreviewSupport() throws {
+    func testQuickLookExtensionDeclaresFinderAstronomyPreviewSupport() throws {
         let plugInsURL = try XCTUnwrap(Bundle.main.builtInPlugInsURL)
         let extensionURL = plugInsURL.appendingPathComponent("SeizaQuickLook.appex")
         let extensionBundle = try XCTUnwrap(Bundle(url: extensionURL))
@@ -99,7 +111,7 @@ final class DocumentRegistrationTests: XCTestCase {
         XCTAssertEqual(attributes["QLSupportsSearchableItems"] as? Bool, false)
         XCTAssertEqual(
             attributes["QLSupportedContentTypes"] as? [String],
-            ["fyi.seiza.fits"]
+            ["fyi.seiza.fits", "fyi.seiza.xisf"]
         )
         XCTAssertEqual(
             extensionInfo["NSExtensionPrincipalClass"] as? String,
@@ -421,6 +433,57 @@ final class RenderBoundaryTests: XCTestCase {
         XCTAssertEqual(stacked.metadata.stretchStages, 2)
     }
 
+    @MainActor
+    func testSyntheticXISFUsesTheFullAstronomyPipelineThroughSwiftBoundary() async throws {
+        let url = try writeSyntheticXISF(
+            width: 2,
+            height: 2,
+            values: [0.001, 0.25, 0.5, 1.0]
+        )
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let processing = FITSImageProcessingConfiguration(
+            stretchStack: FITSStretchStack(stages: [.identity]),
+            extractsBackground: false
+        )
+        let rendered = try SeizaCore.render(
+            url: url,
+            maxDimension: 4_096,
+            processing: processing
+        )
+        XCTAssertEqual(rendered.image.width, 2)
+        XCTAssertEqual(rendered.image.height, 2)
+        XCTAssertEqual(rendered.metadata.format, "XISF")
+        XCTAssertEqual(rendered.metadata.headers["OBJECT"]?.description, "M42")
+        XCTAssertEqual(rendered.metadata.stretchStages, 1)
+        XCTAssertTrue(try XCTUnwrap(rendered.metadata.inputHistogram).isValid)
+
+        let rendered16 = try SeizaCore.render16(
+            url: url,
+            maxDimension: 4_096,
+            processing: processing
+        )
+        XCTAssertEqual(rendered16.image.bitsPerComponent, 16)
+        XCTAssertEqual(rendered16.image.bitsPerPixel, 64)
+        XCTAssertEqual(rendered16.metadata.format, "XISF")
+        let rgba16Data = try XCTUnwrap(rendered16.image.dataProvider?.data as Data?)
+        let rgba16Samples = rgba16Data.withUnsafeBytes {
+            Array($0.bindMemory(to: UInt16.self))
+        }
+        XCTAssertTrue(
+            rgba16Samples.enumerated().contains { index, sample in
+                index % 4 != 3 && sample % 257 != 0
+            },
+            "XISF export must preserve values finer than replicated RGBA8"
+        )
+
+        let model = ImageDocumentModel(url: url, processingConfiguration: processing)
+        try await waitUntil("initial XISF render") {
+            if case .loaded = model.loadState { true } else { false }
+        }
+        XCTAssertTrue(model.supportsAstronomyProcessing)
+    }
+
     func testBackgroundExtractionRunsBeforeStretchingThroughSwiftBoundary() throws {
         let width = 96
         let height = 72
@@ -690,6 +753,47 @@ final class RenderBoundaryTests: XCTestCase {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("\(UUID().uuidString).fits")
         try fits.write(to: url)
+        return url
+    }
+
+    private func writeSyntheticXISF(
+        width: Int,
+        height: Int,
+        values: [Float32]
+    ) throws -> URL {
+        XCTAssertEqual(values.count, width * height)
+        var samples = Data()
+        for value in values {
+            var bitPattern = value.bitPattern.littleEndian
+            withUnsafeBytes(of: &bitPattern) { samples.append(contentsOf: $0) }
+        }
+
+        let imageTemplate = """
+        <Image id="image0" geometry="\(width):\(height):1" sampleFormat="Float32" bounds="0:1" colorSpace="Gray" location="attachment:@OFFSET@:\(samples.count)"><Property id="Observation:Object:Name" type="String">M42</Property></Image>
+        """
+        var attachmentOffset = 0
+        var header = ""
+        while true {
+            let image = imageTemplate.replacingOccurrences(
+                of: "@OFFSET@",
+                with: String(attachmentOffset)
+            )
+            header = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><xisf version=\"1.0\" xmlns=\"http://www.pixinsight.com/xisf\">\(image)</xisf>"
+            let nextOffset = 16 + header.utf8.count
+            guard nextOffset != attachmentOffset else { break }
+            attachmentOffset = nextOffset
+        }
+
+        var xisf = Data("XISF0100".utf8)
+        var headerLength = UInt32(header.utf8.count).littleEndian
+        withUnsafeBytes(of: &headerLength) { xisf.append(contentsOf: $0) }
+        xisf.append(Data(repeating: 0, count: 4))
+        xisf.append(Data(header.utf8))
+        xisf.append(samples)
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString).xisf")
+        try xisf.write(to: url)
         return url
     }
 }

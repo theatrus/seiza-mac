@@ -10,18 +10,21 @@ image export, adopts the upstream `seiza-cabi` crate and faster catalog
 installer, reports the exact linked core version, and adds full-precision
 stackable stretch controls with undo/redo, image-picked GHS symmetry points,
 latest-only live previews, optional smooth background-gradient removal,
-in-place add/remove/reorder controls, and a detachable utility panel.
+in-place add/remove/reorder controls, a detachable utility panel, reusable
+directory recipes, full-resolution clipboard copy, and synchronized menu and
+toolbar undo/redo.
 Optional conservative deconvolution is now on `main`, after background
 correction and before stretching. The Mac controls expose measured PSF FWHM,
 iterations, amount, noise damping, and correction limits without enabling the
 operation by default. Merged [Seiza PR #76](https://github.com/theatrus/seiza/pull/76)
-composes that step inside the native linear FITS render pipeline and preserves
+composes that step inside the native linear astronomy render pipeline and preserves
 the cached background-prepared preview across deconvolution edits.
 
-Current development adds source-resolution 16-bit PNG and TIFF export over the
-native RGBA16 boundary from [Seiza PR #77](https://github.com/theatrus/seiza/pull/77).
-XISF is the next input-format integration; it will reuse the same generic
-high-bit-depth render and export path instead of adding a format-specific writer.
+Source-resolution 16-bit PNG and TIFF export over the native RGBA16 boundary
+from [Seiza PR #77](https://github.com/theatrus/seiza/pull/77) is now on `main`.
+Current development adds XISF document registration, mixed-directory browsing,
+full-precision rendering and processing, solving, 16-bit export, and Finder
+Quick Look through the reader merged in [Seiza PR #78](https://github.com/theatrus/seiza/pull/78).
 
 ## Phase 1 — native viewer foundation (complete on `main`)
 
@@ -47,8 +50,8 @@ high-bit-depth render and export path instead of adding a format-specific writer
 
 ## Phase 2 — serious inspection (in progress)
 
-- source-resolution 16-bit PNG and TIFF export with 16-bit overlay compositing
-- XISF document, directory, rendering, solving, and export input support
+- source-resolution 16-bit PNG and TIFF export with 16-bit overlay compositing (complete on `main`)
+- XISF document, directory, rendering, solving, export, and Quick Look input support (in development)
 - optional conservative stellar deconvolution with live bounded previews (complete on `main`)
 - pixel loupe, black/midtone controls, and finer stretch controls
 - star-detection overlays and measured HFR/FWHM

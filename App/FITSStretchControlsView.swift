@@ -22,7 +22,7 @@ struct FITSStretchControlsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("FITS Stretch")
+                Text("Image Stretch")
                     .font(.headline)
                 Spacer()
                 if let popOut {
@@ -150,7 +150,7 @@ struct FITSStretchControlsView: View {
                         Text("Linear Processing")
                             .font(.subheadline.weight(.semibold))
                         Toggle("Remove background gradient", isOn: $extractsBackground)
-                        Text("Fit and subtract a smooth background from linear FITS samples before the first stretch stage.")
+                        Text("Fit and subtract a smooth background from linear FITS or XISF samples before the first stretch stage.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
