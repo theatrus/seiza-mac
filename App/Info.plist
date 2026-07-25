@@ -75,6 +75,12 @@
     <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>SUEnableInstallerLauncherService</key>
+    <true/>
+    <key>SUFeedURL</key>
+    <string>https://github.com/theatrus/seiza-mac/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>Jk4K7QO9ohQbi455S888/lnSiqXB6a5sB4wEuEZjaQ0=</string>
     <key>UTExportedTypeDeclarations</key>
     <array>
         <dict>

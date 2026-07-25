@@ -38,6 +38,41 @@ jobs:
               | awk '/MARKETING_VERSION/ { print $3; exit }'
           )"
           test "$version" = "$marketing_version"
+          build_version="$(
+            xcodebuild \
+              -project Seiza.xcodeproj \
+              -target Seiza \
+              -configuration Release \
+              -showBuildSettings \
+              | awk '/CURRENT_PROJECT_VERSION/ { print $3; exit }'
+          )"
+          quicklook_build_version="$(
+            xcodebuild \
+              -project Seiza.xcodeproj \
+              -target SeizaQuickLook \
+              -configuration Release \
+              -showBuildSettings \
+              | awk '/CURRENT_PROJECT_VERSION/ { print $3; exit }'
+          )"
+          [[ "$build_version" =~ ^[1-9][0-9]*$ ]]
+          test "$build_version" = "$quicklook_build_version"
+
+          latest_appcast="$RUNNER_TEMP/latest-appcast.xml"
+          if curl \
+            --fail \
+            --location \
+            --silent \
+            --show-error \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/appcast.xml" \
+            --output "$latest_appcast"; then
+            previous_build="$(
+              xmllint \
+                --xpath 'string((//*[local-name()="version"])[1])' \
+                "$latest_appcast"
+            )"
+            [[ "$previous_build" =~ ^[1-9][0-9]*$ ]]
+            test "$build_version" -gt "$previous_build"
+          fi
           cargo fmt --all --check
           cargo test --workspace --locked
 
@@ -87,26 +122,14 @@ jobs:
           test -n "$certificate_identity"
           printf 'CERT_ID=%s\n' "$certificate_identity" >> "$GITHUB_ENV"
 
-      - name: Sign application and Quick Look extension
+      - name: Sign Sparkle, Quick Look extension, and application
         run: |
           app_path="DerivedData/Build/Products/Release/Seiza.app"
-          quicklook_path="$app_path/Contents/PlugIns/SeizaQuickLook.appex"
-
-          codesign \
-            --force \
-            --options runtime \
-            --timestamp \
-            --entitlements QuickLook/SeizaQuickLook.entitlements \
-            --sign "$CERT_ID" \
-            "$quicklook_path"
-          codesign \
-            --force \
-            --options runtime \
-            --timestamp \
-            --entitlements App/Seiza.entitlements \
-            --sign "$CERT_ID" \
-            "$app_path"
-          codesign --verify --deep --strict --verbose=4 "$app_path"
+          scripts/sign-app.sh \
+            "$app_path" \
+            QuickLook/SeizaQuickLook.entitlements \
+            App/Seiza.entitlements \
+            "$CERT_ID"
 
       - name: Notarize and staple application
         env:
@@ -172,17 +195,11 @@ jobs:
             --verbose=4 \
             "$dmg_path"
 
-      - name: Produce checksums
-        run: |
-          (
-            cd dist
-            shasum -a 256 Seiza-* > SHA256SUMS.txt
-          )
-
-      - name: Publish GitHub release
+      - name: Prepare release notes and Sparkle appcast
         env:
-          GH_TOKEN: ${{ github.token }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
         run: |
+          test -n "$SPARKLE_ED_PRIVATE_KEY"
           version="${GITHUB_REF_NAME#v}"
           release_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
           screenshot_base="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/docs/images"
@@ -203,16 +220,48 @@ jobs:
             '- 8- and 16-bit image export with optional overlays' \
             '- Finder Quick Look previews for FITS and XISF' \
             '- Mixed-format folder browsing with cached thumbnails' \
+            '- Signed in-app updates with user-controlled checks and installs' \
             '' \
             "![Seiza folder browser and live stretch editor](${screenshot_base}/seiza-directory-stretch.png)" \
             '' \
             "![Seiza plate-solved FITS view](${screenshot_base}/seiza-solved-overlays.png)" \
             > release-notes.md
+
+          appcast_directory="$RUNNER_TEMP/sparkle-appcast"
+          mkdir -p "$appcast_directory"
+          cp "dist/Seiza-${version}-universal.zip" "$appcast_directory/"
+          cp release-notes.md "$appcast_directory/Seiza-${version}-universal.md"
+          printf '%s' "$SPARKLE_ED_PRIVATE_KEY" \
+            | DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast \
+                --ed-key-file - \
+                --download-url-prefix "${release_base}/" \
+                --embed-release-notes \
+                --maximum-deltas 0 \
+                -o "$PWD/dist/appcast.xml" \
+                "$appcast_directory"
+          plutil -extract SUPublicEDKey raw \
+            DerivedData/Build/Products/Release/Seiza.app/Contents/Info.plist \
+            | grep -qx 'Jk4K7QO9ohQbi455S888/lnSiqXB6a5sB4wEuEZjaQ0='
+          grep -q "url=\"${release_base}/Seiza-${version}-universal.zip\"" \
+            dist/appcast.xml
+
+      - name: Produce checksums
+        run: |
+          (
+            cd dist
+            shasum -a 256 Seiza-* appcast.xml > SHA256SUMS.txt
+          )
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
           gh release create "$GITHUB_REF_NAME" \
             --verify-tag \
             --title "Seiza for Mac ${GITHUB_REF_NAME}" \
             --notes-file release-notes.md \
             dist/Seiza-* \
+            dist/appcast.xml \
             dist/SHA256SUMS.txt
 
       - name: Remove signing material

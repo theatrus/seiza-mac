@@ -6,10 +6,11 @@ including the release PR, exact-head merge, annotated tag, artifact checks,
 download links, and screenshots.
 
 Tags matching `vMAJOR.MINOR.PATCH` build a universal macOS application, package
-it as a DMG and ZIP, verify the disk image, produce SHA-256 checksums, and create
-a GitHub release. The tag must match the Xcode `MARKETING_VERSION`. The release
-job only runs in `theatrus/seiza-mac` for a trusted tag push and enters the
-protected GitHub `signing` environment before it can read credentials.
+it as a DMG and ZIP, create a signed Sparkle appcast, verify the disk image,
+produce SHA-256 checksums, and create a GitHub release. The tag must match the
+Xcode `MARKETING_VERSION`. The release job only runs in
+`theatrus/seiza-mac` for a trusted tag push and enters the protected GitHub
+`signing` environment before it can read credentials.
 
 Normal CI runs for every pull request and push to `main`. Its validation job is
 unsigned, has read-only repository access, and never receives signing secrets.
@@ -54,8 +55,8 @@ both applications are distributed by the same Apple Developer team.
 
 ### Quick Look extension
 
-The Quick Look extension does not need another certificate, API key, secret, or
-installer certificate. It is the nested bundle
+The Quick Look extension does not need another Apple certificate, API key,
+secret, or installer certificate. It is the nested bundle
 `Seiza.app/Contents/PlugIns/SeizaQuickLook.appex` with bundle identifier
 `fyi.seiza.mac.quicklook`. CI signs it first with the same Developer ID
 Application identity and `QuickLook/SeizaQuickLook.entitlements`, then signs the
@@ -73,7 +74,7 @@ In GitHub, open **Settings → Environments**, create an environment named
 `signing`, and select **Selected branches and tags**. Allow the `main` branch
 for the latest-main and owner-dispatched reviewed PR builds, and allow the
 `v*.*.*` tag pattern for releases. A required reviewer is recommended as an
-additional gate. Add these six **environment secrets** to that environment, not
+additional gate. Add these seven **environment secrets** to that environment, not
 to a checked-in file:
 
 - `APPLE_BUILD_CERTIFICATE`: base64-encoded Developer ID Application `.p12`;
@@ -82,7 +83,9 @@ to a checked-in file:
   keychain;
 - `APPLE_API_ISSUER`: App Store Connect API Issuer ID;
 - `APPLE_API_KEY`: App Store Connect API Key ID;
-- `APPLE_API_KEY_PRIVATE`: base64-encoded App Store Connect `.p8` key.
+- `APPLE_API_KEY_PRIVATE`: base64-encoded App Store Connect `.p8` key; and
+- `SPARKLE_ED_PRIVATE_KEY`: the private key exported by Sparkle's
+  `generate_keys` tool.
 
 Generate the two base64 values on macOS without copying binary data into the
 shell history:
@@ -109,16 +112,37 @@ gh secret set APPLE_API_KEY --env signing
 gh secret set APPLE_API_KEY_PRIVATE --env signing < api-key.base64
 ```
 
+Generate the Sparkle key once with the pinned tool from Xcode's resolved
+package artifacts:
+
+```sh
+xcodebuild -resolvePackageDependencies \
+  -project Seiza.xcodeproj \
+  -scheme Seiza \
+  -derivedDataPath DerivedData
+sparkle_tools=DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin
+"${sparkle_tools}/generate_keys" --account fyi.seiza.mac
+"${sparkle_tools}/generate_keys" \
+  --account fyi.seiza.mac \
+  -x sparkle-private-key
+gh secret set SPARKLE_ED_PRIVATE_KEY --env signing < sparkle-private-key
+rm -P sparkle-private-key
+```
+
+Keep the generated key in the maintainer's login Keychain. Copy the printed
+public key to `SUPublicEDKey` in `App/Info.plist`.
+
 The workflow then:
 
 1. import the Developer ID certificate into an ephemeral keychain;
-2. sign the Quick Look extension with its entitlements and hardened runtime;
-3. sign the containing app with the app entitlements and hardened runtime;
+2. sign Sparkle's XPC services, helper tools, and framework;
+3. sign the Quick Look extension and containing app with their entitlements;
 4. verify the nested signature with `codesign --verify --deep --strict`;
 5. submit the app with `xcrun notarytool`, then staple and Gatekeeper-assess it;
 6. build and Developer ID sign the DMG;
 7. submit, staple, validate, and Gatekeeper-assess the DMG;
-8. create checksums only after stapling, then publish the exact verified files.
+8. sign the final ZIP and generate `appcast.xml` with Sparkle; and
+9. create checksums only after stapling, then publish the exact verified files.
 
 ## Latest main build
 
@@ -160,8 +184,9 @@ review and dispatch again.
 
 ## Publishing
 
-Before tagging, update `MARKETING_VERSION`, commit it to `main`, and make sure
-CI is green. Create and push an annotated tag with the same version:
+Before tagging, update `MARKETING_VERSION`, raise `CURRENT_PROJECT_VERSION`,
+commit both to `main`, and make sure CI is green. Create and push an annotated
+tag with the same marketing version:
 
 ```sh
 git tag -a v0.4.0 -m "Seiza for Mac 0.4.0"

@@ -1,4 +1,5 @@
 import AppKit
+import Sparkle
 import SwiftUI
 
 final class CatalogSetupController: ObservableObject {
@@ -132,6 +133,7 @@ struct CatalogComponentDisplay: Identifiable, Equatable {
 }
 
 struct SettingsView: View {
+    let updater: SPUUpdater
     @AppStorage("catalogDirectory") private var catalogDirectory = ""
     @StateObject private var setup = CatalogSetupController.shared
     @State private var preset = CatalogSetupPreset.standardBlind
@@ -139,6 +141,8 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            UpdateSettingsSection(updater: updater)
+
             Section("Catalog location") {
                 LabeledContent("Directory") {
                     HStack {

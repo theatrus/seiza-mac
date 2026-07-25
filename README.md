@@ -50,6 +50,7 @@ Electron, web view, or local server.
 | Image export and copy | Exports full-size PNG, JPEG, or TIFF files with optional overlays. PNG and TIFF support 16 bits per channel. Full-size clipboard copy keeps visible overlays. |
 | Finder Quick Look | Previews FITS and XISF files with the Space bar without opening Seiza. |
 | Finder file support | Registers `.fits`, `.fit`, `.fts`, and `.xisf` files with a Seiza document icon. |
+| Signed in-app updates | Checks for releases on demand or on a user-controlled schedule, then verifies and installs them with Sparkle. |
 
 ## Download
 
@@ -118,10 +119,10 @@ xcodebuild test \
 ```
 
 Tags matching `vMAJOR.MINOR.PATCH` enter the protected `signing` environment,
-Developer ID sign and notarize the app and DMG, and publish the universal DMG
-and zipped app to GitHub Releases. See [RELEASE.md](RELEASE.md) for the complete
-release runbook and [docs/RELEASING.md](docs/RELEASING.md) for credential and
-environment setup.
+Developer ID sign and notarize the app and DMG, sign the update ZIP, and
+publish the appcast, universal DMG, and zipped app to GitHub Releases. See
+[RELEASE.md](RELEASE.md) for the complete release runbook and
+[docs/RELEASING.md](docs/RELEASING.md) for credential and environment setup.
 
 ## Catalogs and solving
 
