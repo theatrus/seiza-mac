@@ -84,9 +84,9 @@ gh run list --workflow reviewed-pr.yml --limit 3
 
 Approve the protected `signing` deployment only after confirming the workflow
 resolved the current reviewed head. Wait for the unsigned tests, universal
-build, nested Quick Look signing, notarization, stapling, Gatekeeper checks, and
-artifact upload to pass. Download that artifact and independently check its
-checksum and notarization before merging.
+build, nested Sparkle and Quick Look signing, notarization, stapling,
+Gatekeeper checks, and artifact upload to pass. Download that artifact and
+independently check its checksum and notarization before merging.
 
 ## 4. Merge the exact green head
 
@@ -134,9 +134,10 @@ gh run list --workflow release.yml --limit 3
 gh run watch RUN_ID --exit-status
 ```
 
-The workflow signs the Quick Look extension before the containing app, signs
-and notarizes both the app and DMG, staples their tickets, performs Gatekeeper
-checks, creates post-stapling checksums, and publishes the GitHub release.
+The workflow signs Sparkle and the Quick Look extension before the containing
+app, signs and notarizes both the app and DMG, staples their tickets, creates
+the signed appcast, performs Gatekeeper checks, creates post-stapling
+checksums, and publishes the GitHub release.
 
 ## 7. Verify the published release
 
@@ -160,6 +161,9 @@ spctl --assess \
 Finally verify the GitHub release page itself:
 
 - the DMG, ZIP, and checksum links download successfully;
+- `appcast.xml` downloads from both the tagged release and
+  `releases/latest/download/appcast.xml`;
+- the appcast ZIP URL and EdDSA signature match the published ZIP;
 - both application screenshots render;
 - GitHub marks the new version as **Latest**;
 - the README's current-version download link resolves; and

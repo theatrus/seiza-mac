@@ -38,6 +38,8 @@ struct SeizaApp: App {
                 Button("About Seiza") {
                     appDelegate.showAboutPanel(nil)
                 }
+                Divider()
+                CheckForUpdatesView(updater: appDelegate.updateController.updater)
             }
             CommandGroup(replacing: .newItem) {
                 Button("Open…") {
@@ -72,12 +74,15 @@ struct SeizaApp: App {
         }
 
         Settings {
-            SettingsView()
+            SettingsView(updater: appDelegate.updateController.updater)
         }
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
+    let updateController = UpdateController()
+
     private final class DocumentWindowSession {
         var controller: NSWindowController?
         let exportCoordinator = ImageExportCoordinator()

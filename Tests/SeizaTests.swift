@@ -36,6 +36,32 @@ final class SeizaBuildInfoTests: XCTestCase {
     }
 }
 
+final class UpdateConfigurationTests: XCTestCase {
+    func testSparkleUsesTheStableSignedReleaseFeed() throws {
+        let info = try XCTUnwrap(Bundle.main.infoDictionary)
+
+        XCTAssertEqual(
+            info["SUFeedURL"] as? String,
+            "https://github.com/theatrus/seiza-mac/releases/latest/download/appcast.xml"
+        )
+        XCTAssertEqual(info["SUEnableInstallerLauncherService"] as? Bool, true)
+
+        let publicKey = try XCTUnwrap(info["SUPublicEDKey"] as? String)
+        XCTAssertEqual(publicKey, "Jk4K7QO9ohQbi455S888/lnSiqXB6a5sB4wEuEZjaQ0=")
+    }
+
+    func testSparkleFrameworkIsEmbedded() throws {
+        let frameworksURL = try XCTUnwrap(Bundle.main.privateFrameworksURL)
+        let sparkleURL = frameworksURL.appendingPathComponent("Sparkle.framework")
+        let sparkleBundle = try XCTUnwrap(Bundle(url: sparkleURL))
+
+        XCTAssertEqual(
+            sparkleBundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+            "2.9.4"
+        )
+    }
+}
+
 final class ImageCollectionTests: XCTestCase {
     func testMixedDirectoryFiltersAndNaturallySortsSupportedImages() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(

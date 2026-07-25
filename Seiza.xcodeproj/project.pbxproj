@@ -31,6 +31,8 @@
 		A00000000000000000000015 /* SeizaTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000001A /* SeizaTests.swift */; };
 		A00000000000000000000016 /* FITSFile.icns in Resources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000001C /* FITSFile.icns */; };
 		A00000000000000000000017 /* AppKit.framework in Quick Look Frameworks */ = {isa = PBXBuildFile; fileRef = B00000000000000000000010 /* AppKit.framework */; };
+		A0000000000000000000001A /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = J00000000000000000000001 /* Sparkle */; };
+		A0000000000000000000001B /* UpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000001F /* UpdateController.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -92,10 +94,11 @@
 		B0000000000000000000001C /* FITSFile.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = Resources/FITSFile.icns; sourceTree = "<group>"; };
 		B0000000000000000000001D /* ImageExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageExporter.swift; sourceTree = "<group>"; };
 		B0000000000000000000001E /* FITSStretchControlsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FITSStretchControlsView.swift; sourceTree = "<group>"; };
+		B0000000000000000000001F /* UpdateController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateController.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		F00000000000000000000002 /* App Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A0000000000000000000000B, A0000000000000000000000C, A0000000000000000000000D, ); runOnlyForDeploymentPostprocessing = 0; };
+		F00000000000000000000002 /* App Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A0000000000000000000000B, A0000000000000000000000C, A0000000000000000000000D, A0000000000000000000001A /* Sparkle in Frameworks */, ); runOnlyForDeploymentPostprocessing = 0; };
 		F00000000000000000000003 /* Quick Look Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A0000000000000000000000E, A0000000000000000000000F, A00000000000000000000017, ); runOnlyForDeploymentPostprocessing = 0; };
 		F0000000000000000000000B /* Test Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXFrameworksBuildPhase section */
@@ -106,7 +109,7 @@
 			children = (G00000000000000000000002 /* App */, G00000000000000000000003 /* Shared */, G00000000000000000000004 /* QuickLook */, G00000000000000000000008 /* Tests */, G00000000000000000000006 /* Frameworks */, G00000000000000000000007 /* Products */, );
 			sourceTree = "<group>";
 		};
-		G00000000000000000000002 /* App */ = {isa = PBXGroup; children = (B00000000000000000000001, B00000000000000000000002, B00000000000000000000003, B00000000000000000000018, B0000000000000000000001D, B0000000000000000000001E, B00000000000000000000004, B00000000000000000000005, B00000000000000000000016, B00000000000000000000017, B0000000000000000000001C, B0000000000000000000000B, B00000000000000000000009, ); path = App; sourceTree = "<group>"; };
+		G00000000000000000000002 /* App */ = {isa = PBXGroup; children = (B00000000000000000000001, B00000000000000000000002, B00000000000000000000003, B00000000000000000000018, B0000000000000000000001D, B0000000000000000000001E, B0000000000000000000001F, B00000000000000000000004, B00000000000000000000005, B00000000000000000000016, B00000000000000000000017, B0000000000000000000001C, B0000000000000000000000B, B00000000000000000000009, ); path = App; sourceTree = "<group>"; };
 		G00000000000000000000003 /* Shared */ = {isa = PBXGroup; children = (B00000000000000000000006, B00000000000000000000007, B00000000000000000000019, B00000000000000000000014, B00000000000000000000015, ); path = Shared; sourceTree = "<group>"; };
 		G00000000000000000000004 /* QuickLook */ = {isa = PBXGroup; children = (B00000000000000000000008, B0000000000000000000000C, B0000000000000000000000A, ); path = QuickLook; sourceTree = "<group>"; };
 		G00000000000000000000006 /* Frameworks */ = {isa = PBXGroup; children = (B00000000000000000000010, B00000000000000000000011, B00000000000000000000012, B00000000000000000000013, ); name = Frameworks; sourceTree = "<group>"; };
@@ -122,7 +125,7 @@
 			buildRules = ();
 			dependencies = (C00000000000000000000002 /* PBXTargetDependency */, );
 			name = Seiza;
-			packageProductDependencies = ();
+			packageProductDependencies = (J00000000000000000000001 /* Sparkle */, );
 			productName = Seiza;
 			productReference = B0000000000000000000000D /* Seiza.app */;
 			productType = "com.apple.product-type.application";
@@ -164,6 +167,7 @@
 			knownRegions = (en, Base, );
 			mainGroup = G00000000000000000000001;
 			productRefGroup = G00000000000000000000007;
+			packageReferences = (K00000000000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */, );
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (E00000000000000000000001, E00000000000000000000002, E00000000000000000000003, );
@@ -181,7 +185,7 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		F00000000000000000000005 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000001, A00000000000000000000002, A00000000000000000000003, A00000000000000000000013, A00000000000000000000018, A00000000000000000000019, A00000000000000000000004, A00000000000000000000005, A00000000000000000000006, A00000000000000000000007, A00000000000000000000011, A00000000000000000000014, ); runOnlyForDeploymentPostprocessing = 0; };
+		F00000000000000000000005 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000001, A00000000000000000000002, A00000000000000000000003, A00000000000000000000013, A00000000000000000000018, A00000000000000000000019, A0000000000000000000001B, A00000000000000000000004, A00000000000000000000005, A00000000000000000000006, A00000000000000000000007, A00000000000000000000011, A00000000000000000000014, ); runOnlyForDeploymentPostprocessing = 0; };
 		F00000000000000000000008 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000008, A00000000000000000000009, A0000000000000000000000A, ); runOnlyForDeploymentPostprocessing = 0; };
 		F0000000000000000000000A /* Test Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000015, ); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
@@ -190,6 +194,25 @@
 		C00000000000000000000002 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = E00000000000000000000002 /* SeizaQuickLook */; targetProxy = C00000000000000000000001; };
 		C00000000000000000000004 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = E00000000000000000000001 /* Seiza */; targetProxy = C00000000000000000000003; };
 /* End PBXTargetDependency section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		K00000000000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = exactVersion;
+				version = 2.9.4;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		J00000000000000000000001 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = K00000000000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		I00000000000000000000001 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_ENTITLEMENTS = App/Seiza.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 5; ENABLE_HARDENED_RUNTIME = YES; ENABLE_TESTABILITY = YES; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = App/Info.plist; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/../Frameworks", ); LIBRARY_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/.build/rust/$(CONFIGURATION)", ); MARKETING_VERSION = 0.4.0; OTHER_LDFLAGS = ("$(inherited)", "-lseiza_mac_core", ); PRODUCT_BUNDLE_IDENTIFIER = fyi.seiza.mac; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_OBJC_BRIDGING_HEADER = Shared/SeizaCABI-Bridging-Header.h; }; name = Debug; };
