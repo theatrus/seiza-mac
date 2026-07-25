@@ -56,6 +56,13 @@ Electron, web view, or local server.
 
 [**Download Seiza for Mac 0.4.1**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.4.1-universal.dmg), open it, and drag Seiza to Applications.
 
+Or install with [Homebrew](https://brew.sh) from the
+[theatrus/homebrew-seiza tap](https://github.com/theatrus/homebrew-seiza):
+
+```sh
+brew install --cask theatrus/seiza/seiza-mac
+```
+
 Seiza requires macOS 15 or newer. The same download runs natively on Apple
 silicon and Intel Macs. Release builds are signed with Developer ID and
 notarized by Apple.
