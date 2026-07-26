@@ -145,7 +145,7 @@ jobs:
           path: trusted
 
       - name: Download unsigned reviewed app
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: Seiza-unsigned-pr-${{ needs.authorize.outputs.pr_number }}-${{ needs.authorize.outputs.short_sha }}
           path: unsigned
