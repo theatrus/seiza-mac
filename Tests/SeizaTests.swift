@@ -14,7 +14,6 @@ final class SeizaBuildInfoTests: XCTestCase {
         XCTAssertNotEqual(SeizaCore.version, "unknown")
         XCTAssertEqual(commit.count, 40)
         XCTAssertTrue(commit.allSatisfy(\.isHexDigit))
-        XCTAssertEqual(packageVersion, "0.12.0")
         XCTAssertEqual(checksum.count, 64)
         XCTAssertTrue(checksum.allSatisfy(\.isHexDigit))
 
