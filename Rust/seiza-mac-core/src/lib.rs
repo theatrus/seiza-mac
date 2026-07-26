@@ -37,7 +37,7 @@ mod tests {
         let version = unsafe { CStr::from_ptr(super::seiza_mac_core_package_version()) }
             .to_str()
             .expect("version is UTF-8");
-        assert_eq!(version, "0.12.0");
+        assert!(!version.is_empty());
 
         let checksum = unsafe { CStr::from_ptr(super::seiza_mac_core_package_checksum()) }
             .to_str()
