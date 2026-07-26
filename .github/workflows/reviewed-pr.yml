@@ -81,7 +81,7 @@ jobs:
       - name: Verify checkout identity
         run: test "$(git rev-parse HEAD)" = "$REVIEWED_SHA"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1
         with:
           components: rustfmt, clippy
           targets: aarch64-apple-darwin, x86_64-apple-darwin
