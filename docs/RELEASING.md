@@ -3,7 +3,7 @@
 This document covers signing credentials and workflow security. Follow the
 operational checklist in [`RELEASE.md`](../RELEASE.md) for every release,
 including the release PR, exact-head merge, annotated tag, artifact checks,
-download links, and screenshots.
+download links, screenshots, and the required Homebrew cask update.
 
 Tags matching `vMAJOR.MINOR.PATCH` build a universal macOS application, package
 it as a DMG and ZIP, create a signed Sparkle appcast, verify the disk image,
