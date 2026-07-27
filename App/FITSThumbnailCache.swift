@@ -141,14 +141,7 @@ enum ImageThumbnailCache {
         guard let fileURL = cacheFileURL(forKey: key) else { return thumbnail }
 
         ioQueue.async {
-            if FileManager.default.fileExists(atPath: fileURL.path) {
-                try? FileManager.default.setAttributes(
-                    [.modificationDate: Date()],
-                    ofItemAtPath: fileURL.path
-                )
-                return
-            }
-
+            let alreadyCached = FileManager.default.fileExists(atPath: fileURL.path)
             let data = NSMutableData()
             guard
                 let destination = CGImageDestinationCreateWithData(
@@ -163,7 +156,9 @@ enum ImageThumbnailCache {
             CGImageDestinationAddImage(destination, thumbnail, nil)
             guard CGImageDestinationFinalize(destination) else { return }
             try? (data as Data).write(to: fileURL, options: .atomic)
-            pruneDiskCache()
+            if !alreadyCached {
+                pruneDiskCache()
+            }
         }
         return thumbnail
     }
@@ -201,16 +196,12 @@ enum ImageThumbnailCache {
         for url: URL,
         processing: FITSImageProcessingConfiguration
     ) -> String {
-        let canonicalURL = url.resolvingSymlinksInPath().standardizedFileURL
-        let values = try? canonicalURL.resourceValues(forKeys: [
-            .fileSizeKey,
-            .contentModificationDateKey,
-        ])
+        // Do not read source metadata here. This runs for each memory, disk,
+        // and render lookup, and a source may sit on a slow network share.
+        // A full render overwrites the path-based thumbnail with current data.
         let signature = [
+            "thumbnail-cache-v2",
             url.standardizedFileURL.path,
-            canonicalURL.path,
-            String(values?.fileSize ?? 0),
-            String(values?.contentModificationDate?.timeIntervalSince1970 ?? 0),
             "astronomy-processing:\(processing.cacheIdentifier)",
         ].joined(separator: "\n")
         let digest = SHA256.hash(data: Data(signature.utf8))
@@ -274,22 +265,37 @@ enum ImageRenderQueue {
         let queue = OperationQueue()
         queue.name = "fyi.seiza.mac.thumbnail-rendering"
         queue.qualityOfService = .utility
-        // The default asks OperationQueue to adapt concurrency to current
-        // system resources instead of baking a processor count into the app.
-        queue.maxConcurrentOperationCount = OperationQueue.defaultMaxConcurrentOperationCount
+        // Keep speculative reads from flooding network shares.
+        queue.maxConcurrentOperationCount = 2
         return queue
     }()
     private static let fullOperations: OperationQueue = {
         let queue = OperationQueue()
         queue.name = "fyi.seiza.mac.full-rendering"
         queue.qualityOfService = .userInitiated
-        queue.maxConcurrentOperationCount = OperationQueue.defaultMaxConcurrentOperationCount
+        queue.maxConcurrentOperationCount = 2
         return queue
     }()
+    private static let thumbnailSuspensionLock = NSLock()
+    private static var thumbnailSuspensionCount = 0
     private static let stateQueue = DispatchQueue(
         label: "fyi.seiza.mac.rendering.state"
     )
     private static var jobs: [String: Job] = [:]
+
+    static func suspendThumbnailWork() {
+        thumbnailSuspensionLock.withLock {
+            thumbnailSuspensionCount += 1
+            thumbnailOperations.isSuspended = true
+        }
+    }
+
+    static func resumeThumbnailWork() {
+        thumbnailSuspensionLock.withLock {
+            thumbnailSuspensionCount = max(thumbnailSuspensionCount - 1, 0)
+            thumbnailOperations.isSuspended = thumbnailSuspensionCount > 0
+        }
+    }
 
     static func renderThumbnail(
         url: URL,
@@ -435,7 +441,7 @@ enum ImageRenderQueue {
         for url: URL,
         processing: FITSImageProcessingConfiguration
     ) -> String {
-        "\(url.resolvingSymlinksInPath().standardizedFileURL.path)\n\(processing.cacheIdentifier)"
+        "\(url.standardizedFileURL.path)\n\(processing.cacheIdentifier)"
     }
 }
 

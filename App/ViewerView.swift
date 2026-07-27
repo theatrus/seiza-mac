@@ -157,12 +157,14 @@ struct ViewerView: View {
     let processingClipboardCoordinator: ImageProcessingClipboardCoordinator
     let onSelectionChange: (URL) -> Void
     let onDropURLs: ([URL]) -> Void
+    let onStackComplete: (ImageStackBatchResult) -> Void
 
     @State private var selectedIndex: Int
     @State private var model: ImageDocumentModel
     @State private var showInspector = false
     @State private var showImageBrowser: Bool
     @State private var isDropTarget = false
+    @State private var showStackWorkflow = false
 
     init(
         urls: [URL],
@@ -172,7 +174,8 @@ struct ViewerView: View {
         editCoordinator: ImageEditCommandCoordinator,
         processingClipboardCoordinator: ImageProcessingClipboardCoordinator,
         onSelectionChange: @escaping (URL) -> Void = { _ in },
-        onDropURLs: @escaping ([URL]) -> Void = { _ in }
+        onDropURLs: @escaping ([URL]) -> Void = { _ in },
+        onStackComplete: @escaping (ImageStackBatchResult) -> Void = { _ in }
     ) {
         self.urls = urls
         self.showsImageBrowser = showsImageBrowser
@@ -181,6 +184,7 @@ struct ViewerView: View {
         self.processingClipboardCoordinator = processingClipboardCoordinator
         self.onSelectionChange = onSelectionChange
         self.onDropURLs = onDropURLs
+        self.onStackComplete = onStackComplete
         let selectedIndex = min(max(initialIndex, 0), max(urls.count - 1, 0))
         _selectedIndex = State(initialValue: selectedIndex)
         _model = State(initialValue: ImageDocumentModel(url: urls[selectedIndex]))
@@ -238,12 +242,42 @@ struct ViewerView: View {
                     }
                     .help(showImageBrowser ? "Hide Image Browser" : "Show Image Browser")
                 }
+
+                ToolbarItem {
+                    Button {
+                        showStackWorkflow = true
+                    } label: {
+                        Label("Stack Images", systemImage: "square.stack.3d.up")
+                    }
+                    .disabled(stackableURLs.count < 2)
+                    .help(
+                        stackableURLs.count < 2
+                            ? "A directory needs at least two FITS or XISF images to stack"
+                            : "Stack Images…"
+                    )
+                }
+            }
+        }
+        .sheet(isPresented: $showStackWorkflow) {
+            ImageStackWorkflowView(
+                urls: stackableURLs,
+                onComplete: onStackComplete
+            )
+            .onAppear {
+                ImageRenderQueue.suspendThumbnailWork()
+            }
+            .onDisappear {
+                ImageRenderQueue.resumeThumbnailWork()
             }
         }
     }
 
     private var currentURL: URL {
         urls[selectedIndex]
+    }
+
+    private var stackableURLs: [URL] {
+        urls.filter(ImageCollection.isStackableImage)
     }
 
     private func move(by offset: Int) {
