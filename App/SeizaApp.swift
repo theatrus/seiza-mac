@@ -599,8 +599,6 @@ private struct ImageCollectionLoadingView: View {
                 .controlSize(.large)
             Text("Reading \(name)…")
                 .font(.headline)
-            Text("The window will stay responsive while Seiza reads the folder.")
-                .foregroundStyle(.secondary)
         }
         .frame(minWidth: 560, minHeight: 380)
     }
