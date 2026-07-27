@@ -170,6 +170,20 @@ Finally verify the GitHub release page itself:
 - the release notes accurately describe the shipped feature set and minimum
   macOS version.
 
+## 8. Update the Homebrew cask
+
+Every release must update the cask in
+[`theatrus/homebrew-seiza`](https://github.com/theatrus/homebrew-seiza). Do this
+after the public DMG passes the checks above so the cask uses the file that
+users will receive.
+
+Update `Casks/seiza-mac.rb` with the new version and the SHA-256 hash of
+`Seiza-${version}-universal.dmg`. Open a pull request in the tap, wait for its
+checks to pass, and merge the exact checked head. Then confirm the cask on the
+tap's `main` branch has the released version and hash.
+
+Do not mark the release work complete until the cask update has merged.
+
 ## Failures and corrections
 
 - For a transient GitHub or Apple notarization failure, rerun the failed job on
