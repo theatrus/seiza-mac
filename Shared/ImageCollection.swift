@@ -89,30 +89,20 @@ enum ImageCollection {
     }
 
     static func scan(from roots: [URL]) -> Scan {
-        let keys: [URLResourceKey] = [
-            .isDirectoryKey,
-            .isRegularFileKey,
-            .isSymbolicLinkKey,
-            .isHiddenKey,
-        ]
-        let keySet = Set(keys)
         var images: [URL] = []
         var includesDirectory = false
 
         for root in roots {
-            let values = try? root.resourceValues(forKeys: keySet)
+            let values = try? root.resourceValues(forKeys: [.isDirectoryKey])
             if values?.isDirectory == true {
                 includesDirectory = true
                 let contents = try? FileManager.default.contentsOfDirectory(
                     at: root,
-                    includingPropertiesForKeys: keys,
+                    includingPropertiesForKeys: nil,
                     options: [.skipsHiddenFiles]
                 )
                 images.append(contentsOf: (contents ?? []).filter { url in
-                    let values = try? url.resourceValues(forKeys: keySet)
-                    return (values?.isRegularFile == true || values?.isSymbolicLink == true)
-                        && values?.isHidden != true
-                        && isSupportedImage(url)
+                    isSupportedImage(url) && !url.hasDirectoryPath
                 })
             } else if isSupportedImage(root) {
                 images.append(root)

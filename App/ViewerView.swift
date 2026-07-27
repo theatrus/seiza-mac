@@ -263,6 +263,12 @@ struct ViewerView: View {
                 urls: stackableURLs,
                 onComplete: onStackComplete
             )
+            .onAppear {
+                ImageRenderQueue.suspendThumbnailWork()
+            }
+            .onDisappear {
+                ImageRenderQueue.resumeThumbnailWork()
+            }
         }
     }
 

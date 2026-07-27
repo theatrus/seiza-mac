@@ -83,6 +83,10 @@ final class ImageCollectionTests: XCTestCase {
             at: directory.appendingPathComponent("nested.png", isDirectory: true),
             withIntermediateDirectories: true
         )
+        try FileManager.default.createDirectory(
+            at: directory.appendingPathComponent("nested.fits", isDirectory: true),
+            withIntermediateDirectories: true
+        )
 
         let names = ImageCollection.collect(from: [directory]).map(\.lastPathComponent)
         XCTAssertEqual(
