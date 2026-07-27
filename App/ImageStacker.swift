@@ -244,7 +244,7 @@ struct ImageStackGroup: Identifiable, Sendable {
 
 enum ImageStackGrouping {
     static func hasMultipleDetectedFilters(in urls: [URL]) -> Bool {
-        Set(urls.compactMap(ImageFilenameFilter.detect(in:))).count > 1
+        Set(urls.compactMap { ImageFilenameFilter.detect(in: $0)?.id }).count > 1
     }
 
     static func groups(for urls: [URL], splitByFilter: Bool) -> [ImageStackGroup] {
@@ -257,7 +257,7 @@ enum ImageStackGrouping {
         var groups: [String: ImageStackGroup] = [:]
         for url in urls {
             let filter = ImageFilenameFilter.detect(in: url)
-            let key = filter?.rawValue ?? "other"
+            let key = filter?.id ?? "other"
             if groups[key] == nil {
                 order.append(key)
                 groups[key] = ImageStackGroup(id: key, filter: filter, inputs: [])
@@ -784,7 +784,7 @@ struct ImageStackWorkflowView: View {
 
                     if hasMultipleDetectedFilters {
                         Toggle("Split by filename filter", isOn: $splitByFilenameFilter)
-                        Text("Recognizes L, R, G, B, Ha, OIII, SII, and H-beta names.")
+                        Text("Recognizes L, R, G, B, Ha, OIII, S/SII, and H-beta; other filter names stay unchanged.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         if splitsSelectedFramesByFilter {

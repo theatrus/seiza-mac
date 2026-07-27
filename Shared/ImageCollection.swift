@@ -1,7 +1,7 @@
 import Foundation
 import UniformTypeIdentifiers
 
-enum ImageFilenameFilter: String, CaseIterable, Identifiable, Sendable {
+enum ImageFilenameFilter: Hashable, Identifiable, Sendable {
     case luminance
     case red
     case green
@@ -10,8 +10,21 @@ enum ImageFilenameFilter: String, CaseIterable, Identifiable, Sendable {
     case oxygenIII
     case sulfurII
     case hydrogenBeta
+    case named(String)
 
-    var id: Self { self }
+    var id: String {
+        switch self {
+        case .luminance: "luminance"
+        case .red: "red"
+        case .green: "green"
+        case .blue: "blue"
+        case .hydrogenAlpha: "hydrogen-alpha"
+        case .oxygenIII: "oxygen-iii"
+        case .sulfurII: "sulfur-ii"
+        case .hydrogenBeta: "hydrogen-beta"
+        case .named(let name): "named:\(name.lowercased())"
+        }
+    }
 
     var title: String {
         switch self {
@@ -23,6 +36,7 @@ enum ImageFilenameFilter: String, CaseIterable, Identifiable, Sendable {
         case .oxygenIII: "OIII"
         case .sulfurII: "SII"
         case .hydrogenBeta: "H-beta"
+        case .named(let name): name
         }
     }
 
@@ -36,15 +50,16 @@ enum ImageFilenameFilter: String, CaseIterable, Identifiable, Sendable {
         case .oxygenIII: "OIII"
         case .sulfurII: "SII"
         case .hydrogenBeta: "Hb"
+        case .named(let name): name
         }
     }
 
     static func detect(in url: URL) -> Self? {
-        let normalized = url.deletingPathExtension().lastPathComponent
+        let filename = url.deletingPathExtension().lastPathComponent
             .replacingOccurrences(of: "α", with: "alpha")
             .replacingOccurrences(of: "β", with: "beta")
-            .lowercased()
-        let tokens = normalized.split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        let originalTokens = filename.split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        let tokens = originalTokens.map { $0.lowercased() }
 
         for pair in zip(tokens, tokens.dropFirst()) {
             switch pair {
@@ -65,13 +80,25 @@ enum ImageFilenameFilter: String, CaseIterable, Identifiable, Sendable {
             switch token {
             case "ha", "halpha", "hydrogenalpha": return .hydrogenAlpha
             case "oiii", "o3", "oxygeniii": return .oxygenIII
-            case "sii", "s2", "sulfurii", "sulphurii": return .sulfurII
+            case "s", "sii", "s2", "sulfurii", "sulphurii": return .sulfurII
             case "hb", "hbeta", "hydrogenbeta": return .hydrogenBeta
             case "l", "lum", "luminance": return .luminance
             case "r", "red": return .red
             case "g", "green": return .green
             case "b", "blue": return .blue
             default: break
+            }
+        }
+        if let filterMarker = tokens.firstIndex(of: "filter"),
+           originalTokens.indices.contains(filterMarker + 1) {
+            return .named(originalTokens[filterMarker + 1])
+        }
+        for token in originalTokens.dropFirst().reversed()
+        where token.allSatisfy(\.isLetter) {
+            let isSingleLetter = token.count == 1
+            let isUppercaseName = token == token.uppercased() && token != token.lowercased()
+            if isSingleLetter || isUppercaseName {
+                return .named(token)
             }
         }
         return nil

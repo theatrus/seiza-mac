@@ -43,10 +43,11 @@ not include them in the stack.
 
 Choose which frames to use and pick the reference frame. The reference sets the
 output bounds and alignment coordinates. When filenames show two or more common
-filters such as L, R, G, B, Ha, OIII, SII, or H-beta, Seiza offers to split
+filters such as L, R, G, B, Ha, OIII, S/SII, or H-beta, Seiza offers to split
 them into separate stacks. Each group gets its own reference and output file;
 files with no filter token stay in an Other group. You can turn this split off
-if the filename guess is wrong.
+if the filename guess is wrong. Names after a `filter` token, along with
+unknown single-letter or uppercase tokens, keep their original label.
 You can also choose:
 
 - no, global, or local normalization;

@@ -116,8 +116,11 @@ final class ImageCollectionTests: XCTestCase {
             ("NGC7000-H-alpha-300s.fits", .hydrogenAlpha),
             ("veil_OIII_42.xisf", .oxygenIII),
             ("soul-S2-003.fits", .sulfurII),
+            ("soul_S_004.fits", .sulfurII),
             ("target_Hbeta_001.fits", .hydrogenBeta),
             ("target_R_001.fits", .red),
+            ("target_C_001.fits", .named("C")),
+            ("target_filter_Clear_001.fits", .named("Clear")),
         ]
         for (name, expected) in cases {
             XCTAssertEqual(
@@ -158,6 +161,18 @@ final class ImageCollectionTests: XCTestCase {
             ImageStackGrouping.groups(for: urls, splitByFilter: true).map(\.inputs.count),
             [3]
         )
+    }
+
+    func testStackGroupingKeepsAnUnknownFilterName() {
+        let urls = [
+            "target_C_001.fits", "target_C_002.fits",
+            "target_Ha_001.fits", "target_Ha_002.fits",
+        ].map { URL(fileURLWithPath: "/tmp/\($0)") }
+
+        let groups = ImageStackGrouping.groups(for: urls, splitByFilter: true)
+
+        XCTAssertEqual(groups.map(\.title), ["C", "H-alpha"])
+        XCTAssertEqual(groups.map(\.filenameSuffix), ["C", "Ha"])
     }
 }
 
@@ -676,7 +691,7 @@ final class RenderBoundaryTests: XCTestCase {
         let jobs = (0..<2).map { index in
             let groupInputs = Array(inputs[(index * 2)..<(index * 2 + 2)])
             let group = ImageStackGroup(
-                id: filters[index].rawValue,
+                id: filters[index].id,
                 filter: filters[index],
                 inputs: groupInputs
             )
