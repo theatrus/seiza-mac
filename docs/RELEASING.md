@@ -189,8 +189,9 @@ commit both to `main`, and make sure CI is green. Create and push an annotated
 tag with the same marketing version:
 
 ```sh
-git tag -a v0.4.1 -m "Seiza for Mac 0.4.1"
-git push origin v0.4.1
+version=0.5.0
+git tag -a "v${version}" -m "Seiza for Mac ${version}"
+git push origin "v${version}"
 ```
 
 The protected `signing` environment may pause the job for reviewer approval.
