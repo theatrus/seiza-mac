@@ -15,7 +15,9 @@ window.
 Directory windows include a thumbnail drawer and accept the left and right
 arrow keys. Seiza caches thumbnails locally and preloads nearby entries, so
 moving through a long sequence does not require each thumbnail to be decoded
-again. A directory may mix FITS, XISF, and ordinary raster images. The last
+again. Seiza reads directory entries away from the main thread, so a slow
+network share does not freeze the app. A directory may mix FITS, XISF, and
+ordinary raster images. The last
 committed astronomy processing recipe carries forward as you move between
 frames, so a stack
 chosen for one exposure becomes the starting point for the next. Automatic
@@ -32,6 +34,33 @@ background extraction, and deconvolution settings; pasting is one undoable edit.
 
 The viewer starts each image fitted to the available window. Pinch around the
 pointer to zoom, drag or scroll to pan, and press **Command-0** to fit again.
+
+## Stack a directory
+
+Open a directory with at least two FITS or XISF files, then click **Stack
+Images** in the toolbar. Raster files may stay in the directory, but Seiza does
+not include them in the stack.
+
+Choose which frames to use and pick the reference frame. The reference sets the
+output bounds and alignment coordinates. When filenames show two or more common
+filters such as L, R, G, B, Ha, OIII, SII, or H-beta, Seiza offers to split
+them into separate stacks. Each group gets its own reference and output file;
+files with no filter token stay in an Other group. You can turn this split off
+if the filename guess is wrong.
+You can also choose:
+
+- no, global, or local normalization;
+- no sample rejection or delta-sigma rejection;
+- registration error, drift, and overlap limits; and
+- optional integrated bias, dark, and flat masters.
+
+For a filter split, enter a base name, click **Choose Output and Stack**, and
+choose an output folder. Seiza adds suffixes such as `-Ha` and `-OIII`. Without
+a split, choose one FITS output file. Seiza shows the current frame and the
+accepted and rejected counts while it works. You can cancel between frames.
+When the work finishes, Seiza opens the saved 32-bit floating-point FITS results
+in the same window. Each output stays linear and unstretched, ready for display
+stretches or later work.
 
 ## Build an astronomy stretch
 

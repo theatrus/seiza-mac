@@ -97,6 +97,106 @@ final class ImageCollectionTests: XCTestCase {
         XCTAssertTrue(ImageCollection.isSupportedImage(URL(fileURLWithPath: "/tmp/a.TIFF")))
         XCTAssertFalse(ImageCollection.isSupportedImage(URL(fileURLWithPath: "/tmp/a.svg")))
     }
+
+    func testStackableImagesAreLimitedToLinearAstronomyFormats() {
+        XCTAssertTrue(ImageCollection.isStackableImage(URL(fileURLWithPath: "/tmp/a.FITS")))
+        XCTAssertTrue(ImageCollection.isStackableImage(URL(fileURLWithPath: "/tmp/a.fit")))
+        XCTAssertTrue(ImageCollection.isStackableImage(URL(fileURLWithPath: "/tmp/a.XISF")))
+        XCTAssertFalse(ImageCollection.isStackableImage(URL(fileURLWithPath: "/tmp/a.png")))
+        XCTAssertFalse(ImageCollection.isStackableImage(URL(fileURLWithPath: "/tmp/a.tiff")))
+    }
+
+    func testFilenameFilterDetectionUsesDelimitedAstronomyNames() {
+        let cases: [(String, ImageFilenameFilter)] = [
+            ("M31_L_001.fits", .luminance),
+            ("NGC7000-H-alpha-300s.fits", .hydrogenAlpha),
+            ("veil_OIII_42.xisf", .oxygenIII),
+            ("soul-S2-003.fits", .sulfurII),
+            ("target_Hbeta_001.fits", .hydrogenBeta),
+            ("target_R_001.fits", .red),
+        ]
+        for (name, expected) in cases {
+            XCTAssertEqual(
+                ImageFilenameFilter.detect(in: URL(fileURLWithPath: "/tmp/\(name)")),
+                expected
+            )
+        }
+        XCTAssertNil(ImageFilenameFilter.detect(in: URL(fileURLWithPath: "/tmp/SH2-240.fits")))
+        XCTAssertNil(ImageFilenameFilter.detect(in: URL(fileURLWithPath: "/tmp/Orion.fits")))
+    }
+
+    func testStackGroupingSplitsDetectedFiltersAndKeepsDirectoryOrder() {
+        let urls = [
+            "target_Ha_001.fits", "target_OIII_001.fits", "target_Ha_002.fits",
+            "target_OIII_002.fits", "target_001.fits", "target_002.fits",
+        ].map { URL(fileURLWithPath: "/tmp/\($0)") }
+
+        let groups = ImageStackGrouping.groups(for: urls, splitByFilter: true)
+
+        XCTAssertEqual(groups.map(\.title), ["H-alpha", "OIII", "Other"])
+        XCTAssertEqual(groups.map { $0.inputs.count }, [2, 2, 2])
+        XCTAssertEqual(groups[0].inputs.map(\.lastPathComponent), [
+            "target_Ha_001.fits", "target_Ha_002.fits",
+        ])
+        XCTAssertEqual(
+            ImageStackGrouping.groups(for: urls, splitByFilter: false).map(\.inputs.count),
+            [6]
+        )
+    }
+
+    func testStackGroupingUsesOneOutputWithoutMultipleDetectedFilters() {
+        let urls = [
+            "target_Ha_001.fits", "target_Ha_002.fits", "target_001.fits",
+        ].map { URL(fileURLWithPath: "/tmp/\($0)") }
+
+        XCTAssertFalse(ImageStackGrouping.hasMultipleDetectedFilters(in: urls))
+        XCTAssertEqual(
+            ImageStackGrouping.groups(for: urls, splitByFilter: true).map(\.inputs.count),
+            [3]
+        )
+    }
+}
+
+final class ImageStackOptionsTests: XCTestCase {
+    func testDefaultOptionsMatchSharedCABIShape() throws {
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: ImageStackOptions().jsonData) as? [String: Any]
+        )
+        let registration = try XCTUnwrap(object["registration"] as? [String: Any])
+        let normalization = try XCTUnwrap(object["normalization"] as? [String: Any])
+        let rejection = try XCTUnwrap(object["rejection"] as? [String: Any])
+        let rejectionOptions = try XCTUnwrap(rejection["options"] as? [String: Any])
+        let acceptance = try XCTUnwrap(object["acceptance"] as? [String: Any])
+
+        XCTAssertEqual(normalization["mode"] as? String, "global")
+        XCTAssertEqual(rejection["mode"] as? String, "delta-sigma")
+        XCTAssertEqual(rejectionOptions["low_sigma"] as? Double, 3)
+        XCTAssertEqual(rejectionOptions["high_sigma"] as? Double, 3)
+        XCTAssertEqual(rejectionOptions["warmup_samples"] as? Int, 5)
+        XCTAssertEqual(registration["maximum_drift_pixels"] as? Double, 256)
+        XCTAssertEqual(registration["maximum_drift_fraction"] as? Double, 0.15)
+        XCTAssertEqual(acceptance["maximum_registration_rms_pixels"] as? Double, 2)
+        XCTAssertEqual(acceptance["minimum_overlap_fraction"] as? Double, 0.6)
+    }
+
+    func testLocalNormalizationAndNoRejectionEncodeTaggedModes() throws {
+        var options = ImageStackOptions()
+        options.normalization = .local
+        options.localTileSize = 128
+        options.rejection = .none
+
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: options.jsonData) as? [String: Any]
+        )
+        let normalization = try XCTUnwrap(object["normalization"] as? [String: Any])
+        let normalizationOptions = try XCTUnwrap(normalization["options"] as? [String: Any])
+        let rejection = try XCTUnwrap(object["rejection"] as? [String: Any])
+
+        XCTAssertEqual(normalization["mode"] as? String, "local")
+        XCTAssertEqual(normalizationOptions["tile_size"] as? Int, 128)
+        XCTAssertEqual(rejection["mode"] as? String, "none")
+        XCTAssertNil(rejection["options"])
+    }
 }
 
 final class ViewportMathTests: XCTestCase {
@@ -513,6 +613,94 @@ final class ImageExportTests: XCTestCase {
 }
 
 final class RenderBoundaryTests: XCTestCase {
+    func testSyntheticFITSStackRunsThroughSwiftBoundaryAndWritesResult() throws {
+        let width = 160
+        let height = 128
+        let values = stackingStarField(width: width, height: height)
+        let first = try writeSyntheticFITS(width: width, height: height, values: values)
+        let second = try writeSyntheticFITS(width: width, height: height, values: values)
+        let output = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString)-stack.fits")
+        defer {
+            try? FileManager.default.removeItem(at: first)
+            try? FileManager.default.removeItem(at: second)
+            try? FileManager.default.removeItem(at: output)
+        }
+
+        var options = ImageStackOptions()
+        options.normalization = .none
+        options.rejection = .none
+        let result = try ImageStackEngine.stack(
+            request: ImageStackRequest(
+                inputs: [first, second],
+                output: output,
+                options: options,
+                calibration: ImageStackCalibration()
+            ),
+            cancellation: ImageStackCancellation(),
+            progress: { _ in }
+        )
+
+        XCTAssertEqual(result.acceptedFrames, 2)
+        XCTAssertEqual(result.rejectedFrames, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: output.path))
+        let rendered = try SeizaCore.render(url: output, maxDimension: 4_096)
+        XCTAssertEqual(rendered.image.width, width)
+        XCTAssertEqual(rendered.image.height, height)
+    }
+
+    func testSyntheticFilteredBatchWritesOneStackPerGroup() throws {
+        let width = 160
+        let height = 128
+        let values = stackingStarField(width: width, height: height)
+        let inputs = try (0..<4).map { _ in
+            try writeSyntheticFITS(width: width, height: height, values: values)
+        }
+        let outputs = (0..<2).map { index in
+            FileManager.default.temporaryDirectory
+                .appendingPathComponent("\(UUID().uuidString)-\(index)-stack.fits")
+        }
+        let outputAccessURL = FileManager.default.temporaryDirectory
+        defer {
+            (inputs + outputs).forEach { try? FileManager.default.removeItem(at: $0) }
+        }
+
+        var options = ImageStackOptions()
+        options.normalization = .none
+        options.rejection = .none
+        let filters: [ImageFilenameFilter] = [.hydrogenAlpha, .oxygenIII]
+        let jobs = (0..<2).map { index in
+            let groupInputs = Array(inputs[(index * 2)..<(index * 2 + 2)])
+            let group = ImageStackGroup(
+                id: filters[index].rawValue,
+                filter: filters[index],
+                inputs: groupInputs
+            )
+            return ImageStackJob(
+                group: group,
+                request: ImageStackRequest(
+                    inputs: groupInputs,
+                    output: outputs[index],
+                    outputAccessURL: outputAccessURL,
+                    options: options,
+                    calibration: ImageStackCalibration()
+                )
+            )
+        }
+
+        let result = try ImageStackBatchEngine.stack(
+            request: ImageStackBatchRequest(jobs: jobs),
+            cancellation: ImageStackCancellation(),
+            progress: { _ in }
+        )
+
+        XCTAssertEqual(result.results.count, 2)
+        XCTAssertEqual(result.acceptedFrames, 4)
+        XCTAssertEqual(result.rejectedFrames, 0)
+        XCTAssertEqual(result.outputAccessURLs, [outputAccessURL])
+        XCTAssertTrue(outputs.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
+    }
+
     func testSyntheticFITSRendersThroughSwiftBoundaryWithHistogram() throws {
         var fits = Data()
         for value in [
@@ -955,6 +1143,26 @@ final class RenderBoundaryTests: XCTestCase {
             .appendingPathComponent("\(UUID().uuidString).fits")
         try fits.write(to: url)
         return url
+    }
+
+    private func stackingStarField(width: Int, height: Int) -> [Int16] {
+        let stars: [(Double, Double)] = [
+            (19.7, 16.4), (71.3, 28.1), (132.2, 34.8), (43.1, 49.7),
+            (103.4, 58.3), (22.8, 70.2), (82.7, 76.5), (143.1, 87.8),
+            (54.4, 96.2), (116.8, 104.1), (31.2, 113.0), (91.5, 118.4),
+        ]
+        return (0..<(width * height)).map { index in
+            let x = Double(index % width)
+            let y = Double(index / width)
+            let signal = stars.enumerated().reduce(100.0) { value, entry in
+                let (starIndex, position) = entry
+                let dx = x - position.0
+                let dy = y - position.1
+                return value + (900.0 + Double(starIndex) * 130.0)
+                    * exp(-(dx * dx + dy * dy) / 3.2)
+            }
+            return Int16(signal.rounded())
+        }
     }
 
     private func writeSyntheticXISF(
@@ -1489,6 +1697,30 @@ final class DocumentWindowLifecycleTests: XCTestCase {
 
         window.close()
         XCTAssertNil(delegate.documentWindow(for: second))
+    }
+
+    func testDirectoryOpenShowsAResponsiveLoadingWindowBeforeDiscoveryCompletes() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString,
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let image = directory.appendingPathComponent("frame.png")
+        XCTAssertTrue(FileManager.default.createFile(atPath: image.path, contents: Data()))
+
+        let delegate = AppDelegate()
+        delegate.open(directory)
+        let window = try XCTUnwrap(delegate.documentWindow(for: directory))
+        defer { if window.isVisible { window.close() } }
+        XCTAssertTrue(window.title.hasPrefix("Loading "))
+
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while window.title != "frame.png", clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(window.title, "frame.png")
     }
 }
 

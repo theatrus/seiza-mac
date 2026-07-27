@@ -85,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     private final class DocumentWindowSession {
         var controller: NSWindowController?
+        var collectionTask: Task<Void, Never>?
         let exportCoordinator = ImageExportCoordinator()
         let editCoordinator = ImageEditCommandCoordinator()
         let processingClipboardCoordinator = ImageProcessingClipboardCoordinator()
@@ -97,6 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
 
         deinit {
+            collectionTask?.cancel()
             accessedURLs.forEach { $0.stopAccessingSecurityScopedResource() }
         }
     }
@@ -245,24 +247,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
         let session = DocumentWindowSession(accessURLs: request.accessURLs)
         observeEditAvailability(for: session)
-        let imageURLs = ImageCollection.collect(from: request.roots)
-        guard !imageURLs.isEmpty else {
-            presentNoSupportedImagesAlert()
-            return
-        }
-
         let window = NSWindow()
         let controller = NSWindowController(window: window)
         session.controller = controller
         documentWindows[windowKey] = session
-        installViewer(
-            imageURLs: imageURLs,
-            openedDirectory: containsDirectory(request.roots),
-            exportCoordinator: session.exportCoordinator,
-            editCoordinator: session.editCoordinator,
-            processingClipboardCoordinator: session.processingClipboardCoordinator,
-            in: window
-        )
+        let directImages = directImageRoots(request.roots)
+        if let directImages {
+            installViewer(
+                imageURLs: directImages,
+                openedDirectory: directImages.count > 1,
+                exportCoordinator: session.exportCoordinator,
+                editCoordinator: session.editCoordinator,
+                processingClipboardCoordinator: session.processingClipboardCoordinator,
+                in: window
+            )
+        } else {
+            installCollectionLoadingView(for: request.roots, in: window)
+        }
         window.setContentSize(NSSize(width: 1120, height: 760))
         window.minSize = NSSize(width: 640, height: 420)
         window.styleMask.insert([.resizable, .titled, .closable, .miniaturizable])
@@ -273,15 +274,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             object: window,
             queue: .main
         ) { [weak self] _ in
-            self?.refreshEditCommandAvailability()
+            MainActor.assumeIsolated {
+                self?.refreshEditCommandAvailability()
+            }
         }
         NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification,
             object: window,
             queue: .main
         ) { [weak self, weak window] _ in
-            guard let window else { return }
-            self?.removeDocumentWindow(for: window)
+            MainActor.assumeIsolated {
+                guard let window else { return }
+                self?.removeDocumentWindow(for: window)
+            }
         }
         controller.showWindow(nil)
         DispatchQueue.main.async {
@@ -291,9 +296,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         refreshEditCommandAvailability()
+
+        guard directImages == nil else { return }
+        let roots = request.roots
+        session.collectionTask = Task { [weak self, weak session, weak window] in
+            let scan = await Task.detached(priority: .userInitiated) {
+                ImageCollection.scan(from: roots)
+            }.value
+            guard !Task.isCancelled,
+                  let self,
+                  let session,
+                  let window,
+                  self.documentWindows[windowKey] === session else { return }
+            session.collectionTask = nil
+            guard !scan.images.isEmpty else {
+                window.close()
+                self.presentNoSupportedImagesAlert()
+                return
+            }
+            self.installViewer(
+                imageURLs: scan.images,
+                openedDirectory: scan.includesDirectory,
+                exportCoordinator: session.exportCoordinator,
+                editCoordinator: session.editCoordinator,
+                processingClipboardCoordinator: session.processingClipboardCoordinator,
+                in: window
+            )
+        }
     }
 
-    func replaceContents(of window: NSWindow, with urls: [URL]) {
+    func replaceContents(
+        of window: NSWindow,
+        with urls: [URL],
+        additionalAccessURLs: [URL] = []
+    ) {
         let request = normalizedRoots(from: urls)
         guard let windowKey = request.roots.first else { return }
 
@@ -304,13 +340,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             return
         }
 
-        let replacement = DocumentWindowSession(accessURLs: request.accessURLs)
+        let replacement = DocumentWindowSession(
+            accessURLs: request.accessURLs + additionalAccessURLs
+        )
         observeEditAvailability(for: replacement)
-        let imageURLs = ImageCollection.collect(from: request.roots)
-        guard !imageURLs.isEmpty else {
-            presentNoSupportedImagesAlert()
-            return
-        }
         guard let current = documentWindows.first(where: {
             $0.value.controller?.window === window
         }), let controller = current.value.controller else {
@@ -318,19 +351,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             return
         }
 
-        documentWindows.removeValue(forKey: current.key)
-        replacement.controller = controller
-        documentWindows[windowKey] = replacement
-        installViewer(
-            imageURLs: imageURLs,
-            openedDirectory: containsDirectory(request.roots),
-            exportCoordinator: replacement.exportCoordinator,
-            editCoordinator: replacement.editCoordinator,
-            processingClipboardCoordinator: replacement.processingClipboardCoordinator,
-            in: window
-        )
-        window.makeKeyAndOrderFront(nil)
-        refreshEditCommandAvailability()
+        if let directImages = directImageRoots(request.roots) {
+            finishReplacingContents(
+                currentKey: current.key,
+                newKey: windowKey,
+                session: replacement,
+                controller: controller,
+                imageURLs: directImages,
+                openedDirectory: directImages.count > 1,
+                window: window
+            )
+            return
+        }
+
+        let previousController = window.contentViewController
+        let previousTitle = window.title
+        installCollectionLoadingView(for: request.roots, in: window)
+        let roots = request.roots
+        current.value.collectionTask?.cancel()
+        current.value.collectionTask = Task { [weak self, weak window] in
+            let scan = await Task.detached(priority: .userInitiated) {
+                ImageCollection.scan(from: roots)
+            }.value
+            guard !Task.isCancelled,
+                  let self,
+                  let window,
+                  self.documentWindows[current.key] === current.value else { return }
+            current.value.collectionTask = nil
+            guard !scan.images.isEmpty else {
+                window.contentViewController = previousController
+                window.title = previousTitle
+                self.presentNoSupportedImagesAlert()
+                return
+            }
+            self.finishReplacingContents(
+                currentKey: current.key,
+                newKey: windowKey,
+                session: replacement,
+                controller: controller,
+                imageURLs: scan.images,
+                openedDirectory: scan.includesDirectory,
+                window: window
+            )
+        }
     }
 
     func documentWindow(for root: URL) -> NSWindow? {
@@ -357,6 +420,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             onDropURLs: { [weak self, weak window] urls in
                 guard let window else { return }
                 self?.replaceContents(of: window, with: urls)
+            },
+            onStackComplete: { [weak self, weak window] result in
+                guard let self, let window else { return }
+                self.replaceContents(
+                    of: window,
+                    with: result.results.map(\.output),
+                    additionalAccessURLs: result.outputAccessURLs
+                )
+                if result.rejectedFrames > 0 {
+                    self.presentStackSummary(result, in: window)
+                }
             }
         )
         if let hostingController = window.contentViewController
@@ -366,6 +440,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             window.contentViewController = NSHostingController(rootView: view)
         }
         window.title = imageURLs[0].lastPathComponent
+    }
+
+    private func installCollectionLoadingView(for roots: [URL], in window: NSWindow) {
+        let name = roots.first?.lastPathComponent ?? "Images"
+        window.contentViewController = NSHostingController(
+            rootView: ImageCollectionLoadingView(name: name)
+        )
+        window.title = "Loading \(name)…"
+    }
+
+    private func finishReplacingContents(
+        currentKey: URL,
+        newKey: URL,
+        session: DocumentWindowSession,
+        controller: NSWindowController,
+        imageURLs: [URL],
+        openedDirectory: Bool,
+        window: NSWindow
+    ) {
+        documentWindows.removeValue(forKey: currentKey)
+        session.controller = controller
+        documentWindows[newKey] = session
+        installViewer(
+            imageURLs: imageURLs,
+            openedDirectory: openedDirectory,
+            exportCoordinator: session.exportCoordinator,
+            editCoordinator: session.editCoordinator,
+            processingClipboardCoordinator: session.processingClipboardCoordinator,
+            in: window
+        )
+        window.makeKeyAndOrderFront(nil)
+        refreshEditCommandAvailability()
+    }
+
+    private func presentStackSummary(_ result: ImageStackBatchResult, in window: NSWindow) {
+        let alert = NSAlert()
+        alert.messageText = "Stack Complete"
+        let files = result.results.map { $0.output.lastPathComponent }.joined(separator: ", ")
+        alert.informativeText = "Saved \(files) with \(result.acceptedFrames) accepted and "
+            + "\(result.rejectedFrames) rejected frames."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window)
     }
 
     private var activeDocumentSession: DocumentWindowSession? {
@@ -444,10 +561,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         return (roots, accessURLs)
     }
 
-    private func containsDirectory(_ roots: [URL]) -> Bool {
-        roots.contains { root in
-            (try? root.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
-        }
+    private func directImageRoots(_ roots: [URL]) -> [URL]? {
+        guard roots.allSatisfy({ !$0.hasDirectoryPath && ImageCollection.isSupportedImage($0) })
+        else { return nil }
+        return roots
     }
 
     private func removeDocumentWindow(for window: NSWindow) {
@@ -470,6 +587,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private func closeWelcomeWindow() {
         welcomeWindow?.close()
         welcomeWindow = nil
+    }
+}
+
+private struct ImageCollectionLoadingView: View {
+    let name: String
+
+    var body: some View {
+        VStack(spacing: 14) {
+            ProgressView()
+                .controlSize(.large)
+            Text("Reading \(name)…")
+                .font(.headline)
+            Text("The window will stay responsive while Seiza reads the folder.")
+                .foregroundStyle(.secondary)
+        }
+        .frame(minWidth: 560, minHeight: 380)
     }
 }
 

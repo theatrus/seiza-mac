@@ -9,6 +9,8 @@
 
 typedef struct SeizaRenderedImage SeizaRenderedImage;
 typedef struct SeizaRenderedImage16 SeizaRenderedImage16;
+typedef struct SeizaLiveStacker SeizaLiveStacker;
+typedef struct SeizaStackSnapshot SeizaStackSnapshot;
 typedef void (*SeizaCatalogSetupProgressCallback)(const char *, void *);
 
 #ifdef __cplusplus
@@ -85,6 +87,35 @@ const uint16_t *seiza_rendered_image16_rgba(const SeizaRenderedImage16 *image);
 size_t seiza_rendered_image16_rgba_length(const SeizaRenderedImage16 *image);
 const char *seiza_rendered_image16_metadata_json(const SeizaRenderedImage16 *image);
 void seiza_rendered_image16_free(SeizaRenderedImage16 *image);
+
+SeizaLiveStacker *seiza_live_stacker_open_fits(
+    const char *reference_path,
+    const char *bias_path,
+    const char *dark_path,
+    const char *flat_path,
+    double dark_exposure_seconds,
+    const char *options_json,
+    char **error_out);
+
+char *seiza_live_stacker_push_fits_json(
+    SeizaLiveStacker *stacker,
+    const char *path,
+    char **error_out);
+
+uint32_t seiza_live_stacker_accepted_frames(const SeizaLiveStacker *stacker);
+uint32_t seiza_live_stacker_rejected_frames(const SeizaLiveStacker *stacker);
+SeizaStackSnapshot *seiza_live_stacker_finish(
+    SeizaLiveStacker **stacker,
+    char **error_out);
+void seiza_live_stacker_free(SeizaLiveStacker *stacker);
+
+uint32_t seiza_stack_snapshot_accepted_frames(const SeizaStackSnapshot *snapshot);
+uint32_t seiza_stack_snapshot_rejected_frames(const SeizaStackSnapshot *snapshot);
+bool seiza_stack_snapshot_write_fits(
+    const SeizaStackSnapshot *snapshot,
+    const char *path,
+    char **error_out);
+void seiza_stack_snapshot_free(SeizaStackSnapshot *snapshot);
 
 char *seiza_solve_image_json(
     const char *path,
