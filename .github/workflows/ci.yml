@@ -26,6 +26,12 @@ jobs:
           components: rustfmt, clippy
           targets: aarch64-apple-darwin, x86_64-apple-darwin
 
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: seiza-mac
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
       - name: Validate project metadata
         run: |
           plutil -lint App/Info.plist App/Seiza.entitlements

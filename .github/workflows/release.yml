@@ -25,6 +25,12 @@ jobs:
           components: rustfmt
           targets: aarch64-apple-darwin, x86_64-apple-darwin
 
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: seiza-mac
+          save-if: false
+
       - name: Validate tag and test Rust core
         run: |
           [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
