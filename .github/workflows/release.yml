@@ -214,6 +214,10 @@ jobs:
             '' \
             'This universal application and disk image are Developer ID signed, notarized by Apple, and stapled for normal Gatekeeper installation.' \
             '' \
+            "### Fixed in ${version}" \
+            '' \
+            '- Catalog-aware background correction now handles repeated points in object outlines without rejecting every background sample.' \
+            '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
             "- [Download the zipped application](${release_base}/Seiza-${version}-universal.zip)" \
             "- [Verify SHA-256 checksums](${release_base}/SHA256SUMS.txt)" \

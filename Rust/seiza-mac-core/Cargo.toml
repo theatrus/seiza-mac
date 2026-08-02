@@ -1,6 +1,6 @@
 [package]
 name = "seiza-mac-core"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 rust-version = "1.89"
 license = "Apache-2.0"
@@ -10,4 +10,4 @@ publish = false
 crate-type = ["staticlib"]
 
 [dependencies]
-seiza-cabi = "0.14.0"
+seiza-cabi = "0.15.1"
