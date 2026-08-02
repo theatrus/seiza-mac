@@ -221,7 +221,8 @@ jobs:
             '- Universal macOS 15+ application (Apple silicon and Intel)' \
             '- FITS, XISF, JPEG, PNG, and TIFF viewing' \
             '- Filter-aware FITS and XISF directory stacking with calibration, progress, cancellation, and 32-bit FITS output' \
-            '- Live full-precision stretch stacks, background extraction, and light deconvolution' \
+            '- Live full-precision stretch stacks and light deconvolution' \
+            '- Automatic, polynomial, and radial-basis gradient correction with additive and multiplicative modes' \
             '- Explicit local plate solving, catalog overlays, and WCS export' \
             '- Managed catalog download, verification, installation, and repair in Settings' \
             '- 8- and 16-bit image export with optional overlays' \
