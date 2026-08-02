@@ -41,7 +41,7 @@ Electron, web view, or local server.
 | Astronomy rendering | Displays mono, planar RGB, and Bayer/OSC data through the full-precision Seiza core. |
 | Live stretch stacks | Adds, removes, reorders, and edits automatic or manual stages. Pick GHS symmetry points from the image, choose linked, per-channel, or luminance-preserving color, copy settings between images, and undo or redo each change. |
 | Responsive previews | Renders a quick zoom-aware preview off the main thread, cancels stale work, then replaces it with a source-resolution render. |
-| Background extraction | Fits and removes a smooth gradient from linear mono or color data before stretching. |
+| Background correction | Fits automatic, polynomial, or radial-basis gradient models to linear mono or color data. Choose additive subtraction or multiplicative illumination correction, tune the amount, and inspect each change through live preview. |
 | Light deconvolution | Applies optional damped Richardson-Lucy restoration with controls for stellar FWHM, strength, noise, and ringing. |
 | Image inspection | Fits, zooms, and pans around the pointer; shows source and display histograms; and lets you search or copy image headers. |
 | Local plate solving | Blind-solves an image only when you press Solve. It sends no image or catalog data off the Mac. |

@@ -84,7 +84,7 @@ enum ImageProcessingClipboard {
             )
             return FITSImageProcessingConfiguration(
                 stretchStack: decoded.stretchStack,
-                extractsBackground: decoded.extractsBackground,
+                backgroundConfiguration: decoded.backgroundConfiguration,
                 deconvolution: decoded.deconvolution
             )
         } catch {
@@ -588,7 +588,7 @@ private struct ImagePageView: View {
     @State private var showStretchControls = false
     @State private var stretchDraftStages = [FITSStretchConfiguration.default]
     @State private var selectedStretchStageIndex = 0
-    @State private var extractsBackgroundDraft = false
+    @State private var backgroundDraft: FITSBackgroundConfiguration?
     @State private var deconvolutionDraft: FITSDeconvolutionConfiguration?
     @State private var isPickingSymmetryPoint = false
     @State private var returnsToStretchPanelAfterPicking = false
@@ -1044,7 +1044,7 @@ private struct ImagePageView: View {
             let processing = try ImageProcessingClipboard.read()
             model.replaceStretchStack(
                 with: processing.stretchStack,
-                extractsBackground: processing.extractsBackground,
+                backgroundConfiguration: processing.backgroundConfiguration,
                 deconvolution: processing.deconvolution
             )
             beginStretchEditing()
@@ -1056,7 +1056,7 @@ private struct ImagePageView: View {
     private func beginStretchEditing() {
         stretchDraftStages = model.stretchHistory.appliedStages
         selectedStretchStageIndex = stretchDraftStages.count - 1
-        extractsBackgroundDraft = model.extractsBackground
+        backgroundDraft = model.backgroundConfiguration
         deconvolutionDraft = model.deconvolutionConfiguration
     }
 
@@ -1067,7 +1067,7 @@ private struct ImagePageView: View {
             model: model,
             stages: $stretchDraftStages,
             selectedStageIndex: $selectedStretchStageIndex,
-            extractsBackground: $extractsBackgroundDraft,
+            background: $backgroundDraft,
             deconvolution: $deconvolutionDraft,
             undo: performUndo,
             redo: performRedo,
@@ -1078,20 +1078,20 @@ private struct ImagePageView: View {
             },
             popOut: presentation == .popover ? { presentStretchPanel() } : nil,
             contentMaxHeight: presentation == .popover ? 520 : nil,
-            preview: { stack, extractsBackground, deconvolution in
+            preview: { stack, background, deconvolution in
                 model.preview(
                     stretchStack: stack,
-                    extractsBackground: extractsBackground,
+                    backgroundConfiguration: background,
                     deconvolution: deconvolution,
                     zoom: zoom,
                     displayScale: Double(displayScale)
                 )
             },
             clearPreview: model.cancelPreview,
-            save: { stack, extractsBackground, deconvolution in
+            save: { stack, background, deconvolution in
                 model.replaceStretchStack(
                     with: stack,
-                    extractsBackground: extractsBackground,
+                    backgroundConfiguration: background,
                     deconvolution: deconvolution
                 )
                 dismissStretchEditor(presentation)
@@ -3012,8 +3012,15 @@ private struct InspectorView: View {
                         }
                         LabeledContent(
                             "Background",
-                            value: model.extractsBackground ? "Gradient removed" : "Original"
+                            value: model.backgroundConfiguration?.summary ?? "Original"
                         )
+                        if let background = metadata.backgroundProcessing {
+                            LabeledContent("Fitted model", value: background.modelTitle)
+                            LabeledContent(
+                                "Background samples",
+                                value: "\(background.diagnostics.acceptedSamples) of \(background.diagnostics.candidateSamples)"
+                            )
+                        }
                         if let deconvolution = model.deconvolutionConfiguration {
                             LabeledContent("Deconvolution", value: "Light Richardson–Lucy")
                             LabeledContent(

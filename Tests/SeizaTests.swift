@@ -913,6 +913,15 @@ final class RenderBoundaryTests: XCTestCase {
                 extractsBackground: false
             )
         )
+        var zeroStrength = FITSBackgroundConfiguration.default
+        zeroStrength.strength = 0
+        let unchanged = try SeizaCore.render(
+            url: url,
+            processing: FITSImageProcessingConfiguration(
+                stretchStack: stack,
+                backgroundConfiguration: zeroStrength
+            )
+        )
         let corrected = try SeizaCore.render(
             url: url,
             processing: FITSImageProcessingConfiguration(
@@ -924,6 +933,17 @@ final class RenderBoundaryTests: XCTestCase {
         XCTAssertEqual(corrected.image.width, width)
         XCTAssertEqual(corrected.image.height, height)
         XCTAssertEqual(corrected.metadata.inputHistogram?.upperBound, 1)
+        XCTAssertEqual(corrected.metadata.backgroundProcessing?.mode, "subtract")
+        XCTAssertEqual(corrected.metadata.backgroundProcessing?.strength, 1)
+        XCTAssertEqual(corrected.metadata.backgroundProcessing?.model, "polynomial")
+        XCTAssertGreaterThan(
+            corrected.metadata.backgroundProcessing?.diagnostics.acceptedSamples ?? 0,
+            0
+        )
+        XCTAssertEqual(
+            plain.image.dataProvider?.data as Data?,
+            unchanged.image.dataProvider?.data as Data?
+        )
         XCTAssertNotEqual(
             plain.image.dataProvider?.data as Data?,
             corrected.image.dataProvider?.data as Data?
@@ -1088,7 +1108,7 @@ final class RenderBoundaryTests: XCTestCase {
             stretch.targetMedian = targetMedian
             model.preview(
                 stretchStack: FITSStretchStack(stages: [stretch]),
-                extractsBackground: false
+                backgroundConfiguration: nil
             )
         }
 
@@ -1104,7 +1124,7 @@ final class RenderBoundaryTests: XCTestCase {
 
         model.replaceStretchStack(
             with: FITSStretchStack(stages: [latestStretch]),
-            extractsBackground: false
+            backgroundConfiguration: nil
         )
 
         if case .loaded = model.loadState {
@@ -1379,6 +1399,12 @@ final class FITSStretchConfigurationTests: XCTestCase {
         )
         let background = try XCTUnwrap(processedJSON["background"] as? [String: Any])
         XCTAssertEqual(background["mode"] as? String, "subtract")
+        XCTAssertEqual(background["strength"] as? Double, 1)
+        let backgroundConfig = try XCTUnwrap(background["config"] as? [String: Any])
+        let backgroundModel = try XCTUnwrap(backgroundConfig["model"] as? [String: Any])
+        XCTAssertEqual(backgroundModel["kind"] as? String, "automatic")
+        XCTAssertEqual(backgroundModel["max_degree"] as? Int, 2)
+        XCTAssertEqual(backgroundModel["allow_radial_basis"] as? Bool, false)
         let deconvolutionJSON = try XCTUnwrap(
             processedJSON["deconvolution"] as? [String: Any]
         )
@@ -1400,6 +1426,66 @@ final class FITSStretchConfigurationTests: XCTestCase {
         )
         XCTAssertEqual(previewJSON["interactive_preview"] as? Bool, true)
         XCTAssertNotEqual(interactivePreview.cacheIdentifier, withBackground.cacheIdentifier)
+    }
+
+    func testBackgroundModelsAndGradientStrengthRoundTrip() throws {
+        var background = FITSBackgroundConfiguration.default
+        background.mode = .divide
+        background.strength = 0.7
+        background.modelType = .radialBasis
+        background.rbfSmoothing = 0.03
+        background.maxControlPoints = 256
+        let processing = FITSImageProcessingConfiguration(
+            stretchStack: .default,
+            backgroundConfiguration: background
+        )
+
+        let data = try JSONEncoder().encode(processing)
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        let encodedBackground = try XCTUnwrap(json["background"] as? [String: Any])
+        XCTAssertEqual(encodedBackground["mode"] as? String, "divide")
+        XCTAssertEqual(encodedBackground["strength"] as? Double, 0.7)
+        let config = try XCTUnwrap(encodedBackground["config"] as? [String: Any])
+        let model = try XCTUnwrap(config["model"] as? [String: Any])
+        XCTAssertEqual(model["kind"] as? String, "radial_basis")
+        XCTAssertEqual(model["smoothing"] as? Double, 0.03)
+        XCTAssertEqual(model["max_control_points"] as? Int, 256)
+        XCTAssertEqual(
+            try JSONDecoder().decode(FITSImageProcessingConfiguration.self, from: data),
+            processing
+        )
+
+        var weaker = background
+        weaker.strength = 0.5
+        XCTAssertNotEqual(
+            FITSImageProcessingConfiguration(
+                stretchStack: .default,
+                backgroundConfiguration: weaker
+            ).cacheIdentifier,
+            processing.cacheIdentifier
+        )
+    }
+
+    func testLegacyBackgroundRecipeKeepsTheOldPolynomialDefault() throws {
+        let processing = FITSImageProcessingConfiguration(
+            stretchStack: .default,
+            extractsBackground: false
+        )
+        var json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: processing.jsonData) as? [String: Any]
+        )
+        json["background"] = ["mode": "subtract"]
+        let data = try JSONSerialization.data(withJSONObject: json)
+
+        let decoded = try JSONDecoder().decode(
+            FITSImageProcessingConfiguration.self,
+            from: data
+        )
+
+        XCTAssertEqual(decoded.backgroundConfiguration?.modelType, .polynomial)
+        XCTAssertEqual(decoded.backgroundConfiguration?.polynomialDegree, 2)
     }
 
     func testProcessingRecipeRoundTripsThroughTheMacPasteboard() throws {

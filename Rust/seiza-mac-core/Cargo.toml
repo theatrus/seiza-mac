@@ -10,4 +10,4 @@ publish = false
 crate-type = ["staticlib"]
 
 [dependencies]
-seiza-cabi = "0.13.0"
+seiza-cabi = "0.14.0"

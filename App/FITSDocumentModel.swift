@@ -71,7 +71,7 @@ final class ImageDocumentModel: ObservableObject {
     @Published private(set) var image: CGImage?
     @Published private(set) var metadata: ImageMetadata?
     @Published private(set) var stretchHistory: FITSStretchHistory
-    @Published private(set) var extractsBackground = false
+    @Published private(set) var backgroundConfiguration: FITSBackgroundConfiguration?
     @Published private(set) var deconvolutionConfiguration: FITSDeconvolutionConfiguration?
     @Published private(set) var isPreviewRendering = false
     @Published private(set) var previewError: String?
@@ -93,7 +93,7 @@ final class ImageDocumentModel: ObservableObject {
         self.url = url
         let processingConfiguration = FITSImageProcessingConfiguration(
             stretchStack: processingConfiguration.stretchStack,
-            extractsBackground: processingConfiguration.extractsBackground,
+            backgroundConfiguration: processingConfiguration.backgroundConfiguration,
             deconvolution: processingConfiguration.deconvolution
         )
         if let carriedStretchHistory {
@@ -105,7 +105,7 @@ final class ImageDocumentModel: ObservableObject {
         } else {
             stretchHistory = FITSStretchHistory(stack: processingConfiguration.stretchStack)
         }
-        extractsBackground = processingConfiguration.extractsBackground
+        backgroundConfiguration = processingConfiguration.backgroundConfiguration
         deconvolutionConfiguration = processingConfiguration.deconvolution
         let processing = processingConfiguration
         previewImage = ImageThumbnailCache.memoryImage(
@@ -145,10 +145,14 @@ final class ImageDocumentModel: ObservableObject {
         stretchHistory.current
     }
 
+    var extractsBackground: Bool {
+        backgroundConfiguration != nil
+    }
+
     var processingConfiguration: FITSImageProcessingConfiguration {
         FITSImageProcessingConfiguration(
             stretchStack: stretchHistory.stack,
-            extractsBackground: extractsBackground,
+            backgroundConfiguration: backgroundConfiguration,
             deconvolution: deconvolutionConfiguration
         )
     }
@@ -163,55 +167,58 @@ final class ImageDocumentModel: ObservableObject {
 
     func addStretch(
         _ configuration: FITSStretchConfiguration,
-        extractsBackground: Bool,
+        backgroundConfiguration: FITSBackgroundConfiguration?,
         deconvolution: FITSDeconvolutionConfiguration? = nil
     ) {
         guard
             configuration.validationMessage == nil,
+            backgroundConfiguration?.validationMessage == nil,
             deconvolution?.validationMessage == nil
         else { return }
         cancelPreview()
         var history = stretchHistory
         history.apply(configuration)
         stretchHistory = history
-        self.extractsBackground = extractsBackground
+        self.backgroundConfiguration = backgroundConfiguration
         deconvolutionConfiguration = deconvolution
         load()
     }
 
     func updateCurrentStretch(
         _ configuration: FITSStretchConfiguration,
-        extractsBackground: Bool,
+        backgroundConfiguration: FITSBackgroundConfiguration?,
         deconvolution: FITSDeconvolutionConfiguration? = nil
     ) {
         guard
             configuration.validationMessage == nil,
+            backgroundConfiguration?.validationMessage == nil,
             deconvolution?.validationMessage == nil
         else { return }
         cancelPreview()
         var history = stretchHistory
         history.updateCurrent(configuration)
         stretchHistory = history
-        self.extractsBackground = extractsBackground
+        self.backgroundConfiguration = backgroundConfiguration
         deconvolutionConfiguration = deconvolution
         load()
     }
 
     func replaceStretchStack(
         with stack: FITSStretchStack,
-        extractsBackground: Bool,
+        backgroundConfiguration: FITSBackgroundConfiguration?,
         deconvolution: FITSDeconvolutionConfiguration? = nil
     ) {
         guard
             stack.stages.allSatisfy({ $0.validationMessage == nil }),
+            backgroundConfiguration?.validationMessage == nil,
             deconvolution?.validationMessage == nil
         else { return }
         let hasChanges = stretchHistory.stack != stack
-            || self.extractsBackground != extractsBackground
+            || self.backgroundConfiguration != backgroundConfiguration
             || deconvolutionConfiguration != deconvolution
         let requestedProcessing = FITSImageProcessingConfiguration(
             stretchStack: stack,
-            extractsBackground: extractsBackground,
+            backgroundConfiguration: backgroundConfiguration,
             deconvolution: deconvolution
         )
         let refinedPreview = fullResolutionPreview.flatMap { preview in
@@ -222,7 +229,7 @@ final class ImageDocumentModel: ObservableObject {
         var history = stretchHistory
         history.replaceStack(with: stack.stages)
         stretchHistory = history
-        self.extractsBackground = extractsBackground
+        self.backgroundConfiguration = backgroundConfiguration
         deconvolutionConfiguration = deconvolution
         if let refinedPreview {
             loadGeneration &+= 1
@@ -250,13 +257,14 @@ final class ImageDocumentModel: ObservableObject {
 
     func preview(
         stretchStack: FITSStretchStack,
-        extractsBackground: Bool,
+        backgroundConfiguration: FITSBackgroundConfiguration?,
         deconvolution: FITSDeconvolutionConfiguration? = nil,
         zoom: Double = 1,
         displayScale: Double = 1
     ) {
         guard
             stretchStack.stages.allSatisfy({ $0.validationMessage == nil }),
+            backgroundConfiguration?.validationMessage == nil,
             deconvolution?.validationMessage == nil
         else {
             cancelPreview()
@@ -264,7 +272,7 @@ final class ImageDocumentModel: ObservableObject {
         }
         let requestedProcessing = FITSImageProcessingConfiguration(
             stretchStack: stretchStack,
-            extractsBackground: extractsBackground,
+            backgroundConfiguration: backgroundConfiguration,
             deconvolution: deconvolution
         )
         guard requestedProcessing != processingConfiguration else {
@@ -273,7 +281,7 @@ final class ImageDocumentModel: ObservableObject {
         }
         let responsiveProcessing = FITSImageProcessingConfiguration(
             stretchStack: stretchStack,
-            extractsBackground: extractsBackground,
+            backgroundConfiguration: backgroundConfiguration,
             deconvolution: deconvolution,
             interactivePreview: true
         )

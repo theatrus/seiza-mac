@@ -77,7 +77,8 @@ In the live stack editor you can:
 - remove a stage with its × button;
 - undo or redo committed stretch changes;
 - copy and paste committed adjustments between images or windows;
-- subtract a smooth background gradient before the first stage; and
+- correct a smooth background gradient before the first stage, with a chosen
+  model, mode, and amount; and
 - open the same editor in a persistent, resizable utility panel with the
   pop-out button.
 
@@ -99,6 +100,15 @@ uses enough pixels for the current zoom and Retina display, then immediately
 refines the same draft at source resolution. Newer edits cancel obsolete queued
 work. Once that refinement is ready, **Save Changes** commits it directly as one
 undoable operation; **Cancel** returns to the committed image.
+
+Background correction starts in **Automatic** mode, which compares conservative
+polynomial surfaces on held-out background samples. You can instead choose a
+fixed polynomial degree or a flexible radial-basis surface. Radial-basis fitting
+can follow an irregular field, but it can also mistake real nebula or galaxy
+detail for background. It stays out of automatic selection unless you turn it
+on. Use **Subtract Gradient** for additive glow and **Correct Illumination** for
+a multiplicative field response. **Amount** blends from the original image at
+zero to the full correction at one.
 
 Seiza also offers **Apply light deconvolution** in the same linear-processing
 section. Enable it only when you have measured the FWHM of
