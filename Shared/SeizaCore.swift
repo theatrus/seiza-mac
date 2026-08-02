@@ -679,6 +679,13 @@ struct FITSBackgroundConfiguration: Equatable, Codable {
                 forKey: .mode
             ) ?? .subtract
             strength = try container.decodeIfPresent(Double.self, forKey: .strength) ?? 1
+            if let validationMessage {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .strength,
+                    in: container,
+                    debugDescription: validationMessage
+                )
+            }
             return
         }
 
@@ -743,7 +750,7 @@ struct FITSImageProcessingConfiguration: Equatable, Codable {
         interactivePreview: Bool = false
     ) {
         self.stretchStack = stretchStack
-        backgroundConfiguration = extractsBackground ? .default : nil
+        backgroundConfiguration = extractsBackground ? .legacyDefault : nil
         self.deconvolution = deconvolution
         self.interactivePreview = interactivePreview
     }
@@ -880,6 +887,11 @@ struct FITSStretchHistory: Equatable {
         guard stages != appliedStages else { return }
         undoStacks.append(appliedStages)
         appliedStages = stages
+        redoStacks.removeAll()
+    }
+
+    mutating func checkpoint() {
+        undoStacks.append(appliedStages)
         redoStacks.removeAll()
     }
 

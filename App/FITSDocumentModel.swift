@@ -50,6 +50,51 @@ struct ImagePreviewRenderPlan: Equatable {
     }
 }
 
+struct FITSLinearProcessingState: Equatable {
+    let background: FITSBackgroundConfiguration?
+    let deconvolution: FITSDeconvolutionConfiguration?
+}
+
+struct FITSLinearProcessingHistory: Equatable {
+    private(set) var current: FITSLinearProcessingState
+    private var undoStates = [FITSLinearProcessingState]()
+    private var redoStates = [FITSLinearProcessingState]()
+
+    init(
+        background: FITSBackgroundConfiguration?,
+        deconvolution: FITSDeconvolutionConfiguration?
+    ) {
+        current = FITSLinearProcessingState(
+            background: background,
+            deconvolution: deconvolution
+        )
+    }
+
+    mutating func commit(
+        background: FITSBackgroundConfiguration?,
+        deconvolution: FITSDeconvolutionConfiguration?
+    ) {
+        undoStates.append(current)
+        current = FITSLinearProcessingState(
+            background: background,
+            deconvolution: deconvolution
+        )
+        redoStates.removeAll()
+    }
+
+    mutating func undoAligned() {
+        let previous = undoStates.popLast() ?? current
+        redoStates.append(current)
+        current = previous
+    }
+
+    mutating func redoAligned() {
+        let next = redoStates.popLast() ?? current
+        undoStates.append(current)
+        current = next
+    }
+}
+
 final class ImageDocumentModel: ObservableObject {
     enum LoadState {
         case loading
@@ -71,8 +116,7 @@ final class ImageDocumentModel: ObservableObject {
     @Published private(set) var image: CGImage?
     @Published private(set) var metadata: ImageMetadata?
     @Published private(set) var stretchHistory: FITSStretchHistory
-    @Published private(set) var backgroundConfiguration: FITSBackgroundConfiguration?
-    @Published private(set) var deconvolutionConfiguration: FITSDeconvolutionConfiguration?
+    @Published private(set) var linearProcessingHistory: FITSLinearProcessingHistory
     @Published private(set) var isPreviewRendering = false
     @Published private(set) var previewError: String?
     private var loadGeneration = 0
@@ -88,7 +132,8 @@ final class ImageDocumentModel: ObservableObject {
     init(
         url: URL,
         processingConfiguration: FITSImageProcessingConfiguration = .default,
-        stretchHistory carriedStretchHistory: FITSStretchHistory? = nil
+        stretchHistory carriedStretchHistory: FITSStretchHistory? = nil,
+        linearProcessingHistory carriedLinearProcessingHistory: FITSLinearProcessingHistory? = nil
     ) {
         self.url = url
         let processingConfiguration = FITSImageProcessingConfiguration(
@@ -105,8 +150,21 @@ final class ImageDocumentModel: ObservableObject {
         } else {
             stretchHistory = FITSStretchHistory(stack: processingConfiguration.stretchStack)
         }
-        backgroundConfiguration = processingConfiguration.backgroundConfiguration
-        deconvolutionConfiguration = processingConfiguration.deconvolution
+        if let carriedLinearProcessingHistory {
+            precondition(
+                carriedLinearProcessingHistory.current.background
+                    == processingConfiguration.backgroundConfiguration
+                    && carriedLinearProcessingHistory.current.deconvolution
+                    == processingConfiguration.deconvolution,
+                "Carried linear processing history must match the current processing recipe"
+            )
+            linearProcessingHistory = carriedLinearProcessingHistory
+        } else {
+            linearProcessingHistory = FITSLinearProcessingHistory(
+                background: processingConfiguration.backgroundConfiguration,
+                deconvolution: processingConfiguration.deconvolution
+            )
+        }
         let processing = processingConfiguration
         previewImage = ImageThumbnailCache.memoryImage(
             for: url,
@@ -149,12 +207,29 @@ final class ImageDocumentModel: ObservableObject {
         backgroundConfiguration != nil
     }
 
+    var backgroundConfiguration: FITSBackgroundConfiguration? {
+        linearProcessingHistory.current.background
+    }
+
+    var deconvolutionConfiguration: FITSDeconvolutionConfiguration? {
+        linearProcessingHistory.current.deconvolution
+    }
+
     var processingConfiguration: FITSImageProcessingConfiguration {
         FITSImageProcessingConfiguration(
             stretchStack: stretchHistory.stack,
             backgroundConfiguration: backgroundConfiguration,
             deconvolution: deconvolutionConfiguration
         )
+    }
+
+    private func recordProcessingChange(
+        background: FITSBackgroundConfiguration?,
+        deconvolution: FITSDeconvolutionConfiguration?
+    ) {
+        var history = linearProcessingHistory
+        history.commit(background: background, deconvolution: deconvolution)
+        linearProcessingHistory = history
     }
 
     var exportImage: CGImage? {
@@ -179,8 +254,10 @@ final class ImageDocumentModel: ObservableObject {
         var history = stretchHistory
         history.apply(configuration)
         stretchHistory = history
-        self.backgroundConfiguration = backgroundConfiguration
-        deconvolutionConfiguration = deconvolution
+        recordProcessingChange(
+            background: backgroundConfiguration,
+            deconvolution: deconvolution
+        )
         load()
     }
 
@@ -198,8 +275,10 @@ final class ImageDocumentModel: ObservableObject {
         var history = stretchHistory
         history.updateCurrent(configuration)
         stretchHistory = history
-        self.backgroundConfiguration = backgroundConfiguration
-        deconvolutionConfiguration = deconvolution
+        recordProcessingChange(
+            background: backgroundConfiguration,
+            deconvolution: deconvolution
+        )
         load()
     }
 
@@ -227,10 +306,16 @@ final class ImageDocumentModel: ObservableObject {
         cancelPreview()
         guard hasChanges else { return }
         var history = stretchHistory
-        history.replaceStack(with: stack.stages)
+        if history.stack == stack {
+            history.checkpoint()
+        } else {
+            history.replaceStack(with: stack.stages)
+        }
         stretchHistory = history
-        self.backgroundConfiguration = backgroundConfiguration
-        deconvolutionConfiguration = deconvolution
+        recordProcessingChange(
+            background: backgroundConfiguration,
+            deconvolution: deconvolution
+        )
         if let refinedPreview {
             loadGeneration &+= 1
             commit(refinedPreview)
@@ -243,7 +328,10 @@ final class ImageDocumentModel: ObservableObject {
         cancelPreview()
         var history = stretchHistory
         guard history.undo() else { return }
+        var processingHistory = linearProcessingHistory
+        processingHistory.undoAligned()
         stretchHistory = history
+        linearProcessingHistory = processingHistory
         load()
     }
 
@@ -251,7 +339,10 @@ final class ImageDocumentModel: ObservableObject {
         cancelPreview()
         var history = stretchHistory
         guard history.redo() else { return }
+        var processingHistory = linearProcessingHistory
+        processingHistory.redoAligned()
         stretchHistory = history
+        linearProcessingHistory = processingHistory
         load()
     }
 

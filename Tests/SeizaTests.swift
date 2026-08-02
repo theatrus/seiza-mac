@@ -1391,7 +1391,7 @@ final class FITSStretchConfigurationTests: XCTestCase {
         deconvolution.psfFWHMPixels = 2.8
         let withBackground = FITSImageProcessingConfiguration(
             stretchStack: .default,
-            extractsBackground: true,
+            backgroundConfiguration: .default,
             deconvolution: deconvolution
         )
         let processedJSON = try XCTUnwrap(
@@ -1417,7 +1417,7 @@ final class FITSStretchConfigurationTests: XCTestCase {
 
         let interactivePreview = FITSImageProcessingConfiguration(
             stretchStack: .default,
-            extractsBackground: true,
+            backgroundConfiguration: .default,
             deconvolution: deconvolution,
             interactivePreview: true
         )
@@ -1426,6 +1426,22 @@ final class FITSStretchConfigurationTests: XCTestCase {
         )
         XCTAssertEqual(previewJSON["interactive_preview"] as? Bool, true)
         XCTAssertNotEqual(interactivePreview.cacheIdentifier, withBackground.cacheIdentifier)
+    }
+
+    func testBooleanBackgroundInitializerKeepsTheOldQuadraticModel() throws {
+        let processing = FITSImageProcessingConfiguration(
+            stretchStack: .default,
+            extractsBackground: true
+        )
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: processing.jsonData) as? [String: Any]
+        )
+        let background = try XCTUnwrap(json["background"] as? [String: Any])
+        let config = try XCTUnwrap(background["config"] as? [String: Any])
+        let model = try XCTUnwrap(config["model"] as? [String: Any])
+
+        XCTAssertEqual(model["kind"] as? String, "polynomial")
+        XCTAssertEqual(model["degree"] as? Int, 2)
     }
 
     func testBackgroundModelsAndGradientStrengthRoundTrip() throws {
@@ -1486,6 +1502,22 @@ final class FITSStretchConfigurationTests: XCTestCase {
 
         XCTAssertEqual(decoded.backgroundConfiguration?.modelType, .polynomial)
         XCTAssertEqual(decoded.backgroundConfiguration?.polynomialDegree, 2)
+    }
+
+    func testLegacyBackgroundRecipeRejectsInvalidStrength() throws {
+        let processing = FITSImageProcessingConfiguration(
+            stretchStack: .default,
+            extractsBackground: false
+        )
+        var json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: processing.jsonData) as? [String: Any]
+        )
+        json["background"] = ["mode": "subtract", "strength": -1]
+        let data = try JSONSerialization.data(withJSONObject: json)
+
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(FITSImageProcessingConfiguration.self, from: data)
+        )
     }
 
     func testProcessingRecipeRoundTripsThroughTheMacPasteboard() throws {
@@ -1647,6 +1679,50 @@ final class FITSStretchConfigurationTests: XCTestCase {
         model.undoStretch()
         XCTAssertEqual(model.stretchHistory.stack, .default)
         XCTAssertTrue(model.stretchHistory.canRedo)
+    }
+
+    @MainActor
+    func testDocumentModelUndoesBackgroundOnlyChanges() {
+        let missingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString).fits")
+        let model = ImageDocumentModel(url: missingURL)
+        var background = FITSBackgroundConfiguration.default
+        background.mode = .divide
+        background.strength = 0.65
+        var deconvolution = FITSDeconvolutionConfiguration.default
+        deconvolution.amount = 0.2
+
+        model.replaceStretchStack(
+            with: .default,
+            backgroundConfiguration: background,
+            deconvolution: deconvolution
+        )
+
+        XCTAssertEqual(model.backgroundConfiguration, background)
+        XCTAssertEqual(model.deconvolutionConfiguration, deconvolution)
+        XCTAssertTrue(model.stretchHistory.canUndo)
+
+        model.undoStretch()
+        XCTAssertNil(model.backgroundConfiguration)
+        XCTAssertNil(model.deconvolutionConfiguration)
+        XCTAssertEqual(model.stretchHistory.stack, .default)
+        XCTAssertTrue(model.stretchHistory.canRedo)
+
+        model.redoStretch()
+        XCTAssertEqual(model.backgroundConfiguration, background)
+        XCTAssertEqual(model.deconvolutionConfiguration, deconvolution)
+        XCTAssertEqual(model.stretchHistory.stack, .default)
+
+        let nextModel = ImageDocumentModel(
+            url: missingURL,
+            processingConfiguration: model.processingConfiguration,
+            stretchHistory: model.stretchHistory,
+            linearProcessingHistory: model.linearProcessingHistory
+        )
+        nextModel.undoStretch()
+        XCTAssertNil(nextModel.backgroundConfiguration)
+        XCTAssertNil(nextModel.deconvolutionConfiguration)
+        XCTAssertEqual(nextModel.stretchHistory.stack, .default)
     }
 
     func testStretchHistoryCommitsRemovedAndReorderedStagesAsOneUndoStep() {

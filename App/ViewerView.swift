@@ -293,11 +293,15 @@ struct ViewerView: View {
         let stretchHistory = showsImageBrowser
             ? model.stretchHistory
             : nil
+        let linearProcessingHistory = showsImageBrowser
+            ? model.linearProcessingHistory
+            : nil
         selectedIndex = index
         model = ImageDocumentModel(
             url: urls[index],
             processingConfiguration: processing,
-            stretchHistory: stretchHistory
+            stretchHistory: stretchHistory,
+            linearProcessingHistory: linearProcessingHistory
         )
         onSelectionChange(urls[index])
     }
