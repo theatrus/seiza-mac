@@ -68,11 +68,13 @@ percentile Asinh separately from manual Linear, Asinh, MTF, and Generalized
 Hyperbolic Stretch controls, with an identity option for normalized data. GHS
 can sample its symmetry point from the displayed image. Color FITS and XISF can analyze
 linked or per-channel data, or stretch luminance while preserving RGB
-chromaticity. An optional background step fits and subtracts a smooth model
-from the linear mono or RGB samples. Optional deconvolution then applies
-conservative damped Richardson–Lucy restoration with a caller-supplied stellar
-PSF FWHM before the first stretch stage. Both operations remain on linear `f32`
-pixels inside Seiza; Swift never round-trips them through an 8-bit display image.
+chromaticity. An optional background step fits an automatic, polynomial, or
+radial-basis surface to the linear mono or RGB samples, then applies additive
+or multiplicative correction at the requested strength. Optional deconvolution
+then applies conservative damped Richardson–Lucy restoration with a
+caller-supplied stellar PSF FWHM before the first stretch stage. Both operations
+remain on linear `f32` pixels inside Seiza; Swift never round-trips them through
+an 8-bit display image.
 
 The Swift editor owns one draft stack independently from its presentation. The
 toolbar opens that editor as a bounded popover by default; a pop-out action

@@ -106,7 +106,37 @@ struct ImageMetadata: Decodable {
     let statistics: ImageStatistics
     let inputHistogram: ImageHistogram?
     let displayHistogram: ImageHistogram?
+    let backgroundProcessing: ImageBackgroundProcessing?
     let headers: [String: JSONValue]
+}
+
+struct ImageBackgroundProcessing: Decodable, Equatable {
+    let mode: String
+    let strength: Double
+    let model: String
+    let diagnostics: ImageBackgroundDiagnostics
+
+    var modelTitle: String {
+        switch model {
+        case "polynomial": "Polynomial"
+        case "radial_basis": "Radial Basis"
+        default: model
+        }
+    }
+}
+
+struct ImageBackgroundDiagnostics: Decodable, Equatable {
+    let candidateSamples: Int
+    let acceptedSamples: Int
+    let rejectedNoise: Int
+    let rejectedResidual: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case candidateSamples = "candidate_samples"
+        case acceptedSamples = "accepted_samples"
+        case rejectedNoise = "rejected_noise"
+        case rejectedResidual = "rejected_residual"
+    }
 }
 
 struct ImageHistogram: Decodable, Equatable {
@@ -459,6 +489,246 @@ struct FITSDeconvolutionConfiguration: Equatable, Codable {
     }
 }
 
+enum FITSBackgroundCorrectionMode: String, CaseIterable, Identifiable, Codable {
+    case subtract
+    case divide
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .subtract: "Subtract Gradient"
+        case .divide: "Correct Illumination"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .subtract:
+            "Remove an additive glow or gradient while keeping the background level."
+        case .divide:
+            "Correct a multiplicative field response while keeping the image scale."
+        }
+    }
+}
+
+enum FITSBackgroundModelType: String, CaseIterable, Identifiable, Codable {
+    case automatic
+    case polynomial
+    case radialBasis = "radial_basis"
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .automatic: "Automatic"
+        case .polynomial: "Polynomial"
+        case .radialBasis: "Radial Basis"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .automatic:
+            "Choose a conservative surface from held-out background samples."
+        case .polynomial:
+            "Fit a smooth polynomial surface with a fixed degree."
+        case .radialBasis:
+            "Fit a flexible thin-plate surface. Inspect extended objects for lost detail."
+        }
+    }
+}
+
+struct FITSBackgroundConfiguration: Equatable, Codable {
+    static let `default` = Self()
+    static let legacyDefault = Self(modelType: .polynomial)
+
+    var mode: FITSBackgroundCorrectionMode = .subtract
+    var strength = 1.0
+    var modelType: FITSBackgroundModelType = .automatic
+    var automaticMaxDegree = 2
+    var polynomialDegree = 2
+    var ridge = 1.0e-8
+    var rbfSmoothing = 0.01
+    var maxControlPoints = 192
+    var allowRadialBasisInAutomatic = false
+    var minimumImprovement = 0.12
+
+    init(
+        mode: FITSBackgroundCorrectionMode = .subtract,
+        strength: Double = 1.0,
+        modelType: FITSBackgroundModelType = .automatic,
+        automaticMaxDegree: Int = 2,
+        polynomialDegree: Int = 2,
+        ridge: Double = 1.0e-8,
+        rbfSmoothing: Double = 0.01,
+        maxControlPoints: Int = 192,
+        allowRadialBasisInAutomatic: Bool = false,
+        minimumImprovement: Double = 0.12
+    ) {
+        self.mode = mode
+        self.strength = strength
+        self.modelType = modelType
+        self.automaticMaxDegree = automaticMaxDegree
+        self.polynomialDegree = polynomialDegree
+        self.ridge = ridge
+        self.rbfSmoothing = rbfSmoothing
+        self.maxControlPoints = maxControlPoints
+        self.allowRadialBasisInAutomatic = allowRadialBasisInAutomatic
+        self.minimumImprovement = minimumImprovement
+    }
+
+    var validationMessage: String? {
+        guard strength.isFinite, (0...1).contains(strength) else {
+            return "Background correction strength must be between 0 and 1."
+        }
+        switch modelType {
+        case .automatic:
+            guard ridge.isFinite, ridge >= 0 else {
+                return "Background ridge must be a non-negative number."
+            }
+            guard (0...4).contains(automaticMaxDegree) else {
+                return "Automatic maximum degree must be between 0 and 4."
+            }
+            guard minimumImprovement.isFinite, (0...0.75).contains(minimumImprovement) else {
+                return "Minimum improvement must be between 0 and 0.75."
+            }
+            if allowRadialBasisInAutomatic {
+                return radialBasisValidationMessage
+            }
+        case .polynomial:
+            guard ridge.isFinite, ridge >= 0 else {
+                return "Background ridge must be a non-negative number."
+            }
+            guard (0...4).contains(polynomialDegree) else {
+                return "Polynomial degree must be between 0 and 4."
+            }
+        case .radialBasis:
+            return radialBasisValidationMessage
+        }
+        return nil
+    }
+
+    var summary: String {
+        let percentage = Int((strength * 100).rounded())
+        return "\(modelType.title), \(percentage)% \(mode == .subtract ? "subtract" : "divide")"
+    }
+
+    private var radialBasisValidationMessage: String? {
+        guard rbfSmoothing.isFinite, rbfSmoothing >= 0 else {
+            return "Radial-basis smoothing must be a non-negative number."
+        }
+        guard (16...512).contains(maxControlPoints) else {
+            return "Radial-basis control points must be between 16 and 512."
+        }
+        return nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case mode
+        case strength
+        case config
+    }
+
+    private enum ConfigKeys: String, CodingKey {
+        case model
+    }
+
+    private enum ModelKeys: String, CodingKey {
+        case kind
+        case maxDegree = "max_degree"
+        case degree
+        case ridge
+        case rbfSmoothing = "rbf_smoothing"
+        case smoothing
+        case maxControlPoints = "max_control_points"
+        case allowRadialBasis = "allow_radial_basis"
+        case minimumImprovement = "minimum_improvement"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(mode, forKey: .mode)
+        try container.encode(strength, forKey: .strength)
+        var config = container.nestedContainer(keyedBy: ConfigKeys.self, forKey: .config)
+        var model = config.nestedContainer(keyedBy: ModelKeys.self, forKey: .model)
+        try model.encode(modelType, forKey: .kind)
+        switch modelType {
+        case .automatic:
+            try model.encode(automaticMaxDegree, forKey: .maxDegree)
+            try model.encode(ridge, forKey: .ridge)
+            try model.encode(rbfSmoothing, forKey: .rbfSmoothing)
+            try model.encode(maxControlPoints, forKey: .maxControlPoints)
+            try model.encode(allowRadialBasisInAutomatic, forKey: .allowRadialBasis)
+            try model.encode(minimumImprovement, forKey: .minimumImprovement)
+        case .polynomial:
+            try model.encode(polynomialDegree, forKey: .degree)
+            try model.encode(ridge, forKey: .ridge)
+        case .radialBasis:
+            try model.encode(rbfSmoothing, forKey: .smoothing)
+            try model.encode(maxControlPoints, forKey: .maxControlPoints)
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.contains(.config) else {
+            self = .legacyDefault
+            mode = try container.decodeIfPresent(
+                FITSBackgroundCorrectionMode.self,
+                forKey: .mode
+            ) ?? .subtract
+            strength = try container.decodeIfPresent(Double.self, forKey: .strength) ?? 1
+            if let validationMessage {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .strength,
+                    in: container,
+                    debugDescription: validationMessage
+                )
+            }
+            return
+        }
+
+        self = .default
+        mode = try container.decodeIfPresent(
+            FITSBackgroundCorrectionMode.self,
+            forKey: .mode
+        ) ?? .subtract
+        strength = try container.decodeIfPresent(Double.self, forKey: .strength) ?? 1
+        let config = try container.nestedContainer(keyedBy: ConfigKeys.self, forKey: .config)
+        let model = try config.nestedContainer(keyedBy: ModelKeys.self, forKey: .model)
+        modelType = try model.decode(FITSBackgroundModelType.self, forKey: .kind)
+        switch modelType {
+        case .automatic:
+            automaticMaxDegree = try model.decodeIfPresent(Int.self, forKey: .maxDegree) ?? 2
+            ridge = try model.decodeIfPresent(Double.self, forKey: .ridge) ?? 1.0e-8
+            rbfSmoothing = try model.decodeIfPresent(Double.self, forKey: .rbfSmoothing) ?? 0.01
+            maxControlPoints = try model.decodeIfPresent(Int.self, forKey: .maxControlPoints) ?? 192
+            allowRadialBasisInAutomatic = try model.decodeIfPresent(
+                Bool.self,
+                forKey: .allowRadialBasis
+            ) ?? false
+            minimumImprovement = try model.decodeIfPresent(
+                Double.self,
+                forKey: .minimumImprovement
+            ) ?? 0.12
+        case .polynomial:
+            polynomialDegree = try model.decode(Int.self, forKey: .degree)
+            ridge = try model.decode(Double.self, forKey: .ridge)
+        case .radialBasis:
+            rbfSmoothing = try model.decodeIfPresent(Double.self, forKey: .smoothing) ?? 0.01
+            maxControlPoints = try model.decodeIfPresent(Int.self, forKey: .maxControlPoints) ?? 192
+        }
+        if let validationMessage {
+            throw DecodingError.dataCorruptedError(
+                forKey: .config,
+                in: container,
+                debugDescription: validationMessage
+            )
+        }
+    }
+}
+
 struct FITSImageProcessingConfiguration: Equatable, Codable {
     static let `default` = Self(
         stretchStack: .default,
@@ -467,9 +737,11 @@ struct FITSImageProcessingConfiguration: Equatable, Codable {
     )
 
     let stretchStack: FITSStretchStack
-    let extractsBackground: Bool
+    let backgroundConfiguration: FITSBackgroundConfiguration?
     let deconvolution: FITSDeconvolutionConfiguration?
     let interactivePreview: Bool
+
+    var extractsBackground: Bool { backgroundConfiguration != nil }
 
     init(
         stretchStack: FITSStretchStack,
@@ -478,7 +750,19 @@ struct FITSImageProcessingConfiguration: Equatable, Codable {
         interactivePreview: Bool = false
     ) {
         self.stretchStack = stretchStack
-        self.extractsBackground = extractsBackground
+        backgroundConfiguration = extractsBackground ? .legacyDefault : nil
+        self.deconvolution = deconvolution
+        self.interactivePreview = interactivePreview
+    }
+
+    init(
+        stretchStack: FITSStretchStack,
+        backgroundConfiguration: FITSBackgroundConfiguration?,
+        deconvolution: FITSDeconvolutionConfiguration? = nil,
+        interactivePreview: Bool = false
+    ) {
+        self.stretchStack = stretchStack
+        self.backgroundConfiguration = backgroundConfiguration
         self.deconvolution = deconvolution
         self.interactivePreview = interactivePreview
     }
@@ -503,19 +787,11 @@ struct FITSImageProcessingConfiguration: Equatable, Codable {
         case interactivePreview = "interactive_preview"
     }
 
-    private struct BackgroundPayload: Codable {
-        let mode: String
-
-        init(mode: String = "subtract") {
-            self.mode = mode
-        }
-    }
-
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(stretchStack.stages, forKey: .stretch)
-        if extractsBackground {
-            try container.encode(BackgroundPayload(), forKey: .background)
+        if let backgroundConfiguration {
+            try container.encode(backgroundConfiguration, forKey: .background)
         }
         if let deconvolution {
             try container.encode(deconvolution, forKey: .deconvolution)
@@ -539,19 +815,12 @@ struct FITSImageProcessingConfiguration: Equatable, Codable {
             )
         }
         let background = try container.decodeIfPresent(
-            BackgroundPayload.self,
+            FITSBackgroundConfiguration.self,
             forKey: .background
         )
-        if let background, background.mode != "subtract" {
-            throw DecodingError.dataCorruptedError(
-                forKey: .background,
-                in: container,
-                debugDescription: "Unknown background operation \(background.mode)."
-            )
-        }
         self.init(
             stretchStack: FITSStretchStack(stages: stages),
-            extractsBackground: background != nil,
+            backgroundConfiguration: background,
             deconvolution: try container.decodeIfPresent(
                 FITSDeconvolutionConfiguration.self,
                 forKey: .deconvolution
@@ -618,6 +887,11 @@ struct FITSStretchHistory: Equatable {
         guard stages != appliedStages else { return }
         undoStacks.append(appliedStages)
         appliedStages = stages
+        redoStacks.removeAll()
+    }
+
+    mutating func checkpoint() {
+        undoStacks.append(appliedStages)
         redoStacks.removeAll()
     }
 

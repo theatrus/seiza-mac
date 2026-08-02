@@ -4,20 +4,29 @@ struct FITSStretchControlsView: View {
     @ObservedObject var model: ImageDocumentModel
     @Binding var stages: [FITSStretchConfiguration]
     @Binding var selectedStageIndex: Int
-    @Binding var extractsBackground: Bool
+    @Binding var background: FITSBackgroundConfiguration?
     @Binding var deconvolution: FITSDeconvolutionConfiguration?
     let undo: () -> Void
     let redo: () -> Void
     let pickSymmetryPoint: () -> Void
     let popOut: (() -> Void)?
     let contentMaxHeight: CGFloat?
-    let preview: (FITSStretchStack, Bool, FITSDeconvolutionConfiguration?) -> Void
+    let preview: (
+        FITSStretchStack,
+        FITSBackgroundConfiguration?,
+        FITSDeconvolutionConfiguration?
+    ) -> Void
     let clearPreview: () -> Void
-    let save: (FITSStretchStack, Bool, FITSDeconvolutionConfiguration?) -> Void
+    let save: (
+        FITSStretchStack,
+        FITSBackgroundConfiguration?,
+        FITSDeconvolutionConfiguration?
+    ) -> Void
     let cancel: () -> Void
 
     @State private var previewTask: Task<Void, Never>?
     @State private var handledDismissal = false
+    @State private var retainedBackground = FITSBackgroundConfiguration.default
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -149,11 +158,16 @@ struct FITSStretchControlsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Linear Processing")
                             .font(.subheadline.weight(.semibold))
-                        Toggle("Remove background gradient", isOn: $extractsBackground)
-                        Text("Fit and subtract a smooth background from linear FITS or XISF samples before the first stretch stage.")
+                        Toggle("Correct background gradient", isOn: backgroundEnabledBinding)
+                        Text("Fit and correct a smooth background in linear FITS or XISF samples before deconvolution and stretching.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+
+                        if background != nil {
+                            backgroundParameterControls
+                                .padding(.top, 2)
+                        }
 
                         Toggle("Apply light deconvolution", isOn: deconvolutionEnabledBinding)
                         Text("Restore stellar detail with a measured Gaussian PSF after background correction and before display stretching. Conservative defaults reduce, but cannot eliminate, noise amplification and ringing.")
@@ -256,13 +270,14 @@ struct FITSStretchControlsView: View {
                     handledDismissal = true
                     save(
                         FITSStretchStack(stages: stages),
-                        extractsBackground,
+                        background,
                         deconvolution
                     )
                 }
                     .keyboardShortcut(.defaultAction)
                     .disabled(
                         stages.contains { $0.validationMessage != nil }
+                            || background?.validationMessage != nil
                             || deconvolution?.validationMessage != nil
                     )
             }
@@ -271,12 +286,18 @@ struct FITSStretchControlsView: View {
         .frame(minWidth: 430, idealWidth: 430)
         .onAppear {
             selectedStageIndex = min(max(selectedStageIndex, 0), stages.count - 1)
+            if let background {
+                retainedBackground = background
+            }
             schedulePreview()
         }
         .onChange(of: stages) { _, _ in
             schedulePreview()
         }
-        .onChange(of: extractsBackground) { _, _ in
+        .onChange(of: background) { _, _ in
+            if let background {
+                retainedBackground = background
+            }
             schedulePreview()
         }
         .onChange(of: deconvolution) { _, _ in
@@ -482,6 +503,128 @@ struct FITSStretchControlsView: View {
         )
     }
 
+    private var backgroundEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { background != nil },
+            set: { isEnabled in
+                if isEnabled {
+                    background = retainedBackground
+                } else {
+                    if let background {
+                        retainedBackground = background
+                    }
+                    background = nil
+                }
+            }
+        )
+    }
+
+    private var backgroundBinding: Binding<FITSBackgroundConfiguration> {
+        Binding(
+            get: { background ?? .default },
+            set: { background = $0 }
+        )
+    }
+
+    @ViewBuilder
+    private var backgroundParameterControls: some View {
+        Picker("Correction", selection: backgroundBinding.mode) {
+            ForEach(FITSBackgroundCorrectionMode.allCases) { mode in
+                Text(mode.title).tag(mode)
+            }
+        }
+
+        Text(backgroundBinding.wrappedValue.mode.help)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+        StretchParameterRow(
+            title: "Amount",
+            value: backgroundBinding.strength,
+            range: 0...1,
+            step: 0.05
+        )
+
+        Picker("Background model", selection: backgroundBinding.modelType) {
+            ForEach(FITSBackgroundModelType.allCases) { modelType in
+                Text(modelType.title).tag(modelType)
+            }
+        }
+
+        Text(backgroundBinding.wrappedValue.modelType.help)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+        switch backgroundBinding.wrappedValue.modelType {
+        case .automatic:
+            BackgroundIntegerParameterRow(
+                title: "Maximum degree",
+                value: backgroundBinding.automaticMaxDegree,
+                range: 0...4
+            )
+            BackgroundNumberFieldRow(title: "Ridge", value: backgroundBinding.ridge)
+            StretchParameterRow(
+                title: "Required improvement",
+                value: backgroundBinding.minimumImprovement,
+                range: 0...0.75,
+                step: 0.01
+            )
+            Toggle(
+                "Consider radial-basis model",
+                isOn: backgroundBinding.allowRadialBasisInAutomatic
+            )
+            if backgroundBinding.wrappedValue.allowRadialBasisInAutomatic {
+                radialBasisControls
+                backgroundModelWarning
+            }
+        case .polynomial:
+            BackgroundIntegerParameterRow(
+                title: "Degree",
+                value: backgroundBinding.polynomialDegree,
+                range: 0...4
+            )
+            BackgroundNumberFieldRow(title: "Ridge", value: backgroundBinding.ridge)
+        case .radialBasis:
+            radialBasisControls
+            backgroundModelWarning
+        }
+
+        if let validationMessage = background?.validationMessage {
+            Label(validationMessage, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private var radialBasisControls: some View {
+        StretchParameterRow(
+            title: "Smoothing",
+            value: backgroundBinding.rbfSmoothing,
+            range: 0...1,
+            step: 0.005
+        )
+        BackgroundIntegerParameterRow(
+            title: "Control points",
+            value: backgroundBinding.maxControlPoints,
+            range: 16...512,
+            step: 16
+        )
+    }
+
+    private var backgroundModelWarning: some View {
+        Label(
+            "A flexible model can remove real nebula or galaxy detail. Inspect the preview before saving.",
+            systemImage: "exclamationmark.triangle"
+        )
+        .font(.caption)
+        .foregroundStyle(.orange)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
     private var deconvolutionBinding: Binding<FITSDeconvolutionConfiguration> {
         Binding(
             get: { deconvolution ?? .default },
@@ -519,13 +662,14 @@ struct FITSStretchControlsView: View {
         previewTask?.cancel()
         guard
             stages.allSatisfy({ $0.validationMessage == nil }),
+            background?.validationMessage == nil,
             deconvolution?.validationMessage == nil
         else {
             clearPreview()
             return
         }
         let stack = FITSStretchStack(stages: stages)
-        let background = extractsBackground
+        let backgroundConfiguration = background
         let deconvolution = deconvolution
         previewTask = Task {
             do {
@@ -535,7 +679,7 @@ struct FITSStretchControlsView: View {
             }
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                preview(stack, background, deconvolution)
+                preview(stack, backgroundConfiguration, deconvolution)
             }
         }
     }
@@ -582,6 +726,51 @@ private struct DeconvolutionIntegerParameterRow: View {
                     .frame(width: 68)
             }
             .fixedSize()
+        }
+        .controlSize(.small)
+    }
+}
+
+private struct BackgroundIntegerParameterRow: View {
+    let title: String
+    @Binding var value: Int
+    let range: ClosedRange<Int>
+    var step = 1
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(title)
+                .frame(width: 118, alignment: .leading)
+            Spacer()
+            Stepper(value: $value, in: range, step: step) {
+                TextField(title, value: $value, format: .number)
+                    .labelsHidden()
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 68)
+            }
+            .fixedSize()
+        }
+        .controlSize(.small)
+    }
+}
+
+private struct BackgroundNumberFieldRow: View {
+    let title: String
+    @Binding var value: Double
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(title)
+                .frame(width: 118, alignment: .leading)
+            Spacer()
+            TextField(
+                title,
+                value: $value,
+                format: .number.precision(.significantDigits(1...6))
+            )
+            .labelsHidden()
+            .multilineTextAlignment(.trailing)
+            .frame(width: 92)
         }
         .controlSize(.small)
     }
