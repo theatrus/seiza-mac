@@ -1540,7 +1540,7 @@ checksum = "7838c64e51a8b068a684c25cea2d5333b38d5945c236f89d836408596dea6f1e"
 
 [[package]]
 name = "seiza-mac-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "seiza-cabi",
 ]

@@ -28,7 +28,7 @@ does not discard your recent adjustments.
 Use **Edit > Copy Adjustments** (**Shift-Command-C**) and **Paste Adjustments**
 (**Shift-Command-V**) to move the complete committed recipe between non-adjacent
 frames or separate Seiza windows. The clipboard includes the stretch stack,
-background extraction, and deconvolution settings; pasting is one undoable edit.
+background correction, and deconvolution settings; pasting is one undoable edit.
 
 ![Seiza browsing 299 FITS frames with cached thumbnails and live stretch controls](images/seiza-directory-stretch.png)
 
@@ -87,7 +87,7 @@ same per-window history. Their enabled state stays synchronized as you edit or
 move between directory frames, and the menu owns the standard **Command-Z** and
 **Shift-Command-Z** shortcuts.
 
-![A two-stage Generalized Hyperbolic and Linear stretch with background extraction enabled](images/seiza-stretch-stack.png)
+![A two-stage Generalized Hyperbolic and Linear stretch with background correction enabled](images/seiza-stretch-stack.png)
 
 Automatic methods include Auto MTF and Percentile Asinh. Manual methods include
 Linear, Asinh, Midtones Transfer, and Generalized Hyperbolic Stretch (GHS). GHS
