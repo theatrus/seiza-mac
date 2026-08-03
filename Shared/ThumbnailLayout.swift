@@ -1,6 +1,30 @@
 import CoreGraphics
 
 enum ThumbnailLayout {
+    static func aspectFitRect(
+        imageSize: CGSize,
+        in bounds: CGRect
+    ) -> CGRect {
+        guard imageSize.width > 0, imageSize.height > 0 else {
+            return bounds
+        }
+
+        let scale = min(
+            bounds.width / imageSize.width,
+            bounds.height / imageSize.height
+        )
+        let drawingSize = CGSize(
+            width: imageSize.width * scale,
+            height: imageSize.height * scale
+        )
+        return CGRect(
+            x: bounds.midX - drawingSize.width / 2,
+            y: bounds.midY - drawingSize.height / 2,
+            width: drawingSize.width,
+            height: drawingSize.height
+        )
+    }
+
     static func contextSize(
         imageSize: CGSize,
         minimumSize: CGSize,
@@ -27,28 +51,18 @@ enum ThumbnailLayout {
     }
 
     static func draw(_ image: CGImage, in context: CGContext) {
-        let bounds = CGSize(
-            width: CGFloat(context.width),
-            height: CGFloat(context.height)
-        )
-        let imageSize = CGSize(width: image.width, height: image.height)
-        let scale = min(
-            bounds.width / imageSize.width,
-            bounds.height / imageSize.height
-        )
-        let drawingSize = CGSize(
-            width: imageSize.width * scale,
-            height: imageSize.height * scale
-        )
-        context.interpolationQuality = .high
-        context.draw(
-            image,
-            in: CGRect(
-                x: (bounds.width - drawingSize.width) / 2,
-                y: (bounds.height - drawingSize.height) / 2,
-                width: drawingSize.width,
-                height: drawingSize.height
+        let bounds = CGRect(
+            origin: .zero,
+            size: CGSize(
+                width: CGFloat(context.width),
+                height: CGFloat(context.height)
             )
         )
+        let drawingRect = aspectFitRect(
+            imageSize: CGSize(width: image.width, height: image.height),
+            in: bounds
+        )
+        context.interpolationQuality = .high
+        context.draw(image, in: drawingRect)
     }
 }

@@ -40,6 +40,7 @@
 		A00000000000000000000021 /* SeizaThumbnail.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = B00000000000000000000024 /* SeizaThumbnail.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A00000000000000000000022 /* ThumbnailLayout.swift in App Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000026 /* ThumbnailLayout.swift */; };
 		A00000000000000000000023 /* ThumbnailLayout.swift in Thumbnail Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000026 /* ThumbnailLayout.swift */; };
+		A00000000000000000000024 /* ThumbnailLayout.swift in Quick Look Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000026 /* ThumbnailLayout.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -228,7 +229,7 @@
 
 /* Begin PBXSourcesBuildPhase section */
 		F00000000000000000000005 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000001, A00000000000000000000002, A00000000000000000000003, A00000000000000000000013, A00000000000000000000018, A00000000000000000000019, A0000000000000000000001B, A0000000000000000000001C, A00000000000000000000004, A00000000000000000000005, A00000000000000000000006, A00000000000000000000007, A00000000000000000000022, A00000000000000000000011, A00000000000000000000014, ); runOnlyForDeploymentPostprocessing = 0; };
-		F00000000000000000000008 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000008, A00000000000000000000009, A0000000000000000000000A, ); runOnlyForDeploymentPostprocessing = 0; };
+		F00000000000000000000008 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000008, A00000000000000000000009, A0000000000000000000000A, A00000000000000000000024, ); runOnlyForDeploymentPostprocessing = 0; };
 		F0000000000000000000000A /* Test Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000015, ); runOnlyForDeploymentPostprocessing = 0; };
 		F0000000000000000000000E /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A0000000000000000000001D, A0000000000000000000001E, A00000000000000000000023, ); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */

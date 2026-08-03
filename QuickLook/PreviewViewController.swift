@@ -2,35 +2,47 @@ import AppKit
 import OSLog
 import QuickLookUI
 
+private final class AspectFitImageView: NSView {
+    var image: NSImage? {
+        didSet {
+            needsDisplay = true
+        }
+    }
+
+    override var isOpaque: Bool {
+        true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.black.setFill()
+        bounds.fill()
+
+        guard let image else { return }
+        let drawingRect = ThumbnailLayout.aspectFitRect(
+            imageSize: image.size,
+            in: bounds
+        )
+        image.draw(
+            in: drawingRect,
+            from: NSRect(origin: .zero, size: image.size),
+            operation: .copy,
+            fraction: 1,
+            respectFlipped: true,
+            hints: [.interpolation: NSImageInterpolation.high]
+        )
+    }
+}
+
 @MainActor
 final class PreviewViewController: NSViewController, QLPreviewingController {
     private static let renderQueue = DispatchQueue(
         label: "fyi.seiza.mac.quicklook-render",
         qos: .userInitiated
     )
-    private let imageView: NSImageView = {
-        let view = NSImageView()
-        view.imageAlignment = .alignCenter
-        view.imageFrameStyle = .none
-        view.imageScaling = .scaleProportionallyUpOrDown
-        view.translatesAutoresizingMaskIntoConstraints = false
-        return view
-    }()
+    private let imageView = AspectFitImageView()
 
     override func loadView() {
-        let container = NSView()
-        container.wantsLayer = true
-        container.layer?.backgroundColor = NSColor.black.cgColor
-        container.addSubview(imageView)
-
-        NSLayoutConstraint.activate([
-            imageView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            imageView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            imageView.topAnchor.constraint(equalTo: container.topAnchor),
-            imageView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
-
-        view = container
+        view = imageView
     }
 
     func preparePreviewOfFile(at url: URL) async throws {
