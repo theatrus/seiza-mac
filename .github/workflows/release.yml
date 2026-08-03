@@ -228,6 +228,7 @@ jobs:
             '- Finder now shows stretched FITS and XISF image thumbnails without opening Seiza.' \
             '- A new build number makes macOS register the thumbnail extension and astronomy file types on install.' \
             '- Retina thumbnails now fill the icon frame while keeping the image aspect ratio.' \
+            '- Finder and Space-bar Quick Look previews now keep the full image fitted to the window as it resizes.' \
             '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
             "- [Download the zipped application](${release_base}/Seiza-${version}-universal.zip)" \
