@@ -41,15 +41,15 @@ final class ThumbnailProvider: QLThumbnailProvider {
                     maxDimension: UInt32(maximumPixelDimension)
                 )
                 let image = rendered.image
-                let drawingRect = Self.aspectFitRect(
+                let contextSize = ThumbnailLayout.contextSize(
                     imageSize: CGSize(width: image.width, height: image.height),
-                    in: request.maximumSize
+                    minimumSize: request.minimumSize,
+                    maximumSize: request.maximumSize
                 )
                 let reply = QLThumbnailReply(
-                    contextSize: request.maximumSize,
+                    contextSize: contextSize,
                     drawing: { context in
-                        context.interpolationQuality = .high
-                        context.draw(image, in: drawingRect)
+                        ThumbnailLayout.draw(image, in: context)
                         return true
                     }
                 )
@@ -61,29 +61,5 @@ final class ThumbnailProvider: QLThumbnailProvider {
                 handler(nil, error)
             }
         }
-    }
-
-    private static func aspectFitRect(
-        imageSize: CGSize,
-        in bounds: CGSize
-    ) -> CGRect {
-        guard imageSize.width > 0, imageSize.height > 0 else {
-            return CGRect(origin: .zero, size: bounds)
-        }
-
-        let scale = min(
-            bounds.width / imageSize.width,
-            bounds.height / imageSize.height
-        )
-        let fittedSize = CGSize(
-            width: imageSize.width * scale,
-            height: imageSize.height * scale
-        )
-        return CGRect(
-            x: (bounds.width - fittedSize.width) / 2,
-            y: (bounds.height - fittedSize.height) / 2,
-            width: fittedSize.width,
-            height: fittedSize.height
-        )
     }
 }
