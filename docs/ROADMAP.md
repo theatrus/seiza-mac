@@ -5,8 +5,8 @@
 Seiza for Mac 0.4.0 completes the native viewer base. It opens FITS, XISF, and raster
 images; browses mixed folders; renders full-precision stretch stacks; removes
 background gradients; applies optional light deconvolution; solves on demand;
-draws catalog overlays; exports images and WCS data; and previews FITS and XISF
-files through Finder Quick Look. The app also has paired histograms, cached
+draws catalog overlays; exports images and WCS data; and renders FITS and XISF
+thumbnails and previews in Finder. The app also has paired histograms, cached
 thumbnails, full-size clipboard copy, 16-bit PNG and TIFF export, and managed
 catalog setup.
 
@@ -25,7 +25,8 @@ catalog setup.
 - catalog-colored, independently toggleable solve overlays for named stars,
   deep-sky catalogs and OpenNGC contours, transients, acquisition-time comets
   and asteroids, field stars, coordinate grid, labels, and field center
-- HIG-style astronomy document icon and FITS/XISF Quick Look preview extension
+- HIG-style astronomy document icon plus FITS/XISF Finder thumbnails and Quick
+  Look previews
 - source-resolution 8- or 16-bit PNG and TIFF export and 8-bit JPEG export,
   with optional visible solve overlays
 - signed and notarized universal Apple-silicon/Intel distribution with
@@ -44,7 +45,6 @@ catalog setup.
 
 ## Phase 3 — system integration (later)
 
-- `QLThumbnailProvider` Finder thumbnails
 - Spotlight metadata importer for selected FITS headers
 - Finder Quick Actions for solve and export
 

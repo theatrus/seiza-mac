@@ -405,6 +405,33 @@ final class DocumentRegistrationTests: XCTestCase {
             "SeizaQuickLook.PreviewViewController"
         )
     }
+
+    func testThumbnailExtensionDeclaresFinderAstronomyThumbnailSupport() throws {
+        let plugInsURL = try XCTUnwrap(Bundle.main.builtInPlugInsURL)
+        let extensionURL = plugInsURL.appendingPathComponent("SeizaThumbnail.appex")
+        let extensionBundle = try XCTUnwrap(Bundle(url: extensionURL))
+        let extensionInfo = try XCTUnwrap(
+            extensionBundle.infoDictionary?["NSExtension"] as? [String: Any]
+        )
+        let attributes = try XCTUnwrap(
+            extensionInfo["NSExtensionAttributes"] as? [String: Any]
+        )
+
+        XCTAssertEqual(extensionBundle.bundleIdentifier, "fyi.seiza.mac.thumbnail")
+        XCTAssertEqual(
+            extensionInfo["NSExtensionPointIdentifier"] as? String,
+            "com.apple.quicklook.thumbnail"
+        )
+        XCTAssertEqual(attributes["QLThumbnailMinimumDimension"] as? Int, 0)
+        XCTAssertEqual(
+            attributes["QLSupportedContentTypes"] as? [String],
+            ["fyi.seiza.fits", "fyi.seiza.xisf"]
+        )
+        XCTAssertEqual(
+            extensionInfo["NSExtensionPrincipalClass"] as? String,
+            "SeizaThumbnail.ThumbnailProvider"
+        )
+    }
 }
 
 final class DisplayHistogramTests: XCTestCase {

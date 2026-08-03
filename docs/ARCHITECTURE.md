@@ -5,23 +5,26 @@
 `Seiza.app` is a native SwiftUI/AppKit macOS application. It registers FITS,
 XISF, JPEG, PNG, and TIFF document types, owns document windows and settings, and
 performs expensive work off the main thread. A directory window may contain
-any mixture of those formats. `SeizaQuickLook.appex` is a small data-based
-Quick Look preview provider for FITS and XISF, which macOS does not decode itself. Both
-compile the same Swift wrapper and statically link the same Rust C ABI.
+any mixture of those formats. `SeizaQuickLook.appex` provides full Quick Look
+previews for FITS and XISF, which macOS does not decode itself.
+`SeizaThumbnail.appex` provides their Finder content thumbnails. All three
+targets compile the same Swift wrapper and statically link the same Rust C ABI.
 
 ```text
 Seiza.app ───────────────┐
                         ├─ Swift SeizaCore ─ C ABI ─ upstream seiza-cabi
-SeizaQuickLook.appex ────┘                                  ├─ seiza-fits
-                                                            ├─ seiza-xisf
+SeizaQuickLook.appex ────┤                                  ├─ seiza-fits
+SeizaThumbnail.appex ────┘                                  ├─ seiza-xisf
                                                             ├─ image
                                                             └─ seiza
 ```
 
-The Quick Look extension only decodes FITS or XISF, stretches it, and bounds the output
-to a 4096-pixel maximum dimension. It does not open catalogs or plate-solve.
-That keeps system previews responsive and isolates catalog access to the main
-app. macOS continues to provide its built-in previews for raster formats.
+The Quick Look extensions only decode FITS or XISF, stretch it, and bound the
+output. The preview extension uses a 4096-pixel maximum dimension. The
+thumbnail extension matches each Finder request and caps work at 4096 pixels.
+Neither opens catalogs nor plate-solves. This keeps system previews responsive
+and leaves catalog access in the main app. macOS keeps its built-in previews
+for raster formats.
 
 Document-window sessions are owned by the application delegate. Dropping a new
 image or directory on an existing viewer replaces that session in place,

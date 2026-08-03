@@ -197,7 +197,7 @@ full-resolution pass instead of copying the temporary bounded preview.
 
 ## Finder Quick Look
 
-After installing Seiza, select a `.fits`, `.fit`, `.fts`, or
-`.xisf` file in Finder and press Space. The bundled Quick Look extension makes
-a bounded stretched preview
-without launching the full viewer or opening solver catalogs.
+After installing Seiza, Finder shows stretched image thumbnails for `.fits`,
+`.fit`, `.fts`, and `.xisf` files. Select one and press Space for a larger
+preview. The bundled Quick Look extensions render both views without launching
+the full viewer or opening solver catalogs.

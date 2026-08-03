@@ -35,8 +35,8 @@ gh release view "v${version}" && exit 1 || true
 
 Create a release branch and update all version surfaces:
 
-- `MARKETING_VERSION` for the app and Quick Look extension;
-- `CURRENT_PROJECT_VERSION` for the app and extension;
+- `MARKETING_VERSION` for the app and both Quick Look extensions;
+- `CURRENT_PROJECT_VERSION` for the app and both extensions;
 - `Rust/seiza-mac-core/Cargo.toml` and `Cargo.lock`;
 - the published `seiza-cabi` version and lockfile checksum when the release
   adopts a newer Seiza core (the About panel reads its package version and
@@ -52,6 +52,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 plutil -lint App/Info.plist App/Seiza.entitlements
 plutil -lint QuickLook/Info.plist QuickLook/SeizaQuickLook.entitlements
+plutil -lint Thumbnail/Info.plist
 xcodebuild test \
   -project Seiza.xcodeproj \
   -scheme Seiza \
@@ -134,7 +135,7 @@ gh run list --workflow release.yml --limit 3
 gh run watch RUN_ID --exit-status
 ```
 
-The workflow signs Sparkle and the Quick Look extension before the containing
+The workflow signs Sparkle and both Quick Look extensions before the containing
 app, signs and notarizes both the app and DMG, staples their tickets, creates
 the signed appcast, performs Gatekeeper checks, creates post-stapling
 checksums, and publishes the GitHub release.

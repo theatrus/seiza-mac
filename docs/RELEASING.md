@@ -30,8 +30,8 @@ because GitHub does not allow authors to approve their own pull requests.
 Two independent Apple credentials are required:
 
 1. A **Developer ID Application** certificate and its private key, exported
-   together as a password-protected `.p12`. This signs the Quick Look extension,
-   application, and disk image.
+   together as a password-protected `.p12`. This signs both Quick Look
+   extensions, the app, and the disk image.
 2. A **team App Store Connect API key** (`AuthKey_<KEY_ID>.p8`) with Developer
    access or higher. Record its Key ID and Issuer ID when it is created; the
    private key can only be downloaded once. Do not use an individual API key:
@@ -53,18 +53,20 @@ Users and Access → Integrations → Team Keys** and downloads its `.p8` exactl
 once. The existing PSF Guard certificate and team API key may be reused when
 both applications are distributed by the same Apple Developer team.
 
-### Quick Look extension
+### Quick Look extensions
 
-The Quick Look extension does not need another Apple certificate, API key,
-secret, or installer certificate. It is the nested bundle
-`Seiza.app/Contents/PlugIns/SeizaQuickLook.appex` with bundle identifier
-`fyi.seiza.mac.quicklook`. CI signs it first with the same Developer ID
-Application identity and `QuickLook/SeizaQuickLook.entitlements`, then signs the
-containing `fyi.seiza.mac` application with `App/Seiza.entitlements`.
+The Quick Look extensions do not need another Apple certificate, API key,
+secret, or installer certificate. They are the nested bundles
+`Seiza.app/Contents/PlugIns/SeizaQuickLook.appex` and
+`Seiza.app/Contents/PlugIns/SeizaThumbnail.appex`, with bundle identifiers
+`fyi.seiza.mac.quicklook` and `fyi.seiza.mac.thumbnail`. CI signs each with the
+same Developer ID Application identity and the shared
+`QuickLook/SeizaQuickLook.entitlements` file, then signs the containing
+`fyi.seiza.mac` app with `App/Seiza.entitlements`.
 
 The current entitlements only enable the App Sandbox and user-selected
 read-only files, so this Developer ID distribution does not require a separate
-provisioning profile. If the extension later adopts a restricted capability
+provisioning profile. If either extension later adopts a restricted capability
 such as iCloud, push notifications, or an application group, add the matching
 App ID/capability and Developer ID provisioning profile at that time.
 
@@ -136,7 +138,8 @@ The workflow then:
 
 1. import the Developer ID certificate into an ephemeral keychain;
 2. sign Sparkle's XPC services, helper tools, and framework;
-3. sign the Quick Look extension and containing app with their entitlements;
+3. sign both Quick Look extensions and the containing app with their
+   entitlements;
 4. verify the nested signature with `codesign --verify --deep --strict`;
 5. submit the app with `xcrun notarytool`, then staple and Gatekeeper-assess it;
 6. build and Developer ID sign the DMG;
@@ -150,9 +153,9 @@ The `CI` workflow runs the complete unsigned validation suite for pull requests
 and `main`. Only a successful push to `main` in `theatrus/seiza-mac` can upload
 the validated unsigned application for the protected signing job. That job
 checks out trusted signing inputs at the same commit, validates the application
-and Quick Look bundle identifiers and universal binary, signs and notarizes the
-app and DMG, and uploads `Seiza-latest-main` with its SHA-256 checksum for 30
-days. It does not create or replace a GitHub Release.
+and Quick Look bundle identifiers and universal binaries, signs and notarizes
+the app and DMG, and uploads `Seiza-latest-main` with its SHA-256 checksum for
+30 days. It does not create or replace a GitHub Release.
 
 If the `signing` environment requires reviewers, approve that deployment to
 finish the latest-main artifact. A newer `main` push cancels the older in-flight
@@ -176,11 +179,11 @@ The authorization job refuses to continue unless:
 
 An unsigned macOS job tests and builds the exact reviewed SHA without secrets.
 A separate job enters the protected `signing` environment, treats that app as
-data, rejects symlinks or unexpected bundle identifiers, signs the Quick Look
-extension before its containing app using trusted inputs from `main`, notarizes
-and staples a DMG, and uploads it as a 14-day Actions artifact. A new push
-changes the head SHA, so the previous approval cannot authorize the new code;
-review and dispatch again.
+data, rejects symlinks or unexpected bundle identifiers, signs both Quick Look
+extensions before their containing app using trusted inputs from `main`,
+notarizes and staples a DMG, and uploads it as a 14-day Actions artifact. A new
+push changes the head SHA, so the previous approval cannot authorize the new
+code; review and dispatch again.
 
 ## Publishing
 

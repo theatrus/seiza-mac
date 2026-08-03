@@ -14,6 +14,7 @@ sparkle_path="$app_path/Contents/Frameworks/Sparkle.framework"
 
 test -d "$plugins_path"
 test -d "$quicklook_path"
+test -d "$thumbnail_path"
 test -d "$sparkle_path"
 
 while IFS= read -r symlink_path; do
@@ -52,11 +53,7 @@ file "$app_path/Contents/MacOS/Seiza" \
     | grep -q 'universal binary with 2 architectures'
 file "$quicklook_path/Contents/MacOS/SeizaQuickLook" \
     | grep -q 'universal binary with 2 architectures'
-
-if [ -e "$thumbnail_path" ]; then
-    test -d "$thumbnail_path"
-    test "$(plutil -extract CFBundleIdentifier raw "$thumbnail_path/Contents/Info.plist")" = "fyi.seiza.mac.thumbnail"
-    test "$(plutil -extract NSExtension.NSExtensionPointIdentifier raw "$thumbnail_path/Contents/Info.plist")" = "com.apple.quicklook.thumbnail"
-    file "$thumbnail_path/Contents/MacOS/SeizaThumbnail" \
-        | grep -q 'universal binary with 2 architectures'
-fi
+test "$(plutil -extract CFBundleIdentifier raw "$thumbnail_path/Contents/Info.plist")" = "fyi.seiza.mac.thumbnail"
+test "$(plutil -extract NSExtension.NSExtensionPointIdentifier raw "$thumbnail_path/Contents/Info.plist")" = "com.apple.quicklook.thumbnail"
+file "$thumbnail_path/Contents/MacOS/SeizaThumbnail" \
+    | grep -q 'universal binary with 2 architectures'
