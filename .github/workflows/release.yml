@@ -223,9 +223,11 @@ jobs:
             '' \
             'This universal application and disk image are Developer ID signed, notarized by Apple, and stapled for normal Gatekeeper installation.' \
             '' \
-            "### Fixed in ${version}" \
+            "### New in ${version}" \
             '' \
-            '- Catalog-aware background correction now handles repeated points in object outlines without rejecting every background sample.' \
+            '- Finder now shows stretched FITS and XISF image thumbnails without opening Seiza.' \
+            '- A new build number makes macOS register the thumbnail extension and astronomy file types on install.' \
+            '- Retina thumbnails now fill the icon frame while keeping the image aspect ratio.' \
             '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
             "- [Download the zipped application](${release_base}/Seiza-${version}-universal.zip)" \
