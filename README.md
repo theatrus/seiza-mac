@@ -49,7 +49,7 @@ Electron, web view, or local server.
 | WCS export | Writes a solved image's linear or SIP solution as a standard header-only FITS `.wcs` sidecar. |
 | Catalog setup | Downloads, checks, installs, and repairs solver catalogs in Settings with clear progress and cache reuse. |
 | Image export and copy | Exports full-size PNG, JPEG, or TIFF files with optional overlays. PNG and TIFF support 16 bits per channel. Full-size clipboard copy keeps visible overlays. |
-| Finder previews | Shows image thumbnails for FITS and XISF files and full Quick Look previews with the Space bar, without opening Seiza. |
+| Finder previews | Shows stretched FITS and XISF thumbnails in Finder. Space-bar Quick Look keeps the full image centered and fitted as the preview changes size, without opening Seiza. |
 | Finder file support | Registers `.fits`, `.fit`, `.fts`, and `.xisf` files with a Seiza document icon. |
 | Signed in-app updates | Checks for releases on demand or on a user-controlled schedule, then verifies and installs them with Sparkle. |
 
@@ -178,7 +178,9 @@ Satellite overlays are intentionally deferred.
 Seiza registers FITS and XISF files and two Quick Look extensions with macOS.
 Finder shows stretched image thumbnails in icon, list, column, and Gallery
 views. Select a `.fits`, `.fit`, `.fts`, or `.xisf` file and press Space for a
-larger preview without opening Seiza.
+larger preview without opening Seiza. Finder and Quick Look preserve the image
+aspect ratio; Quick Look redraws the whole frame to fit whenever its window
+changes size.
 
 See the [usage guide](docs/USING-SEIZA.md),
 [architecture](docs/ARCHITECTURE.md), and [roadmap](docs/ROADMAP.md).
