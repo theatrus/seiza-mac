@@ -435,6 +435,27 @@ final class DocumentRegistrationTests: XCTestCase {
 }
 
 final class ThumbnailLayoutTests: XCTestCase {
+    func testAspectFitRectTracksTheCurrentPreviewBounds() {
+        let wideImage = CGSize(width: 4_000, height: 2_000)
+        let landscapePreview = ThumbnailLayout.aspectFitRect(
+            imageSize: wideImage,
+            in: CGRect(x: 0, y: 0, width: 1_200, height: 900)
+        )
+        let portraitPreview = ThumbnailLayout.aspectFitRect(
+            imageSize: wideImage,
+            in: CGRect(x: 0, y: 0, width: 400, height: 800)
+        )
+
+        XCTAssertEqual(
+            landscapePreview,
+            CGRect(x: 0, y: 150, width: 1_200, height: 600)
+        )
+        XCTAssertEqual(
+            portraitPreview,
+            CGRect(x: 0, y: 300, width: 400, height: 200)
+        )
+    }
+
     func testContextSizePreservesImageAspectRatio() {
         let size = ThumbnailLayout.contextSize(
             imageSize: CGSize(width: 3_000, height: 2_000),
