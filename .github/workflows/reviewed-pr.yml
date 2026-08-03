@@ -96,6 +96,7 @@ jobs:
         run: |
           plutil -lint App/Info.plist App/Seiza.entitlements
           plutil -lint QuickLook/Info.plist QuickLook/SeizaQuickLook.entitlements
+          plutil -lint Thumbnail/Info.plist
           cargo fmt --all --check
           cargo clippy --workspace --all-targets --locked -- -D warnings
           cargo test --workspace --locked
@@ -198,7 +199,7 @@ jobs:
           test -n "$certificate_identity"
           printf 'CERT_ID=%s\n' "$certificate_identity" >> "$GITHUB_ENV"
 
-      - name: Sign Sparkle, Quick Look extension, and application
+      - name: Sign Sparkle, Quick Look extensions, and application
         run: |
           app_path="work/Seiza.app"
           trusted/scripts/sign-app.sh \

@@ -60,15 +60,13 @@ codesign \
     --entitlements "$extension_entitlements" \
     --sign "$signing_identity" \
     "$quicklook_path"
-if [ -d "$thumbnail_path" ]; then
-    codesign \
-        --force \
-        --options runtime \
-        --timestamp \
-        --entitlements "$extension_entitlements" \
-        --sign "$signing_identity" \
-        "$thumbnail_path"
-fi
+codesign \
+    --force \
+    --options runtime \
+    --timestamp \
+    --entitlements "$extension_entitlements" \
+    --sign "$signing_identity" \
+    "$thumbnail_path"
 codesign \
     --force \
     --options runtime \

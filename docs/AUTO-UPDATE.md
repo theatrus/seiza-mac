@@ -53,7 +53,7 @@ Sparkle adds nested code that must be signed before the outer app. The shared
 1. Sparkle's installer and downloader XPC services;
 2. Sparkle's `Autoupdate` tool and `Updater.app`;
 3. `Sparkle.framework`;
-4. the Quick Look extension; and
+4. the Quick Look preview and thumbnail extensions; and
 5. `Seiza.app`.
 
 The release, latest-main, and reviewed-PR signing jobs all use this script.
@@ -69,7 +69,7 @@ key.
 Sparkle compares `CFBundleVersion`, which comes from
 `CURRENT_PROJECT_VERSION`. Every release must raise that integer as well as
 setting `MARKETING_VERSION` to the version tag. The tag workflow checks the
-marketing version, keeps the app and Quick Look build numbers equal, and
+marketing version, keeps the app and both Quick Look build numbers equal, and
 rejects a build number that is not newer than the latest appcast.
 
 The first release that embeds Sparkle is a bootstrap release. Older builds

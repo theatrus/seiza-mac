@@ -405,6 +405,100 @@ final class DocumentRegistrationTests: XCTestCase {
             "SeizaQuickLook.PreviewViewController"
         )
     }
+
+    func testThumbnailExtensionDeclaresFinderAstronomyThumbnailSupport() throws {
+        let plugInsURL = try XCTUnwrap(Bundle.main.builtInPlugInsURL)
+        let extensionURL = plugInsURL.appendingPathComponent("SeizaThumbnail.appex")
+        let extensionBundle = try XCTUnwrap(Bundle(url: extensionURL))
+        let extensionInfo = try XCTUnwrap(
+            extensionBundle.infoDictionary?["NSExtension"] as? [String: Any]
+        )
+        let attributes = try XCTUnwrap(
+            extensionInfo["NSExtensionAttributes"] as? [String: Any]
+        )
+
+        XCTAssertEqual(extensionBundle.bundleIdentifier, "fyi.seiza.mac.thumbnail")
+        XCTAssertEqual(
+            extensionInfo["NSExtensionPointIdentifier"] as? String,
+            "com.apple.quicklook.thumbnail"
+        )
+        XCTAssertEqual(attributes["QLThumbnailMinimumDimension"] as? Int, 0)
+        XCTAssertEqual(
+            attributes["QLSupportedContentTypes"] as? [String],
+            ["fyi.seiza.fits", "fyi.seiza.xisf"]
+        )
+        XCTAssertEqual(
+            extensionInfo["NSExtensionPrincipalClass"] as? String,
+            "SeizaThumbnail.ThumbnailProvider"
+        )
+    }
+}
+
+final class ThumbnailLayoutTests: XCTestCase {
+    func testContextSizePreservesImageAspectRatio() {
+        let size = ThumbnailLayout.contextSize(
+            imageSize: CGSize(width: 3_000, height: 2_000),
+            minimumSize: CGSize(width: 64, height: 64),
+            maximumSize: CGSize(width: 512, height: 512)
+        )
+
+        XCTAssertEqual(size.width, 512, accuracy: 0.001)
+        XCTAssertEqual(size.height, 512 * 2 / 3, accuracy: 0.001)
+    }
+
+    func testContextSizeHonorsMinimumSize() {
+        let size = ThumbnailLayout.contextSize(
+            imageSize: CGSize(width: 4_000, height: 100),
+            minimumSize: CGSize(width: 128, height: 128),
+            maximumSize: CGSize(width: 512, height: 512)
+        )
+
+        XCTAssertEqual(size.width, 512, accuracy: 0.001)
+        XCTAssertEqual(size.height, 128, accuracy: 0.001)
+    }
+
+    func testDrawingFillsTheRetinaPixelContext() throws {
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+        let sourceContext = try XCTUnwrap(
+            CGContext(
+                data: nil,
+                width: 2,
+                height: 1,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: colorSpace,
+                bitmapInfo: bitmapInfo
+            )
+        )
+        sourceContext.setFillColor(
+            CGColor(red: 1, green: 0, blue: 0, alpha: 1)
+        )
+        sourceContext.fill(CGRect(x: 0, y: 0, width: 2, height: 1))
+        let image = try XCTUnwrap(sourceContext.makeImage())
+
+        let destinationContext = try XCTUnwrap(
+            CGContext(
+                data: nil,
+                width: 8,
+                height: 4,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: colorSpace,
+                bitmapInfo: bitmapInfo
+            )
+        )
+        ThumbnailLayout.draw(image, in: destinationContext)
+
+        let pixels = try XCTUnwrap(destinationContext.data)
+            .assumingMemoryBound(to: UInt8.self)
+        for y in 0..<destinationContext.height {
+            for x in 0..<destinationContext.width {
+                let alphaOffset = y * destinationContext.bytesPerRow + x * 4 + 3
+                XCTAssertEqual(pixels[alphaOffset], 255)
+            }
+        }
+    }
 }
 
 final class DisplayHistogramTests: XCTestCase {

@@ -60,8 +60,17 @@ jobs:
               -showBuildSettings \
               | awk '/CURRENT_PROJECT_VERSION/ { print $3; exit }'
           )"
+          thumbnail_build_version="$(
+            xcodebuild \
+              -project Seiza.xcodeproj \
+              -target SeizaThumbnail \
+              -configuration Release \
+              -showBuildSettings \
+              | awk '/CURRENT_PROJECT_VERSION/ { print $3; exit }'
+          )"
           [[ "$build_version" =~ ^[1-9][0-9]*$ ]]
           test "$build_version" = "$quicklook_build_version"
+          test "$build_version" = "$thumbnail_build_version"
 
           latest_appcast="$RUNNER_TEMP/latest-appcast.xml"
           if curl \
@@ -128,7 +137,7 @@ jobs:
           test -n "$certificate_identity"
           printf 'CERT_ID=%s\n' "$certificate_identity" >> "$GITHUB_ENV"
 
-      - name: Sign Sparkle, Quick Look extension, and application
+      - name: Sign Sparkle, Quick Look extensions, and application
         run: |
           app_path="DerivedData/Build/Products/Release/Seiza.app"
           scripts/sign-app.sh \
@@ -230,7 +239,7 @@ jobs:
             '- Explicit local plate solving, catalog overlays, and WCS export' \
             '- Managed catalog download, verification, installation, and repair in Settings' \
             '- 8- and 16-bit image export with optional overlays' \
-            '- Finder Quick Look previews for FITS and XISF' \
+            '- Finder content thumbnails and Quick Look previews for FITS and XISF' \
             '- Mixed-format folder browsing with cached thumbnails' \
             '- Signed in-app updates with user-controlled checks and installs' \
             '' \
