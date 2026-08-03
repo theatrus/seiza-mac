@@ -2,22 +2,24 @@
 set -euo pipefail
 
 if [ "$#" -ne 4 ]; then
-    echo "usage: $0 APP_PATH QUICK_LOOK_ENTITLEMENTS APP_ENTITLEMENTS SIGNING_IDENTITY" >&2
+    echo "usage: $0 APP_PATH QUICK_LOOK_EXTENSION_ENTITLEMENTS APP_ENTITLEMENTS SIGNING_IDENTITY" >&2
     exit 64
 fi
 
 app_path="$1"
-quicklook_entitlements="$2"
+extension_entitlements="$2"
 app_entitlements="$3"
 signing_identity="$4"
 quicklook_path="$app_path/Contents/PlugIns/SeizaQuickLook.appex"
+thumbnail_path="$app_path/Contents/PlugIns/SeizaThumbnail.appex"
 sparkle_path="$app_path/Contents/Frameworks/Sparkle.framework"
 sparkle_version_name="$(readlink "$sparkle_path/Versions/Current")"
 sparkle_version_path="$sparkle_path/Versions/$sparkle_version_name"
+script_directory="$(cd "$(dirname "$0")" && pwd)"
 
-test -d "$quicklook_path"
+"$script_directory/validate-unsigned-app.sh" "$app_path"
 test -d "$sparkle_version_path"
-test -f "$quicklook_entitlements"
+test -f "$extension_entitlements"
 test -f "$app_entitlements"
 
 codesign \
@@ -55,9 +57,18 @@ codesign \
     --force \
     --options runtime \
     --timestamp \
-    --entitlements "$quicklook_entitlements" \
+    --entitlements "$extension_entitlements" \
     --sign "$signing_identity" \
     "$quicklook_path"
+if [ -d "$thumbnail_path" ]; then
+    codesign \
+        --force \
+        --options runtime \
+        --timestamp \
+        --entitlements "$extension_entitlements" \
+        --sign "$signing_identity" \
+        "$thumbnail_path"
+fi
 codesign \
     --force \
     --options runtime \
