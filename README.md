@@ -9,6 +9,9 @@ you ask it to.
 
 [**Download Seiza for Mac 0.6.2**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.6.2-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
+**Also from Seiza:** [Core, CLI, and libraries](https://github.com/theatrus/seiza) ·
+[Seiza for Windows](https://github.com/theatrus/seiza-win)
+
 ## See what is in the frame
 
 Press Solve when you want sky context. Seiza draws catalog-colored object
