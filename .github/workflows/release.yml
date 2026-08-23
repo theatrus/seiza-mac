@@ -225,10 +225,11 @@ jobs:
             '' \
             "### New in ${version}" \
             '' \
-            '- Finder now shows stretched FITS and XISF image thumbnails without opening Seiza.' \
-            '- A new build number makes macOS register the thumbnail extension and astronomy file types on install.' \
-            '- Retina thumbnails now fill the icon frame while keeping the image aspect ratio.' \
-            '- Finder and Space-bar Quick Look previews now keep the full image fitted to the window as it resizes.' \
+            '- Live folder stacking watches a capture session, calibrates each light frame with matched darks and flats, and stacks it as it lands, with accepted and rejected counts and an SNR depth chart.' \
+            '- Live stacks checkpoint their exact native state, so you can pause, quit, or crash and resume the same accumulator.' \
+            '- Automatic calibration sets aside unreadable or mismatched frames with a warning instead of refusing the whole batch.' \
+            '- A new Analyze action measures stars in the linear source image without a solve: HFR, FWHM, background, and noise, with a 3-by-3 sensor-tilt grid, corner tilt and field-curvature verdicts, and parallelogram and triangle tilt diagrams.' \
+            '- The native core moves to Seiza 0.15.5.' \
             '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
             "- [Download the zipped application](${release_base}/Seiza-${version}-universal.zip)" \
@@ -237,6 +238,8 @@ jobs:
             '- Universal macOS 15+ application (Apple silicon and Intel)' \
             '- FITS, XISF, JPEG, PNG, and TIFF viewing' \
             '- Filter-aware FITS and XISF directory stacking with calibration, progress, cancellation, and 32-bit FITS output' \
+            '- Calibrated, resumable live folder stacking with SNR tracking' \
+            '- Measured-star and sensor-tilt analysis with tilt-grid and diagram overlays' \
             '- Live full-precision stretch stacks and light deconvolution' \
             '- Automatic, polynomial, and radial-basis gradient correction with additive and multiplicative modes' \
             '- Explicit local plate solving, catalog overlays, and WCS export' \
