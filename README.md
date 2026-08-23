@@ -49,6 +49,7 @@ Electron, web view, or local server.
 | Light deconvolution | Applies optional damped Richardson-Lucy restoration with controls for stellar FWHM, strength, noise, and ringing. |
 | Image inspection | Fits, zooms, and pans around the pointer; shows source and display histograms; and lets you search or copy image headers. |
 | Local plate solving | Blind-solves an image only when you press Solve. It sends no image or catalog data off the Mac. |
+| Star and tilt measurement | Measures stars in the linear source image without a solve or catalog: HFR, FWHM, SNR, background, and PSF eccentricity per star, with a 3-by-3 sensor grid, corner tilt and field-curvature verdicts, and a triangle sector analysis. Overlays show measured stars, the tilt grid, and off-by-default parallelogram and triangle tilt diagrams in the viewport and composited exports. Verdicts are withheld until every required region holds at least three stars. |
 | Sky overlays | Toggles named and field stars, each deep-sky catalog, OpenNGC outlines, transients, comets, asteroids, detections, the coordinate grid, and field center. |
 | WCS export | Writes a solved image's linear or SIP solution as a standard header-only FITS `.wcs` sidecar. |
 | Catalog setup | Downloads, checks, installs, and repairs solver catalogs in Settings with clear progress and cache reuse. |

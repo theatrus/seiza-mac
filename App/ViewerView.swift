@@ -582,6 +582,10 @@ private struct ImagePageView: View {
     @State private var showDetectedStars = false
     @State private var showFieldStars = false
     @State private var showFieldCenter = true
+    @State private var showMeasuredStars = false
+    @State private var showSensorTilt = false
+    @State private var showParallelogramTilt = false
+    @State private var showTriangleTilt = false
     @State private var hiddenDeepSkyCatalogs = Set<DeepSkyCatalog>()
     @State private var isExporting = false
     @State private var exportError: String?
@@ -634,6 +638,7 @@ private struct ImagePageView: View {
                 InspectorView(
                     model: model,
                     onSolve: startSolve,
+                    onAnalyze: startStarAnalysis,
                     onExportWCS: presentWCSExportPanel
                 )
                     .frame(minWidth: 260, idealWidth: 310, maxWidth: 390)
@@ -714,7 +719,32 @@ private struct ImagePageView: View {
                 .disabled(isSolving || model.image == nil)
                 .help(solveHelp)
 
+                Button {
+                    startStarAnalysis()
+                } label: {
+                    if isAnalyzingStars {
+                        ProgressView()
+                            .controlSize(.small)
+                            .accessibilityLabel("Analyzing stars")
+                    } else {
+                        Label("Analyze", systemImage: "star.circle")
+                    }
+                }
+                .disabled(isAnalyzingStars || model.image == nil || !supportsStarAnalysis)
+                .help("Measure stars, field tilt, and curvature in the source image")
+
                 Menu {
+                    Toggle("Measured Stars", isOn: $showMeasuredStars)
+                        .disabled(starAnalysisModel == nil)
+                    Toggle("Sensor Tilt Grid", isOn: $showSensorTilt)
+                        .disabled(starAnalysisModel == nil)
+                    Toggle("Parallelogram Tilt Diagram", isOn: $showParallelogramTilt)
+                        .disabled(starAnalysisModel?.tiltPerimeter == nil)
+                    Toggle("Triangle Tilt Diagram", isOn: $showTriangleTilt)
+                        .disabled(starAnalysisModel?.triangleTilt == nil)
+
+                    Divider()
+
                     Toggle(overlayLabel("Deep Sky", key: "deep_sky"), isOn: $showDeepSky)
                         .disabled(!overlayAvailable("deep_sky"))
                         .help(overlayHelp("deep_sky"))
@@ -776,7 +806,7 @@ private struct ImagePageView: View {
 
                     Divider()
 
-                    Toggle("Detected Stars", isOn: $showDetectedStars)
+                    Toggle("Plate-Solve Detections", isOn: $showDetectedStars)
 
                     Divider()
 
@@ -791,13 +821,19 @@ private struct ImagePageView: View {
                         showFieldStars = false
                         showCoordinateGrid = false
                         showFieldCenter = false
+                        showMeasuredStars = false
+                        showSensorTilt = false
+                        showParallelogramTilt = false
+                        showTriangleTilt = false
                     }
-                    .disabled(!hasVisibleOverlays)
+                    .disabled(!hasVisibleOverlays && !hasVisibleStarAnalysisOverlays)
                 } label: {
                     Label("Overlays", systemImage: "square.3.layers.3d")
                 }
-                .disabled(solvedSolution == nil)
-                .help(solvedSolution == nil ? "Solve the image to enable overlays" : "Solve Overlays")
+                .disabled(solvedSolution == nil && starAnalysisModel == nil)
+                .help(solvedSolution == nil && starAnalysisModel == nil
+                    ? "Solve or analyze the image to enable overlays"
+                    : "Image Overlays")
 
                 Button {
                     presentExportPanel()
@@ -842,6 +878,12 @@ private struct ImagePageView: View {
                 } label: {
                     Label("Inspector", systemImage: "sidebar.trailing")
                 }
+            }
+        }
+        .onChange(of: starAnalysisModel != nil) { _, hasAnalysis in
+            if hasAnalysis {
+                showMeasuredStars = true
+                showSensorTilt = true
             }
         }
         .onChange(of: model.url) { _, _ in
@@ -1011,8 +1053,8 @@ private struct ImagePageView: View {
             return
         }
         let copiedImage: CGImage
-        if let solution = solvedSolution, hasVisibleOverlays {
-            guard let composited = renderExportImage(image: image, solution: solution) else {
+        if overlayCompositingAvailable {
+            guard let composited = renderExportImage(image: image) else {
                 imageClipboardError = ImageExportError.couldNotComposite.localizedDescription
                 return
             }
@@ -1143,7 +1185,7 @@ private struct ImagePageView: View {
             return
         }
 
-        let overlaysAvailable = solvedSolution != nil && hasVisibleOverlays
+        let overlaysAvailable = overlayCompositingAvailable
         let options = ImageExportOptions(overlaysAvailable: overlaysAvailable)
         let panel = NSSavePanel()
         panel.title = "Export Image"
@@ -1176,13 +1218,12 @@ private struct ImagePageView: View {
             ? options.bitDepth
             : .eight
         let includesOverlays = options.includesVisibleOverlays && overlaysAvailable
-        let solution = includesOverlays ? solvedSolution : nil
         let exportedImage8: CGImage?
         let overlayImage: CGImage?
         switch bitDepth {
         case .eight:
-            if let solution {
-                guard let composited = renderExportImage(image: image, solution: solution) else {
+            if includesOverlays {
+                guard let composited = renderExportImage(image: image) else {
                     exportError = ImageExportError.couldNotComposite.localizedDescription
                     return
                 }
@@ -1193,10 +1234,9 @@ private struct ImagePageView: View {
             overlayImage = nil
         case .sixteen:
             exportedImage8 = nil
-            if let solution {
+            if includesOverlays {
                 guard let overlay = renderExportOverlay(
-                    sourceSize: CGSize(width: image.width, height: image.height),
-                    solution: solution
+                    sourceSize: CGSize(width: image.width, height: image.height)
                 ) else {
                     exportError = ImageExportError.couldNotComposite.localizedDescription
                     return
@@ -1270,14 +1310,18 @@ private struct ImagePageView: View {
 
     @MainActor
     private func renderExportImage(
-        image: CGImage,
-        solution: SolveResult
+        image: CGImage
     ) -> CGImage? {
         let size = CGSize(width: image.width, height: image.height)
         let renderer = ImageRenderer(
             content: ExportImageView(
                 image: image,
-                solution: solution,
+                solution: hasVisibleOverlays ? solvedSolution : nil,
+                starAnalysis: starAnalysisModel,
+                showsMeasuredStars: showMeasuredStars,
+                showsSensorTilt: showSensorTilt,
+                showsParallelogramTilt: showParallelogramTilt,
+                showsTriangleTilt: showTriangleTilt,
                 sourceSize: size,
                 showsDeepSky: showDeepSky,
                 showsNamedStars: showNamedStars,
@@ -1301,27 +1345,58 @@ private struct ImagePageView: View {
 
     @MainActor
     private func renderExportOverlay(
-        sourceSize: CGSize,
-        solution: SolveResult
+        sourceSize: CGSize
     ) -> CGImage? {
         let renderer = ImageRenderer(
-            content: SolveOverlayView(
-                solution: solution,
-                sourceSize: sourceSize,
-                showsDeepSky: showDeepSky,
-                showsNamedStars: showNamedStars,
-                showsTransients: showTransients,
-                showsHistoricalTransients: showHistoricalTransients,
-                showsMinorBodies: showMinorBodies,
-                showsCoordinateGrid: showCoordinateGrid,
-                showsCatalogOutlines: showCatalogOutlines,
-                showsObjectLabels: showObjectLabels,
-                showsDetectedStars: showDetectedStars,
-                showsFieldStars: showFieldStars,
-                showsFieldCenter: showFieldCenter,
-                hiddenDeepSkyCatalogs: hiddenDeepSkyCatalogs,
-                rendersAsynchronously: false
-            )
+            content: ZStack(alignment: .topLeading) {
+                if let analysis = starAnalysisModel, showSensorTilt {
+                    StarAnalysisOverlayView(
+                        model: analysis,
+                        sourceSize: sourceSize,
+                        layer: .tiltGrid,
+                        showsMeasuredStars: showMeasuredStars,
+                        showsSensorTilt: showSensorTilt,
+                        showsParallelogramTilt: showParallelogramTilt,
+                        showsTriangleTilt: showTriangleTilt,
+                        rendersAsynchronously: false
+                    )
+                    .frame(width: sourceSize.width, height: sourceSize.height)
+                }
+                if let solution = solvedSolution, hasVisibleOverlays {
+                    SolveOverlayView(
+                        solution: solution,
+                        sourceSize: sourceSize,
+                        showsDeepSky: showDeepSky,
+                        showsNamedStars: showNamedStars,
+                        showsTransients: showTransients,
+                        showsHistoricalTransients: showHistoricalTransients,
+                        showsMinorBodies: showMinorBodies,
+                        showsCoordinateGrid: showCoordinateGrid,
+                        showsCatalogOutlines: showCatalogOutlines,
+                        showsObjectLabels: showObjectLabels,
+                        showsDetectedStars: showDetectedStars,
+                        showsFieldStars: showFieldStars,
+                        showsFieldCenter: showFieldCenter,
+                        hiddenDeepSkyCatalogs: hiddenDeepSkyCatalogs,
+                        rendersAsynchronously: false
+                    )
+                    .frame(width: sourceSize.width, height: sourceSize.height)
+                }
+                if let analysis = starAnalysisModel, hasVisibleStarAnalysisOverlays {
+                    StarAnalysisOverlayView(
+                        model: analysis,
+                        sourceSize: sourceSize,
+                        layer: .markers,
+                        showsMeasuredStars: showMeasuredStars,
+                        showsSensorTilt: showSensorTilt,
+                        showsParallelogramTilt: showParallelogramTilt,
+                        showsTriangleTilt: showTriangleTilt,
+                        rendersAsynchronously: false
+                    )
+                    .frame(width: sourceSize.width, height: sourceSize.height)
+                }
+            }
+            .frame(width: sourceSize.width, height: sourceSize.height)
         )
         renderer.scale = 1
         renderer.isOpaque = false
@@ -1388,6 +1463,21 @@ private struct ImagePageView: View {
                             .frame(width: metrics.imageSize.width, height: metrics.imageSize.height)
                             .clipped(antialiased: false)
 
+                        if let analysis = starAnalysisModel, showSensorTilt {
+                            StarAnalysisOverlayView(
+                                model: analysis,
+                                sourceSize: sourceSize(for: image),
+                                layer: .tiltGrid,
+                                showsMeasuredStars: showMeasuredStars,
+                                showsSensorTilt: showSensorTilt,
+                                showsParallelogramTilt: showParallelogramTilt,
+                                showsTriangleTilt: showTriangleTilt
+                            )
+                            .frame(width: metrics.imageSize.width, height: metrics.imageSize.height)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                        }
+
                         if let solution = solvedSolution, hasVisibleOverlays {
                             SolveOverlayView(
                                 solution: solution,
@@ -1404,6 +1494,22 @@ private struct ImagePageView: View {
                                 showsFieldStars: showFieldStars,
                                 showsFieldCenter: showFieldCenter,
                                 hiddenDeepSkyCatalogs: hiddenDeepSkyCatalogs
+                            )
+                            .frame(width: metrics.imageSize.width, height: metrics.imageSize.height)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                        }
+
+                        if let analysis = starAnalysisModel,
+                            showMeasuredStars || showParallelogramTilt || showTriangleTilt {
+                            StarAnalysisOverlayView(
+                                model: analysis,
+                                sourceSize: sourceSize(for: image),
+                                layer: .markers,
+                                showsMeasuredStars: showMeasuredStars,
+                                showsSensorTilt: showSensorTilt,
+                                showsParallelogramTilt: showParallelogramTilt,
+                                showsTriangleTilt: showTriangleTilt
                             )
                             .frame(width: metrics.imageSize.width, height: metrics.imageSize.height)
                             .allowsHitTesting(false)
@@ -1788,6 +1894,41 @@ private struct ImagePageView: View {
         return nil
     }
 
+    private var isAnalyzingStars: Bool {
+        if case .analyzing = model.starAnalysisState { return true }
+        return false
+    }
+
+    private var starAnalysisModel: StarAnalysisOverlayModel? {
+        model.starAnalysisState.overlayModel
+    }
+
+    private var supportsStarAnalysis: Bool {
+        ImageCollection.isStackableImage(model.url)
+    }
+
+    /// Visible star-analysis layers, respecting per-diagram availability.
+    private var hasVisibleStarAnalysisOverlays: Bool {
+        guard let analysis = starAnalysisModel else { return false }
+        return showMeasuredStars || showSensorTilt
+            || (showParallelogramTilt && analysis.tiltPerimeter != nil)
+            || (showTriangleTilt && analysis.triangleTilt != nil)
+    }
+
+    private var overlayCompositingAvailable: Bool {
+        (solvedSolution != nil && hasVisibleOverlays)
+            || hasVisibleStarAnalysisOverlays
+    }
+
+    private func startStarAnalysis() {
+        guard model.image != nil, !isAnalyzingStars, supportsStarAnalysis else {
+            NSSound.beep()
+            return
+        }
+        showInspector = true
+        model.analyzeStars()
+    }
+
     private func overlayAvailable(_ key: String) -> Bool {
         solvedSolution?.overlayAvailability?[key] ?? (solvedSolution != nil)
     }
@@ -1965,7 +2106,12 @@ private struct ViewportInputMonitor: NSViewRepresentable {
 
 private struct ExportImageView: View {
     let image: CGImage
-    let solution: SolveResult
+    let solution: SolveResult?
+    let starAnalysis: StarAnalysisOverlayModel?
+    let showsMeasuredStars: Bool
+    let showsSensorTilt: Bool
+    let showsParallelogramTilt: Bool
+    let showsTriangleTilt: Bool
     let sourceSize: CGSize
     let showsDeepSky: Bool
     let showsNamedStars: Bool
@@ -1987,23 +2133,54 @@ private struct ExportImageView: View {
                 .resizable()
                 .frame(width: sourceSize.width, height: sourceSize.height)
 
-            SolveOverlayView(
-                solution: solution,
-                sourceSize: sourceSize,
-                showsDeepSky: showsDeepSky,
-                showsNamedStars: showsNamedStars,
-                showsTransients: showsTransients,
-                showsHistoricalTransients: showsHistoricalTransients,
-                showsMinorBodies: showsMinorBodies,
-                showsCoordinateGrid: showsCoordinateGrid,
-                showsCatalogOutlines: showsCatalogOutlines,
-                showsObjectLabels: showsObjectLabels,
-                showsDetectedStars: showsDetectedStars,
-                showsFieldStars: showsFieldStars,
-                showsFieldCenter: showsFieldCenter,
-                hiddenDeepSkyCatalogs: hiddenDeepSkyCatalogs,
-                rendersAsynchronously: false
-            )
+            if let starAnalysis, showsSensorTilt {
+                StarAnalysisOverlayView(
+                    model: starAnalysis,
+                    sourceSize: sourceSize,
+                    layer: .tiltGrid,
+                    showsMeasuredStars: showsMeasuredStars,
+                    showsSensorTilt: showsSensorTilt,
+                    showsParallelogramTilt: showsParallelogramTilt,
+                    showsTriangleTilt: showsTriangleTilt,
+                    rendersAsynchronously: false
+                )
+                .frame(width: sourceSize.width, height: sourceSize.height)
+            }
+
+            if let solution {
+                SolveOverlayView(
+                    solution: solution,
+                    sourceSize: sourceSize,
+                    showsDeepSky: showsDeepSky,
+                    showsNamedStars: showsNamedStars,
+                    showsTransients: showsTransients,
+                    showsHistoricalTransients: showsHistoricalTransients,
+                    showsMinorBodies: showsMinorBodies,
+                    showsCoordinateGrid: showsCoordinateGrid,
+                    showsCatalogOutlines: showsCatalogOutlines,
+                    showsObjectLabels: showsObjectLabels,
+                    showsDetectedStars: showsDetectedStars,
+                    showsFieldStars: showsFieldStars,
+                    showsFieldCenter: showsFieldCenter,
+                    hiddenDeepSkyCatalogs: hiddenDeepSkyCatalogs,
+                    rendersAsynchronously: false
+                )
+            }
+
+            if let starAnalysis,
+                showsMeasuredStars || showsParallelogramTilt || showsTriangleTilt {
+                StarAnalysisOverlayView(
+                    model: starAnalysis,
+                    sourceSize: sourceSize,
+                    layer: .markers,
+                    showsMeasuredStars: showsMeasuredStars,
+                    showsSensorTilt: showsSensorTilt,
+                    showsParallelogramTilt: showsParallelogramTilt,
+                    showsTriangleTilt: showsTriangleTilt,
+                    rendersAsynchronously: false
+                )
+                .frame(width: sourceSize.width, height: sourceSize.height)
+            }
         }
         .frame(width: sourceSize.width, height: sourceSize.height)
     }
@@ -2991,6 +3168,7 @@ enum ImageHeaderTools {
 private struct InspectorView: View {
     @ObservedObject var model: ImageDocumentModel
     let onSolve: () -> Void
+    let onAnalyze: () -> Void
     let onExportWCS: (SolveResult) -> Void
     @State private var headerQuery = ""
 
@@ -3087,6 +3265,10 @@ private struct InspectorView: View {
                 }
             }
 
+            Section("Stars and sensor tilt") {
+                starAnalysisDetails
+            }
+
             Section("Plate solution") {
                 solveDetails
             }
@@ -3133,6 +3315,204 @@ private struct InspectorView: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(ImageHeaderTools.copyText(for: entries), forType: .string)
+    }
+
+    @ViewBuilder
+    private var starAnalysisDetails: some View {
+        switch model.starAnalysisState {
+        case .idle:
+            if ImageCollection.isStackableImage(model.url) {
+                Text("Measure stars, field tilt, and curvature in the linear "
+                    + "source image. No plate solve or catalog is needed.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Button(action: onAnalyze) {
+                    Label("Analyze Stars", systemImage: "star.circle")
+                }
+            } else {
+                Text("Star measurement is available for FITS and XISF source images.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        case .analyzing:
+            ProgressView("Measuring source stars…")
+        case .failed(let message):
+            Text(message)
+                .font(.callout)
+                .foregroundStyle(.red)
+                .textSelection(.enabled)
+            Button(action: onAnalyze) {
+                Label("Try Again", systemImage: "star.circle")
+            }
+        case .analyzed(let analysis):
+            let result = analysis.result
+            Text(result.stars.isEmpty
+                ? "No measurable stars were found."
+                : "Measured \(result.stars.count) stars in the linear source image.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            LabeledContent("Stars", value: "\(result.stars.count)")
+            if !result.stars.isEmpty {
+                LabeledContent(
+                    "Average HFR",
+                    value: String(format: "%.2f px", result.averageHfr))
+                LabeledContent(
+                    "Average FWHM",
+                    value: String(format: "%.2f px", result.averageFwhm))
+            }
+            LabeledContent(
+                "Background", value: String(format: "%.2f", result.backgroundMean))
+            LabeledContent(
+                "Noise σ", value: String(format: "%.2f", result.noiseSigma))
+            LabeledContent(
+                "Corner tilt",
+                value: result.tilt.tiltPercent.map {
+                    String(format: "%.1f%%", $0)
+                } ?? "Needs stars in all four corners")
+            LabeledContent(
+                "Field curvature",
+                value: result.tilt.curvaturePercent.map {
+                    String(format: "%+.1f%%", $0)
+                } ?? "Needs four corners and center")
+            if let confidence = Self.starAnalysisConfidence(analysis) {
+                LabeledContent("Confidence", value: confidence)
+            }
+            if let corners = Self.spreadCorners(analysis) {
+                LabeledContent("Sharpest corner", value: corners.sharpest)
+                LabeledContent("Softest corner", value: corners.softest)
+            }
+            starTiltCellGrid(analysis)
+            Text("Compare several frames: seeing, guiding, and wind can imitate "
+                + "optical tilt.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            Button(action: onAnalyze) {
+                Label("Analyze Again", systemImage: "star.circle")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func starTiltCellGrid(_ analysis: StarAnalysisOverlayModel) -> some View {
+        let sharpest = analysis.sharpestReliableHfr
+        Grid(horizontalSpacing: 4, verticalSpacing: 4) {
+            ForEach(0..<3, id: \.self) { row in
+                GridRow {
+                    ForEach(0..<3, id: \.self) { col in
+                        starTiltCellTile(
+                            analysis.cellGrid[row * 3 + col],
+                            row: row, col: col,
+                            sharpestReliableHfr: sharpest)
+                    }
+                }
+            }
+        }
+    }
+
+    private func starTiltCellTile(
+        _ cell: StarAnalysisCell?,
+        row: Int,
+        col: Int,
+        sharpestReliableHfr: Double?
+    ) -> some View {
+        let kind = StarAnalysisOverlayGeometry.classifyCell(
+            cell, sharpestReliableHfr: sharpestReliableHfr)
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(Self.cellPositionName(row: row, col: col))
+                .font(.caption.weight(.semibold))
+            Text(cell?.medianHfr.map { String(format: "HFR %.2f px", $0) }
+                ?? "No stars")
+                .font(.caption.monospacedDigit())
+            Text(Self.cellDetailText(cell))
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(6)
+        .background(RoundedRectangle(cornerRadius: 5).fill(Self.cellTileColor(kind)))
+        .overlay(RoundedRectangle(cornerRadius: 5)
+            .strokeBorder(Color.secondary.opacity(0.25), lineWidth: 1))
+    }
+
+    static func cellPositionName(row: Int, col: Int) -> String {
+        switch (row, col) {
+        case (0, 0): "Top left"
+        case (0, 1): "Top"
+        case (0, 2): "Top right"
+        case (1, 0): "Left"
+        case (1, 1): "Center"
+        case (1, 2): "Right"
+        case (2, 0): "Bottom left"
+        case (2, 1): "Bottom"
+        default: "Bottom right"
+        }
+    }
+
+    static func cellDetailText(_ cell: StarAnalysisCell?) -> String {
+        guard let cell else { return "No stars" }
+        var text = "\(cell.starCount) star"
+        if cell.starCount != 1 { text += "s" }
+        if let eccentricity = cell.medianEccentricity {
+            text += String(format: " · e %.2f", eccentricity)
+        }
+        if !StarAnalysisOverlayGeometry.isReliableCell(cell), cell.starCount > 0 {
+            text += " · low sample"
+        }
+        return text
+    }
+
+    private static func cellTileColor(_ kind: StarAnalysisCellVisualKind) -> Color {
+        switch kind {
+        case .good: Color(red: 0.141, green: 0.690, blue: 0.357).opacity(0.212)
+        case .warning: Color(red: 0.925, green: 0.663, blue: 0.176).opacity(0.243)
+        case .poor: Color(red: 0.878, green: 0.282, blue: 0.282).opacity(0.243)
+        case .neutral: Color(red: 0.5, green: 0.5, blue: 0.5).opacity(0.165)
+        }
+    }
+
+    /// Confidence wording: a verdict computed from a sparse required region
+    /// is flagged low, matching the geometry's reliability rules.
+    static func starAnalysisConfidence(
+        _ analysis: StarAnalysisOverlayModel
+    ) -> String? {
+        let result = analysis.result
+        let corners = StarAnalysisCornerPosition.allCases.map { position in
+            analysis.cellGrid[position.cell.row * 3 + position.cell.col]
+        }
+        let hasReliableCorners = corners.count == 4
+            && corners.allSatisfy { StarAnalysisOverlayGeometry.isReliableCell($0) }
+        let hasReliableCenter =
+            StarAnalysisOverlayGeometry.isReliableCell(analysis.cellGrid[4])
+        let lowConfidence =
+            (result.tilt.tiltPercent != nil && !hasReliableCorners)
+            || (result.tilt.curvaturePercent != nil
+                && (!hasReliableCorners || !hasReliableCenter))
+        if lowConfidence {
+            return "Low — fewer than 3 stars in a required corner or center"
+        }
+        if result.tilt.tiltPercent != nil || result.tilt.curvaturePercent != nil {
+            return "At least 3 stars in every required region"
+        }
+        return nil
+    }
+
+    /// Best/worst corner rows appear only when the corner spread means
+    /// something.
+    static func spreadCorners(
+        _ analysis: StarAnalysisOverlayModel
+    ) -> (sharpest: String, softest: String)? {
+        let result = analysis.result
+        let cornerCells = StarAnalysisCornerPosition.allCases.map { position in
+            analysis.cellGrid[position.cell.row * 3 + position.cell.col]
+        }
+        guard cornerCells.allSatisfy({
+            StarAnalysisOverlayGeometry.isReliableCell($0)
+        }),
+            StarAnalysisOverlayGeometry.hasMeaningfulReliableSpread(cornerCells),
+            let best = result.tilt.bestCorner,
+            let worst = result.tilt.worstCorner
+        else { return nil }
+        return (best.displayName, worst.displayName)
     }
 
     @ViewBuilder
