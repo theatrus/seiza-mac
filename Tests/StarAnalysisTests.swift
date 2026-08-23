@@ -106,13 +106,14 @@ final class StarAnalysisOptionsTests: XCTestCase {
         XCTAssertEqual(options.detectionBinning, 2)
         XCTAssertEqual(options.sensitivity, 30)
         XCTAssertEqual(options.triangleAngleDegrees, 0)
+        XCTAssertEqual(options.targetStarCount, 200)
         XCTAssertNil(options.preset)
         XCTAssertNil(options.focalLengthMm)
         XCTAssertNil(options.pixelSizeUm)
         XCTAssertEqual(
             try options.jsonString(),
             #"{"psfType":"moffat4","detectionBinning":2,"sensitivity":30,"#
-                + #""triangleAngleDegrees":0}"#)
+                + #""triangleAngleDegrees":0,"targetStarCount":200}"#)
     }
 
     func testValidationRejectsAmbiguousAndOutOfRangeOptions() {
@@ -153,6 +154,10 @@ final class StarAnalysisOptionsTests: XCTestCase {
         var badAngle = StarAnalysisOptions()
         badAngle.triangleAngleDegrees = .nan
         XCTAssertEqual(message(badAngle), "The triangle angle must be finite.")
+        var badTarget = StarAnalysisOptions()
+        badTarget.targetStarCount = 0
+        XCTAssertEqual(
+            message(badTarget), "The target star count must be positive.")
     }
 
     func testUnnormalizedTriangleAngleIsPassedThrough() throws {
