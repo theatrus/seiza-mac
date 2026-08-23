@@ -459,7 +459,8 @@ enum ImageStackEngine {
             }
         }
         guard liveStacker != nil else {
-            throw ImageStackError.core(takeCABIError(&errorPointer))
+            throw ImageStackError.core(CalibrationService.takeOwnedError(
+                &errorPointer, fallback: "Seiza returned an invalid stacking response."))
         }
         defer {
             if let liveStacker {
@@ -508,7 +509,9 @@ enum ImageStackEngine {
                 dispositions.append(ImageStackDisposition(
                     source: url.path,
                     accepted: false,
-                    reason: takeCABIError(&errorPointer)
+                    reason: CalibrationService.takeOwnedError(
+                        &errorPointer,
+                        fallback: "Seiza returned an invalid stacking response.")
                 ))
             }
 
@@ -556,7 +559,8 @@ enum ImageStackEngine {
         errorPointer = nil
         let snapshot = seiza_live_stacker_finish(&liveStacker, &errorPointer)
         guard let snapshot else {
-            throw ImageStackError.core(takeCABIError(&errorPointer))
+            throw ImageStackError.core(CalibrationService.takeOwnedError(
+                &errorPointer, fallback: "Seiza returned an invalid stacking response."))
         }
         defer { seiza_stack_snapshot_free(snapshot) }
 
@@ -606,13 +610,14 @@ enum ImageStackEngine {
         }
         guard !samples.contains(where: { Int($0.frames) == accepted }) else { return }
 
-        var sample = SeizaSnrSample()
+        var nativeSample = SeizaSnrSample()
         var errorPointer: UnsafeMutablePointer<CChar>?
         let result = seiza_live_stacker_measure_depth(
-            liveStacker, &sample, &errorPointer)
+            liveStacker, &nativeSample, &errorPointer)
         switch result {
         case 1:
             CalibrationService.discardError(&errorPointer)
+            let sample = StackSnrSample(native: nativeSample)
             guard Int(sample.frames) == accepted else { return }
             samples.append(StackSnrMeasurement(
                 frames: sample.frames,
@@ -630,23 +635,6 @@ enum ImageStackEngine {
         }
     }
 
-    private static func withOptionalCString<Result>(
-        _ value: String?,
-        body: (UnsafePointer<CChar>?) -> Result
-    ) -> Result {
-        guard let value else { return body(nil) }
-        return value.withCString(body)
-    }
-
-    private static func takeCABIError(
-        _ pointer: inout UnsafeMutablePointer<CChar>?
-    ) -> String {
-        guard let value = pointer else { return "Seiza returned an invalid stacking response." }
-        pointer = nil
-        let message = String(cString: value)
-        seiza_string_free(value)
-        return message
-    }
 }
 
 enum ImageStackBatchEngine {
@@ -1435,7 +1423,9 @@ struct ImageStackWorkflowView: View {
                 guard let path = iterator.next() else { return }
                 inFlight += 1
                 group.addTask {
-                    try CalibrationService.probe(path: path)
+                    try await runBlocking {
+                        try CalibrationService.probe(path: path)
+                    }
                 }
             }
             for _ in 0..<4 {

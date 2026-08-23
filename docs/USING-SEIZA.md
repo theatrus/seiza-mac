@@ -59,10 +59,10 @@ For calibration, either pick integrated bias, dark, and flat masters, or set
 the source to **Build from calibration frames** and choose a library folder of
 raw bias, dark, dark-flat, and flat frames. Seiza inspects each frame's
 headers, matches camera and optics metadata against every selected light, and
-builds masters in dependency order into a cache it reuses on later runs. A flat
-is withheld unless a bias, or an uncalibrated dark-flat with a matching known
-exposure, proves a safe pedestal-removal path. If preparation raises warnings,
-Seiza shows them before any light frame is processed so you can cancel.
+builds masters in dependency order into a cache it reuses on later runs. Seiza
+withholds a flat unless a bias, or an uncalibrated dark-flat with a matching
+known exposure, proves a safe pedestal-removal path. If preparation raises warnings,
+Seiza shows them before it processes any light frame so you can cancel.
 
 For a filter split, enter a base name, click **Choose Output and Stack**, and
 choose an output folder. Seiza adds suffixes such as `-Ha` and `-OIII`. Without
@@ -76,13 +76,13 @@ against the square-root ideal, with a depth chart for a single stack.
 
 ## Stack a folder live
 
-Choose **File > Live Stack** to watch a capture folder while an imaging session
-is in progress. Pick the folder where new exposures appear, choose stacking and
+Choose **File > Live Stack** to watch a capture folder while an imaging
+session runs. Pick the folder where new exposures appear, choose stacking and
 calibration settings, and click **Start Live Stack**. Seiza waits until each
 FITS or XISF file has stopped changing, checks that it is a raw light frame,
 and registers it into the stack. The first compatible light locks the image
-dimensions and filter for the window; frames for other filters are ignored, so
-use one capture folder per simultaneous filter stack.
+dimensions and filter for the window; Seiza ignores frames for other filters,
+so use one capture folder per simultaneous filter stack.
 
 The live window shows a bounded autostretched preview, accepted, rejected, and
 skipped counts, the active calibration, checkpoint health, and a depth chart of

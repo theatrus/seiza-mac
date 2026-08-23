@@ -10,6 +10,41 @@ struct StackSnrSample: Equatable, Sendable {
     var snr: Double
     var channelNoise: [Double]
 
+    /// Copies a native reading. Valid only when the measuring ABI call
+    /// returned exactly 1.
+    init(native: SeizaSnrSample) {
+        frames = native.frames
+        noise = native.noise
+        background = native.background
+        signal = native.signal
+        snr = native.snr
+        let channelCount = min(Int(native.channel_count), Int(SEIZA_SNR_MAX_CHANNELS))
+        var channels: [Double] = []
+        withUnsafeBytes(of: native.channel_noise) { raw in
+            let values = raw.bindMemory(to: Double.self)
+            for index in 0..<channelCount {
+                channels.append(values[index])
+            }
+        }
+        channelNoise = channels
+    }
+
+    init(
+        frames: UInt32,
+        noise: Double,
+        background: Double,
+        signal: Double,
+        snr: Double,
+        channelNoise: [Double]
+    ) {
+        self.frames = frames
+        self.noise = noise
+        self.background = background
+        self.signal = signal
+        self.snr = snr
+        self.channelNoise = channelNoise
+    }
+
     /// The per-reading `snr` flatters shallow stacks; depth comparisons
     /// divide one common signal by each depth's noise instead.
     func relativeSnr(commonSignal: Double) -> Double {

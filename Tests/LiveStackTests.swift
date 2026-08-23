@@ -661,6 +661,26 @@ final class StackFileCandidateTrackerTests: XCTestCase {
         XCTAssertTrue(due(tracker, at: 60).isEmpty)
     }
 
+    func testCandidatesKeepTheOriginalPathCase() {
+        let tracker = StackFileCandidateTracker(configuration: configuration)
+        observe(tracker, path: "/Captures/M31_Ha_001.FITS", at: 0)
+        observe(tracker, path: "/Captures/M31_Ha_001.FITS", at: 5)
+        let candidates = due(tracker, at: 11)
+        XCTAssertEqual(candidates.map(\.path), ["/Captures/M31_Ha_001.FITS"])
+    }
+
+    func testClearingPendingDispositionsReoffersStrandedCandidates() {
+        let tracker = StackFileCandidateTracker(configuration: configuration)
+        observe(tracker, at: 0)
+        observe(tracker, at: 5)
+        XCTAssertEqual(due(tracker, at: 11).count, 1)
+        // The offer was yielded but never completed (a cancelled ingestion
+        // loop); without a reset the file would be skipped forever.
+        XCTAssertTrue(due(tracker, at: 12).isEmpty)
+        tracker.clearPendingDispositions()
+        XCTAssertEqual(due(tracker, at: 13).count, 1)
+    }
+
     func testRetryNowReopensOnlyUnreadableTerminals() {
         let tracker = StackFileCandidateTracker(configuration: configuration)
         observe(tracker, at: 0)

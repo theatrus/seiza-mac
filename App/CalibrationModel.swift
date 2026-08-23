@@ -1,4 +1,22 @@
+import CryptoKit
 import Foundation
+
+/// Digest presentation shared by every subsystem that names files or
+/// directories after SHA-256 content.
+enum SeizaDigest {
+    static func hex(_ digest: SHA256Digest, byteCount: Int? = nil) -> String {
+        let bytes = byteCount.map { Array(digest.prefix($0)) } ?? Array(digest)
+        return bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The on-disk identity of a path: case-folded normalized path, hashed,
+    /// truncated. Both the calibration-master cache and the live-stack
+    /// session roots derive their directory names from this.
+    static func pathIdentity(_ path: String, byteCount: Int) -> String {
+        let normalized = LiveStackPath.normalize(path).uppercased()
+        return hex(SHA256.hash(data: Data(normalized.utf8)), byteCount: byteCount)
+    }
+}
 
 /// Path identity helpers shared by calibration, live stacking, and session
 /// persistence. Comparison is case-insensitive to match the default APFS

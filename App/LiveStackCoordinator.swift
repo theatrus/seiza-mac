@@ -4,7 +4,6 @@ import Foundation
 
 struct LiveStackRunConfiguration: Sendable {
     var watchFolder: String
-    var watchFolderBookmark: Data? = nil
     var sessionRootDirectory: URL
     var groupId = "live"
     var groupTitle = "Live stack"
@@ -170,7 +169,6 @@ struct LiveStackRunSnapshot: Sendable {
     var preview: LiveStackPreview? = nil
     var previewRevision = 0
     var requiresReopenToResume = false
-    var cumulativeExposureSeconds: Double? = nil
 
     var hasStack: Bool { acceptedFrames > 0 }
     var skippedFrames: Int { ignoredFrames + unreadableFrames }
@@ -384,7 +382,6 @@ actor LiveStackCoordinator {
         snapshot.preview = preview
         snapshot.previewRevision = previewRevision
         snapshot.requiresReopenToResume = nativeFinalized && state != .completed
-        snapshot.cumulativeExposureSeconds = cumulativeExposure()
         return snapshot
     }
 
@@ -483,15 +480,7 @@ actor LiveStackCoordinator {
         }
 
         if session != nil, checkpointBlocked || (checkpointDirty && lastCheckpointGeneration == nil) {
-            await operationGate.acquire()
-            do {
-                try await checkpointCore()
-                operationGate.release()
-            } catch {
-                operationGate.release()
-                blockOnCheckpointFailure(error)
-                throw error
-            }
+            try await forcedCheckpoint()
         }
         checkpointBlocked = false
 
@@ -512,6 +501,7 @@ actor LiveStackCoordinator {
         checkpointTimerTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
+                if Task.isCancelled { break }
                 await self?.checkpointIfDueByTime()
             }
         }
@@ -560,6 +550,9 @@ actor LiveStackCoordinator {
             try await checkpointCore()
             let (nextState, nextMessage) = runningStateAfterOperation()
             setState(nextState, nextMessage)
+        } catch is CancellationError {
+            // A pause or stop cancelled the checkpoint mid-write; the next
+            // forced checkpoint publishes a fresh generation.
         } catch {
             blockOnCheckpointFailure(error)
         }
@@ -582,8 +575,10 @@ actor LiveStackCoordinator {
             let restoredSession: LiveStackNativeSession
             let nativeState: LiveStackNativeState
             do {
-                restoredSession = try LiveStackNativeSession.resume(
-                    contextPath: candidate.contextURL.path)
+                let contextPath = candidate.contextURL.path
+                restoredSession = try await runBlocking {
+                    try LiveStackNativeSession.resume(contextPath: contextPath)
+                }
                 nativeState = try await restoredSession.state()
             } catch {
                 addAttention(
@@ -646,9 +641,7 @@ actor LiveStackCoordinator {
         sessionId = persisted.sessionId
         createdAtUTC = persisted.createdAtUTC
         outputPath = persisted.outputPath.isEmpty ? nil : persisted.outputPath
-        lockedFilter = persisted.filterName.map {
-            LiveStackFilterIdentity.fromStoredName($0)
-        }
+        lockedFilter = LiveStackFilterIdentity.fromStoredName(persisted.filterName)
         frames = persisted.frames
         snrSamples = persisted.snrSamples
         calibrationHistory = persisted.calibrationHistory
@@ -734,12 +727,9 @@ actor LiveStackCoordinator {
                 path: referencePath)
             return nil
         }
-        var status = stat()
-        guard stat(referencePath, &status) == 0,
-            Int64(status.st_size) == ledgerEntry.length,
-            Int64(status.st_mtimespec.tv_sec) * 1_000_000_000
-                + Int64(status.st_mtimespec.tv_nsec)
-                == ledgerEntry.lastWriteUnixNanoseconds
+        guard let fileStat = StackFileIdentity.snapshot(forPath: referencePath),
+            fileStat.length == ledgerEntry.length,
+            fileStat.modifiedUnixNanoseconds == ledgerEntry.lastWriteUnixNanoseconds
         else {
             addAttention(
                 "The restored reference file changed or is unavailable.",
@@ -747,8 +737,7 @@ actor LiveStackCoordinator {
             return nil
         }
         if let recordedIdentity = ledgerEntry.fileIdentity,
-            let identity = StackFileIdentity.identity(forPath: referencePath),
-            recordedIdentity != identity {
+            recordedIdentity != fileStat.identity {
             addAttention(
                 "The restored reference file identity changed.", path: referencePath)
             return nil
@@ -804,15 +793,7 @@ actor LiveStackCoordinator {
         }
         try await openReference(probe: probe, reason: "Selected reference frame")
         seedCalibrationPaths()
-        await operationGate.acquire()
-        do {
-            try await checkpointCore()
-            operationGate.release()
-        } catch {
-            operationGate.release()
-            blockOnCheckpointFailure(error)
-            throw error
-        }
+        try await forcedCheckpoint()
         setState(.waitingForLight,
             "Calibration is ready; waiting for the first stable light frame.")
     }
@@ -856,7 +837,10 @@ actor LiveStackCoordinator {
     private func ingest(_ candidate: StackFileCandidate) async -> Bool {
         await operationGate.acquire()
         defer { operationGate.release() }
-        guard !checkpointBlocked else { return false }
+        guard !checkpointBlocked else {
+            monitor.retryNow(candidate.path)
+            return false
+        }
         guard monitor.isCandidateCurrent(candidate) else { return true }
         do {
             try await processCandidate(candidate)
@@ -980,10 +964,14 @@ actor LiveStackCoordinator {
                 "The reference frame is unavailable.")
         }
         let optionsJSONString = try optionsJSON()
-        let opened = try LiveStackNativeSession.open(
-            referencePath: probe.path,
-            optionsJSON: optionsJSONString,
-            calibration: calibration)
+        let referencePath = probe.path
+        let openCalibration = calibration
+        let opened = try await runBlocking {
+            try LiveStackNativeSession.open(
+                referencePath: referencePath,
+                optionsJSON: optionsJSONString,
+                calibration: openCalibration)
+        }
         let counts = try await opened.counts()
         guard counts.acceptedFrames == 1 else {
             await opened.close()
@@ -1026,14 +1014,16 @@ actor LiveStackCoordinator {
             return
         }
         // The accumulator has crossed its commit boundary; the managed
-        // ledger update below must not be skipped for any reason.
+        // ledger update below must not be skipped for any reason. If the
+        // counters cannot be read back, the disposition itself says which
+        // counter the native side advanced.
+        let accepted = disposition.accepted
         let counts = (try? await session.counts())
             ?? LiveStackSessionCounts(
-                acceptedFrames: acceptedFrames,
-                rejectedFrames: nativeRejectedFrames)
+                acceptedFrames: acceptedFrames + (accepted ? 1 : 0),
+                rejectedFrames: nativeRejectedFrames + (accepted ? 0 : 1))
         acceptedFrames = counts.acceptedFrames
         nativeRejectedFrames = counts.rejectedFrames
-        let accepted = disposition.accepted
         recordFrame(
             path: candidate.path,
             disposition: accepted ? .accepted : .rejected,
@@ -1064,6 +1054,9 @@ actor LiveStackCoordinator {
         if checkpointDue {
             do {
                 try await checkpointCore()
+            } catch is CancellationError {
+                // A pause cancelled the checkpoint; the pause's own forced
+                // checkpoint publishes the durable generation.
             } catch {
                 blockOnCheckpointFailure(error)
             }
@@ -1130,35 +1123,31 @@ actor LiveStackCoordinator {
         candidate: StackFileCandidate? = nil
     ) {
         // A file that recovered from an earlier unreadable terminal is not
-        // reported as skipped forever.
-        let staleUnreadable = frames.filter {
-            $0.disposition == .unreadable && LiveStackPath.equals($0.path, path)
+        // reported as skipped forever. Ledger paths are stored normalized,
+        // so one case-folded pass finds every stale entry.
+        let normalizedPath = LiveStackPath.normalize(path)
+        let normalizedKey = normalizedPath.lowercased()
+        let countBefore = frames.count
+        frames.removeAll {
+            $0.disposition == .unreadable && $0.path.lowercased() == normalizedKey
         }
-        if !staleUnreadable.isEmpty {
-            frames.removeAll {
-                $0.disposition == .unreadable && LiveStackPath.equals($0.path, path)
-            }
-            unreadableFrames = max(0, unreadableFrames - staleUnreadable.count)
-        }
+        unreadableFrames = max(0, unreadableFrames - (countBefore - frames.count))
         let normalizedExposure = exposureSeconds.flatMap {
             $0.isFinite && $0 > 0 ? $0 : nil
         }
-        var status = stat()
-        let hasStat = stat(path, &status) == 0
+        let fileStat = candidate == nil
+            ? StackFileIdentity.snapshot(forPath: normalizedPath)
+            : nil
         frames.append(LiveStackPersistedFrame(
-            path: LiveStackPath.normalize(path),
+            path: normalizedPath,
             disposition: disposition,
             reason: reason,
             exposureSeconds: normalizedExposure,
-            length: candidate?.length ?? (hasStat ? Int64(status.st_size) : 0),
+            length: candidate?.length ?? fileStat?.length ?? 0,
             lastWriteUnixNanoseconds: candidate?.lastWriteUnixNanoseconds
-                ?? (hasStat
-                    ? Int64(status.st_mtimespec.tv_sec) * 1_000_000_000
-                        + Int64(status.st_mtimespec.tv_nsec)
-                    : 0),
+                ?? fileStat?.modifiedUnixNanoseconds ?? 0,
             processedAtUTC: Date(),
-            fileIdentity: candidate?.fileIdentity
-                ?? StackFileIdentity.identity(forPath: path)))
+            fileIdentity: candidate?.fileIdentity ?? fileStat?.identity))
     }
 
     // MARK: SNR and preview
@@ -1237,7 +1226,6 @@ actor LiveStackCoordinator {
                 $0.source == .unspecified ? nil : $0.displayName
             },
             watchFolder: configuration.watchFolder,
-            watchFolderBookmark: configuration.watchFolderBookmark,
             includesSubdirectories: configuration.includeSubdirectories,
             outputPath: outputPath ?? "",
             stackOptionsJSON: (try? optionsJSON()) ?? "",
@@ -1247,6 +1235,24 @@ actor LiveStackCoordinator {
             exportedPaths: exportedPaths,
             frames: frames,
             snrSamples: snrSamples)
+    }
+
+    /// The forced-checkpoint pattern every resumable-state mutation relies
+    /// on: acquire the operation gate, checkpoint, and on failure block the
+    /// run before rethrowing. Cancellation is not a checkpoint failure.
+    private func forcedCheckpoint() async throws {
+        await operationGate.acquire()
+        do {
+            try await checkpointCore()
+            operationGate.release()
+        } catch is CancellationError {
+            operationGate.release()
+            throw CancellationError()
+        } catch {
+            operationGate.release()
+            blockOnCheckpointFailure(error)
+            throw error
+        }
     }
 
     private func blockOnCheckpointFailure(_ error: Error) {
@@ -1270,15 +1276,17 @@ actor LiveStackCoordinator {
     func pauseAndSave() async throws {
         await lifecycleGate.acquire()
         defer { lifecycleGate.release() }
+        guard !disposed else {
+            throw LiveStackRunError.invalidOperation("The live-stack session is closed.")
+        }
+        guard state != .completed else { return }
         setState(.pausing, "Pausing and saving the live stack…")
         await stopIngestion()
-        await operationGate.acquire()
         do {
-            try await checkpointCore()
-            operationGate.release()
+            try await forcedCheckpoint()
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
-            operationGate.release()
-            blockOnCheckpointFailure(error)
             throw LiveStackRunError.checkpointFailed(error.localizedDescription)
         }
         checkpointBlocked = false
@@ -1404,13 +1412,9 @@ actor LiveStackCoordinator {
         monitor.commitReservedPath(normalized)
         exportedPaths.append(normalized)
         markCheckpointDirty()
-        await operationGate.acquire()
         do {
-            try await checkpointCore()
-            operationGate.release()
+            try await forcedCheckpoint()
         } catch {
-            operationGate.release()
-            blockOnCheckpointFailure(error)
             throw LiveStackRunError.checkpointFailed(
                 "The snapshot was saved to "
                     + "\(URL(fileURLWithPath: normalized).lastPathComponent), but its "
@@ -1446,13 +1450,11 @@ actor LiveStackCoordinator {
         markCheckpointDirty()
         await tryMeasureDepth(includeCurrentDepth: true)
 
-        await operationGate.acquire()
         do {
-            try await checkpointCore()
-            operationGate.release()
+            try await forcedCheckpoint()
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
-            operationGate.release()
-            blockOnCheckpointFailure(error)
             throw LiveStackRunError.checkpointFailed(error.localizedDescription)
         }
         try Task.checkCancellation()
@@ -1512,7 +1514,7 @@ actor LiveStackCoordinator {
         guard !disposed else { return }
         disposed = true
         await stopIngestion()
-        if let session, checkpointDirty, !nativeFinalized {
+        if session != nil, checkpointDirty, !nativeFinalized {
             await operationGate.acquire()
             do {
                 try await checkpointCore()
@@ -1522,7 +1524,6 @@ actor LiveStackCoordinator {
                         + error.localizedDescription)
             }
             operationGate.release()
-            _ = session
         }
         if let session {
             await session.close()

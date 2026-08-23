@@ -44,9 +44,6 @@ struct LiveStackPersistedState: Codable, Equatable, Sendable {
     var groupTitle: String
     var filterName: String? = nil
     var watchFolder: String
-    /// Security-scoped bookmark for the watch folder, so a relaunched app
-    /// can reach the capture folder again inside the sandbox.
-    var watchFolderBookmark: Data? = nil
     var includesSubdirectories = false
     var outputPath = ""
     var stackOptionsJSON: String
@@ -136,17 +133,15 @@ enum LiveStackSessionPaths {
     /// One session root per watch folder: `{readable}-{12 hex}` derived from
     /// the case-folded normalized path.
     static func forWatchFolder(_ watchFolder: String) -> URL {
-        let normalized = LiveStackPath.normalize(watchFolder).uppercased()
-        let digest = SHA256.hash(data: Data(normalized.utf8))
-        let identity = digest.prefix(6).map { String(format: "%02x", $0) }.joined()
+        let identity = SeizaDigest.pathIdentity(watchFolder, byteCount: 6)
         let leaf = URL(fileURLWithPath: watchFolder).lastPathComponent.lowercased()
         let readable = safeName(leaf, fallback: "capture", maximumLength: 64)
         return baseDirectory().appendingPathComponent("\(readable)-\(identity)")
     }
 
     static func safeGroupDirectoryName(_ groupId: String) -> String {
-        let digest = SHA256.hash(data: Data(groupId.utf8))
-        let identity = digest.prefix(5).map { String(format: "%02x", $0) }.joined()
+        let identity = SeizaDigest.hex(
+            SHA256.hash(data: Data(groupId.utf8)), byteCount: 5)
         let readable = safeName(groupId, fallback: "filter", maximumLength: 48)
         return "\(readable)-\(identity)"
     }

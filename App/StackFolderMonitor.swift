@@ -25,13 +25,28 @@ enum StackFileDispositionKind: Sendable {
     case retryableFailure
 }
 
-/// The `(device, inode)` identity of a file, stable across renames.
+/// The `(device, inode)` identity of a file, stable across renames, plus
+/// the stat-derived facts every subsystem records about a file.
 enum StackFileIdentity {
-    static func identity(forPath path: String) -> String? {
+    struct Snapshot: Equatable, Sendable {
+        var identity: String
+        var length: Int64
+        var modifiedUnixNanoseconds: Int64
+    }
+
+    static func snapshot(forPath path: String) -> Snapshot? {
         var status = stat()
         guard stat(path, &status) == 0 else { return nil }
-        return String(
-            format: "%llX:%llX", UInt64(status.st_dev), UInt64(status.st_ino))
+        return Snapshot(
+            identity: String(
+                format: "%llX:%llX", UInt64(status.st_dev), UInt64(status.st_ino)),
+            length: Int64(status.st_size),
+            modifiedUnixNanoseconds: Int64(status.st_mtimespec.tv_sec) * 1_000_000_000
+                + Int64(status.st_mtimespec.tv_nsec))
+    }
+
+    static func identity(forPath path: String) -> String? {
+        snapshot(forPath: path)?.identity
     }
 }
 
@@ -48,6 +63,9 @@ final class StackFileCandidateTracker: @unchecked Sendable {
     }
 
     private struct Entry {
+        /// The on-disk path with its original case; the dictionary key is
+        /// its case-folded form.
+        var path = ""
         var length: Int64 = -1
         var lastWriteUnixNanoseconds: Int64 = 0
         var fileIdentity: String?
@@ -68,6 +86,7 @@ final class StackFileCandidateTracker: @unchecked Sendable {
     private let configuration: Configuration
     private var entries: [String: Entry] = [:]
     private var terminalIdentities: Set<String> = []
+    private var cachedPendingCount = 0
 
     init(configuration: Configuration = Configuration()) {
         self.configuration = configuration
@@ -75,6 +94,16 @@ final class StackFileCandidateTracker: @unchecked Sendable {
 
     private static func key(_ path: String) -> String {
         LiveStackPath.normalize(path).lowercased()
+    }
+
+    private func entryForUpdate(path: String) -> (key: String, entry: Entry) {
+        let normalized = LiveStackPath.normalize(path)
+        let key = normalized.lowercased()
+        var entry = entries[key] ?? Entry()
+        if entry.path.isEmpty {
+            entry.path = normalized
+        }
+        return (key, entry)
     }
 
     // MARK: Observation
@@ -87,8 +116,8 @@ final class StackFileCandidateTracker: @unchecked Sendable {
         now: Date
     ) {
         lock.withLock {
-            let key = Self.key(path)
-            var entry = entries[key] ?? Entry()
+            let (key, existing) = entryForUpdate(path: path)
+            var entry = existing
             entry.seenThisScan = true
 
             if entry.terminal == .unreadable {
@@ -140,7 +169,8 @@ final class StackFileCandidateTracker: @unchecked Sendable {
 
     /// Every stable, unreserved, non-terminal entry whose retry delay has
     /// elapsed. A path whose identity is already terminal elsewhere (a
-    /// rename or hard-link alias) becomes terminal-ignored instead.
+    /// rename or hard-link alias) becomes terminal-ignored instead. Also
+    /// refreshes the cached pending count for status reporting.
     func dueCandidates(now: Date) -> [StackFileCandidate] {
         lock.withLock {
             var due: [StackFileCandidate] = []
@@ -165,13 +195,16 @@ final class StackFileCandidateTracker: @unchecked Sendable {
                 entry.awaitingDisposition = true
                 entries[key] = entry
                 due.append(StackFileCandidate(
-                    path: key,
+                    path: entry.path,
                     attempt: entry.attempt,
                     revision: entry.revision,
                     length: entry.length,
                     lastWriteUnixNanoseconds: entry.lastWriteUnixNanoseconds,
                     fileIdentity: entry.fileIdentity))
             }
+            cachedPendingCount = entries.values.filter { entry in
+                entry.terminal == nil && !entry.reserved && entry.seenThisScan
+            }.count
             return due.sorted { $0.path < $1.path }
         }
     }
@@ -242,12 +275,25 @@ final class StackFileCandidateTracker: @unchecked Sendable {
         }
     }
 
+    /// Clears every pending offer so candidates that were yielded but never
+    /// completed (a stopped stream, a cancelled ingestion loop) are offered
+    /// again by the next scan.
+    func clearPendingDispositions() {
+        lock.withLock {
+            for (key, var entry) in entries
+            where entry.terminal == nil && entry.awaitingDisposition {
+                entry.awaitingDisposition = false
+                entries[key] = entry
+            }
+        }
+    }
+
     // MARK: Reservations
 
     func reserve(_ path: String) {
         lock.withLock {
-            let key = Self.key(path)
-            var entry = entries[key] ?? Entry()
+            let (key, existing) = entryForUpdate(path: path)
+            var entry = existing
             entry.reserved = true
             entry.awaitingDisposition = false
             entries[key] = entry
@@ -265,13 +311,13 @@ final class StackFileCandidateTracker: @unchecked Sendable {
 
     func commitReservation(_ path: String, now: Date) {
         lock.withLock {
-            let key = Self.key(path)
-            var entry = entries[key] ?? Entry()
+            let (key, existing) = entryForUpdate(path: path)
+            var entry = existing
             entry.reserved = false
             entry.terminal = .accepted
             entry.processedAt = now
             if let identity = entry.fileIdentity
-                ?? StackFileIdentity.identity(forPath: path) {
+                ?? StackFileIdentity.identity(forPath: entry.path) {
                 entry.fileIdentity = identity
                 terminalIdentities.insert(identity)
             }
@@ -286,10 +332,10 @@ final class StackFileCandidateTracker: @unchecked Sendable {
     func seedProcessedPaths(_ paths: [String]) {
         lock.withLock {
             for path in paths {
-                let key = Self.key(path)
-                var entry = entries[key] ?? Entry()
+                let (key, existing) = entryForUpdate(path: path)
+            var entry = existing
                 entry.terminal = .accepted
-                if let identity = StackFileIdentity.identity(forPath: key) {
+                if let identity = StackFileIdentity.identity(forPath: entry.path) {
                     entry.fileIdentity = identity
                     terminalIdentities.insert(identity)
                 }
@@ -304,8 +350,8 @@ final class StackFileCandidateTracker: @unchecked Sendable {
     func seedPersistedFrames(_ frames: [LiveStackPersistedFrame]) {
         lock.withLock {
             for frame in frames {
-                let key = Self.key(frame.path)
-                var entry = entries[key] ?? Entry()
+                let (key, existing) = entryForUpdate(path: frame.path)
+                var entry = existing
                 switch frame.disposition {
                 case .accepted:
                     entry.terminal = .accepted
@@ -331,11 +377,7 @@ final class StackFileCandidateTracker: @unchecked Sendable {
     // MARK: Introspection
 
     var pendingCount: Int {
-        lock.withLock {
-            entries.values.count { entry in
-                entry.terminal == nil && !entry.reserved && entry.seenThisScan
-            }
-        }
+        lock.withLock { cachedPendingCount }
     }
 
     func beginScan() {
@@ -367,11 +409,17 @@ final class StackFolderMonitor: @unchecked Sendable {
 
     let tracker: StackFileCandidateTracker
     private let configuration: Configuration
+    /// Case-folded normalized directory paths, precomputed so the scan loop
+    /// never re-normalizes constants.
+    private let excludedDirectoryPrefixes: [String]
     private let lock = NSLock()
     private var excludedPaths: Set<String>
     private var lastScanError: String?
     private var scanTask: Task<Void, Never>?
     private var continuation: AsyncStream<StackFileCandidate>.Continuation?
+    /// Identifies the stream a scan task and continuation belong to, so a
+    /// stale stream's termination can never tear down a fresh restart.
+    private var streamGeneration = 0
 
     init(configuration: Configuration) {
         self.configuration = configuration
@@ -380,35 +428,59 @@ final class StackFolderMonitor: @unchecked Sendable {
             configuration.excludedPaths.map {
                 LiveStackPath.normalize($0).lowercased()
             })
+        self.excludedDirectoryPrefixes = configuration.excludedDirectories.map {
+            LiveStackPath.normalize($0).lowercased() + "/"
+        }
     }
 
     /// The single-consumer candidate stream. Starts the scan loop; ending
     /// the stream stops it.
     func candidates() -> AsyncStream<StackFileCandidate> {
         AsyncStream { continuation in
-            lock.withLock { self.continuation = continuation }
+            let generation: Int = lock.withLock {
+                streamGeneration += 1
+                self.continuation = continuation
+                return streamGeneration
+            }
             let interval = configuration.scanInterval
-            scanTask = Task { [weak self] in
+            let task = Task { [weak self] in
                 while !Task.isCancelled {
                     self?.scanOnce()
                     try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
                 }
             }
+            lock.withLock {
+                if streamGeneration == generation {
+                    scanTask = task
+                } else {
+                    task.cancel()
+                }
+            }
             continuation.onTermination = { [weak self] _ in
-                self?.stop()
+                self?.stop(generation: generation)
             }
         }
     }
 
     func stop() {
-        scanTask?.cancel()
-        scanTask = nil
-        let continuation = lock.withLock {
-            let current = self.continuation
-            self.continuation = nil
-            return current
-        }
+        stop(generation: lock.withLock { streamGeneration })
+    }
+
+    private func stop(generation: Int) {
+        let (task, continuation): (Task<Void, Never>?, AsyncStream<StackFileCandidate>.Continuation?) =
+            lock.withLock {
+                guard generation == streamGeneration else { return (nil, nil) }
+                let current = (scanTask, self.continuation)
+                scanTask = nil
+                self.continuation = nil
+                return current
+            }
+        task?.cancel()
         continuation?.finish()
+        if task != nil || continuation != nil {
+            // Offers that never completed are re-offered on the next start.
+            tracker.clearPendingDispositions()
+        }
     }
 
     /// One enumeration pass: observe every eligible file, then emit the
@@ -429,8 +501,12 @@ final class StackFolderMonitor: @unchecked Sendable {
         let due = tracker.dueCandidates(now: now)
         guard !due.isEmpty else { return }
         let continuation = lock.withLock { self.continuation }
+        guard let continuation else {
+            tracker.clearPendingDispositions()
+            return
+        }
         for candidate in due {
-            continuation?.yield(candidate)
+            continuation.yield(candidate)
         }
     }
 
@@ -444,9 +520,9 @@ final class StackFolderMonitor: @unchecked Sendable {
             if values?.isSymbolicLink == true { continue }
             if values?.isDirectory == true {
                 guard configuration.includeSubdirectories else { continue }
-                let path = url.path
-                let isExcluded = configuration.excludedDirectories.contains {
-                    LiveStackPath.isWithinDirectory(path, directory: $0)
+                let path = LiveStackPath.normalize(url.path).lowercased() + "/"
+                let isExcluded = excludedDirectoryPrefixes.contains {
+                    path.hasPrefix($0)
                 }
                 if !isExcluded {
                     enumerate(url, now: now)
@@ -459,28 +535,18 @@ final class StackFolderMonitor: @unchecked Sendable {
 
     private func observeFile(_ url: URL, now: Date) {
         let name = url.lastPathComponent
-        guard !name.hasPrefix(LiveStackAtomicFITS.stagingPrefix),
-            !name.hasPrefix("."),
+        guard !name.hasPrefix("."),
             ImageCollection.isStackableImage(url)
         else { return }
         let path = LiveStackPath.normalize(url.path)
         if excludedPaths.contains(path.lowercased()) { return }
-        let isInExcludedDirectory = configuration.excludedDirectories.contains {
-            LiveStackPath.isWithinDirectory(path, directory: $0)
-        }
-        if isInExcludedDirectory { return }
 
-        var status = stat()
-        guard stat(path, &status) == 0 else { return }
-        let identity = String(
-            format: "%llX:%llX", UInt64(status.st_dev), UInt64(status.st_ino))
-        let modified = Int64(status.st_mtimespec.tv_sec) * 1_000_000_000
-            + Int64(status.st_mtimespec.tv_nsec)
+        guard let snapshot = StackFileIdentity.snapshot(forPath: path) else { return }
         tracker.observe(
             path: path,
-            length: Int64(status.st_size),
-            lastWriteUnixNanoseconds: modified,
-            fileIdentity: identity,
+            length: snapshot.length,
+            lastWriteUnixNanoseconds: snapshot.modifiedUnixNanoseconds,
+            fileIdentity: snapshot.identity,
             now: now)
     }
 

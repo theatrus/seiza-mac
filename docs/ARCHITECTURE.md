@@ -138,11 +138,11 @@ than being reimplemented in Swift.
 Automatic calibration preparation probes a raw library, asks the native
 planner for one coherent selection per kind that satisfies every target light,
 and builds bias, dark, dark-flat, and flat masters in dependency order. The
-dark-flat is an internal intermediate: it is built with the native `dark`
-kind and consumed only as the flat's pedestal reference. Without a bias, the
-flat is withheld unless an uncalibrated dark-flat or dark with a known
-exposure matches every selected flat, and a freshly built flat is re-probed so
-its written metadata must still match every target. Masters are cached under
+dark-flat is an internal intermediate: the service builds it with the
+native `dark` kind and consumes it only as the flat's pedestal reference. Without a bias, Seiza
+withholds the flat unless an uncalibrated dark-flat or dark with a known
+exposure matches every selected flat, and re-probes a freshly built flat so
+its written metadata must still match every target. Masters live under
 `Application Support/Seiza/CalibrationMasters/<library-id>` keyed by a SHA-256
 fingerprint over the native kind, core version, build options, upstream
 master fingerprints, and each input's path, size, and timestamp. `flock`-based

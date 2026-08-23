@@ -17,6 +17,8 @@ enum CalibrationServiceError: LocalizedError {
 /// call in the ABI and may be invoked while a worker borrows the signal.
 final class CalibrationCancelSignal: @unchecked Sendable {
     let pointer: OpaquePointer
+    private let lock = NSLock()
+    private var cancelled = false
 
     init() throws {
         guard let pointer = seiza_cancel_signal_create() else {
@@ -26,7 +28,12 @@ final class CalibrationCancelSignal: @unchecked Sendable {
         self.pointer = pointer
     }
 
+    var wasCancelled: Bool {
+        lock.withLock { cancelled }
+    }
+
     func cancel() {
+        lock.withLock { cancelled = true }
         seiza_cancel_signal_cancel(pointer)
     }
 
@@ -411,8 +418,6 @@ enum CalibrationCachePaths {
     }
 
     static func directoryIdentity(for libraryPath: String) -> String {
-        let normalized = LiveStackPath.normalize(libraryPath).uppercased()
-        let digest = SHA256.hash(data: Data(normalized.utf8))
-        return digest.prefix(6).map { String(format: "%02x", $0) }.joined()
+        SeizaDigest.pathIdentity(libraryPath, byteCount: 6)
     }
 }

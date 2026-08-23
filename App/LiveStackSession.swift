@@ -101,22 +101,8 @@ struct LiveStackPreview: Sendable {
     let height: Int
 
     func makeCGImage() -> CGImage? {
-        guard width > 0, height > 0, rgba.count == width * height * 4 else {
-            return nil
-        }
-        guard let provider = CGDataProvider(data: rgba as CFData) else { return nil }
-        return CGImage(
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bitsPerPixel: 32,
-            bytesPerRow: width * 4,
-            space: CGColorSpace(name: CGColorSpace.sRGB)!,
-            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
-            provider: provider,
-            decode: nil,
-            shouldInterpolate: true,
-            intent: .defaultIntent)
+        SeizaCore.makeRGBA8Image(
+            data: rgba, width: width, height: height, shouldInterpolate: true)
     }
 }
 
@@ -227,10 +213,22 @@ enum LiveStackAtomicFITS {
         do {
             _ = try FileManager.default.replaceItemAt(destination, withItemAt: staging)
         } catch {
-            // A cross-volume staging directory cannot be swapped; copy into
-            // the granted destination path instead.
-            try? FileManager.default.removeItem(at: destination)
-            try FileManager.default.copyItem(at: staging, to: destination)
+            // A cross-volume staging directory cannot be swapped. Stream the
+            // finished bytes into the granted path in place: the previous
+            // output is never unlinked first, and a write-only grant that
+            // forbids create/delete still works.
+            if !FileManager.default.fileExists(atPath: destination.path) {
+                FileManager.default.createFile(atPath: destination.path, contents: nil)
+            }
+            let input = try FileHandle(forReadingFrom: staging)
+            defer { try? input.close() }
+            let output = try FileHandle(forWritingTo: destination)
+            defer { try? output.close() }
+            try output.truncate(atOffset: 0)
+            while let chunk = try input.read(upToCount: 4 << 20), !chunk.isEmpty {
+                try output.write(contentsOf: chunk)
+            }
+            try output.synchronize()
         }
     }
 }
@@ -239,6 +237,15 @@ enum LiveStackAtomicFITS {
 /// actor; borrowed native buffers are copied before they escape. Native
 /// calls are not cancellable — cancellation is observed between calls.
 actor LiveStackNativeSession {
+    /// Native calls block for seconds at a time; a dedicated serial queue
+    /// keeps them off the cooperative pool while preserving actor
+    /// serialization.
+    private let queue = DispatchSerialQueue(label: "fyi.seiza.mac.live-stacker")
+
+    nonisolated var unownedExecutor: UnownedSerialExecutor {
+        queue.asUnownedSerialExecutor()
+    }
+
     private var stacker: OpaquePointer?
     private var finalized = false
 
@@ -300,6 +307,7 @@ actor LiveStackNativeSession {
 
     func push(path: String) throws -> LiveStackPushOutcome {
         let handle = try requireHandle()
+        let acceptedBefore = seiza_live_stacker_accepted_frames(handle)
         var errorPointer: UnsafeMutablePointer<CChar>?
         let response = path.withCString { pointer in
             seiza_live_stacker_push_fits_json(handle, pointer, &errorPointer)
@@ -313,8 +321,22 @@ actor LiveStackNativeSession {
         defer { seiza_string_free(response) }
         CalibrationService.discardError(&errorPointer)
         let data = Data(bytes: response, count: strlen(response))
-        let disposition = try JSONDecoder().decode(ImageStackDisposition.self, from: data)
-        return LiveStackPushOutcome(disposition: disposition, nativeError: nil)
+        if let disposition = try? JSONDecoder().decode(
+            ImageStackDisposition.self, from: data) {
+            return LiveStackPushOutcome(disposition: disposition, nativeError: nil)
+        }
+        // The accumulator has already committed this frame; an undecodable
+        // disposition must not lose the outcome, so derive it from the
+        // native counters instead of failing.
+        let accepted = seiza_live_stacker_accepted_frames(handle) > acceptedBefore
+        return LiveStackPushOutcome(
+            disposition: ImageStackDisposition(
+                source: path,
+                accepted: accepted,
+                reason: accepted
+                    ? nil
+                    : "The Seiza core returned an unreadable disposition."),
+            nativeError: nil)
     }
 
     func counts() throws -> LiveStackSessionCounts {
@@ -434,21 +456,7 @@ actor LiveStackNativeSession {
         switch result {
         case 1:
             CalibrationService.discardError(&errorPointer)
-            let channelCount = min(Int(sample.channel_count), 3)
-            var channelNoise: [Double] = []
-            withUnsafeBytes(of: sample.channel_noise) { raw in
-                let values = raw.bindMemory(to: Double.self)
-                for index in 0..<channelCount {
-                    channelNoise.append(values[index])
-                }
-            }
-            return StackSnrSample(
-                frames: sample.frames,
-                noise: sample.noise,
-                background: sample.background,
-                signal: sample.signal,
-                snr: sample.snr,
-                channelNoise: channelNoise)
+            return StackSnrSample(native: sample)
         case 0:
             guard errorPointer == nil else {
                 throw LiveStackSessionError.core(

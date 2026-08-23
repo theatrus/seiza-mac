@@ -1348,27 +1348,39 @@ enum SeizaCore {
         }
 
         let data = Data(bytes: bytes, count: byteCount)
-        guard
-            let provider = CGDataProvider(data: data as CFData),
-            let image = CGImage(
-                width: width,
-                height: height,
-                bitsPerComponent: 8,
-                bitsPerPixel: 32,
-                bytesPerRow: width * 4,
-                space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
-                provider: provider,
-                decode: nil,
-                shouldInterpolate: false,
-                intent: .defaultIntent
-            )
+        guard let image = makeRGBA8Image(data: data, width: width, height: height)
         else {
             throw SeizaCoreError.invalidCABIResponse
         }
         let metadataData = Data(bytes: metadataBytes, count: strlen(metadataBytes))
         let metadata = try JSONDecoder().decode(ImageMetadata.self, from: metadataData)
         return RenderedImage(image: image, metadata: metadata)
+    }
+
+    /// One sRGB RGBA8 image assembly for every 8-bit render surface, so a
+    /// color-management change reaches the viewer and the live preview alike.
+    static func makeRGBA8Image(
+        data: Data,
+        width: Int,
+        height: Int,
+        shouldInterpolate: Bool = false
+    ) -> CGImage? {
+        guard width > 0, height > 0, data.count == width * height * 4,
+            let provider = CGDataProvider(data: data as CFData)
+        else { return nil }
+        return CGImage(
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: shouldInterpolate,
+            intent: .defaultIntent
+        )
     }
 
     /// Renders directly into native-endian RGBA16 for high-bit-depth export.

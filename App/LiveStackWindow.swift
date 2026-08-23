@@ -62,6 +62,7 @@ final class LiveStackWindowModel: ObservableObject {
     private var displayedPreviewRevision = -1
     private var warningContinuation: CheckedContinuation<Bool, Never>?
     private var closing = false
+    private var closeInProgress = false
 
     init(initialFolder: URL?) {
         watchFolder = initialFolder
@@ -170,13 +171,8 @@ final class LiveStackWindowModel: ObservableObject {
         }
         try Task.checkCancellation()
 
-        let bookmark = try? watchFolder.bookmarkData(
-            options: .withSecurityScope,
-            includingResourceValuesForKeys: nil,
-            relativeTo: nil)
         var configuration = LiveStackRunConfiguration(
             watchFolder: watchFolder.path,
-            watchFolderBookmark: bookmark,
             sessionRootDirectory: LiveStackSessionPaths.forWatchFolder(watchFolder.path))
         configuration.groupTitle = "Live stack — \(watchFolder.lastPathComponent)"
         configuration.includeSubdirectories = includeSubdirectories
@@ -419,7 +415,7 @@ final class LiveStackWindowModel: ObservableObject {
             do {
                 let result = try await coordinator.finish(to: url.path)
                 let output = URL(fileURLWithPath: result.outputPath)
-                await teardown(save: false)
+                await teardown()
                 isBusy = false
                 onOpenOutput(output)
                 requestClose()
@@ -436,6 +432,7 @@ final class LiveStackWindowModel: ObservableObject {
     /// close is started and `requestClose` fires when it is safe.
     func canCloseImmediately() -> Bool {
         if closing { return true }
+        if closeInProgress { return false }
         preparationTask?.cancel()
         resolveWarnings(proceed: false)
         guard coordinator != nil else { return true }
@@ -444,7 +441,8 @@ final class LiveStackWindowModel: ObservableObject {
     }
 
     private func beginClose() {
-        guard !closing else { return }
+        guard !closing, !closeInProgress else { return }
+        closeInProgress = true
         isBusy = true
         Task {
             let save = !snapshot.requiresReopenToResume
@@ -452,6 +450,7 @@ final class LiveStackWindowModel: ObservableObject {
                 do {
                     try await coordinator.pauseAndSave()
                 } catch {
+                    closeInProgress = false
                     isBusy = false
                     runError = "The final checkpoint failed: "
                         + error.localizedDescription
@@ -459,7 +458,7 @@ final class LiveStackWindowModel: ObservableObject {
                     return
                 }
             }
-            await teardown(save: false)
+            await teardown()
             closing = true
             isBusy = false
             requestClose()
@@ -468,13 +467,13 @@ final class LiveStackWindowModel: ObservableObject {
 
     func discardAndClose() {
         Task {
-            await teardown(save: false)
+            await teardown()
             closing = true
             requestClose()
         }
     }
 
-    private func teardown(save: Bool) async {
+    private func teardown() async {
         observationTask?.cancel()
         observationTask = nil
         if let coordinator {
@@ -866,12 +865,13 @@ private struct LiveStackRunningView: View {
     }
 
     private var depthCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let plot = model.snapshot.snrPlot
+        return VStack(alignment: .leading, spacing: 8) {
             Text("Stack Depth")
                 .font(.headline)
-            StackSnrChartView(points: model.snapshot.snrPlot)
+            StackSnrChartView(points: plot)
                 .frame(minHeight: 170)
-            Text(snrSummary)
+            Text(snrSummary(plot: plot))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -965,8 +965,7 @@ private struct LiveStackRunningView: View {
         return "Checkpoint \(generation): \(age)"
     }
 
-    private var snrSummary: String {
-        let plot = model.snapshot.snrPlot
+    private func snrSummary(plot: [StackSnrPlotPoint]) -> String {
         guard let plotted = plot.last else {
             return "Noise and signal are measured at 1, 2, 4, 8… accepted frames."
         }

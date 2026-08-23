@@ -123,25 +123,21 @@ final class CalibrationFileLease: @unchecked Sendable {
         self.descriptor = descriptor
     }
 
-    static func acquireShared(at url: URL) throws -> CalibrationFileLease {
+    static func acquireShared(at url: URL) async throws -> CalibrationFileLease {
         while true {
             if let lease = try acquire(at: url, operation: LOCK_SH) {
                 return lease
             }
-            usleep(50_000)
+            try await Task.sleep(nanoseconds: 50_000_000)
         }
     }
 
-    static func acquireExclusive(
-        at url: URL,
-        waitingWith isCancelled: () -> Bool
-    ) throws -> CalibrationFileLease {
+    static func acquireExclusive(at url: URL) async throws -> CalibrationFileLease {
         while true {
             if let lease = try acquire(at: url, operation: LOCK_EX) {
                 return lease
             }
-            if isCancelled() { throw CancellationError() }
-            usleep(50_000)
+            try await Task.sleep(nanoseconds: 50_000_000)
         }
     }
 
@@ -260,8 +256,6 @@ struct CalibrationPreparationService {
     private struct KindOutcome {
         var summary: CalibrationPreparationKindSummary
         var warnings: [String] = []
-        var plan: CalibrationPlanResult? = nil
-        var selectedProbes: [CalibrationFrameProbe] = []
         var lease: CalibrationFileLease? = nil
     }
 
@@ -645,7 +639,9 @@ struct CalibrationPreparationService {
                 inFlight += 1
                 group.addTask {
                     do {
-                        return .probed(try CalibrationService.probe(path: path))
+                        return .probed(try await runBlocking {
+                            try CalibrationService.probe(path: path)
+                        })
                     } catch {
                         return .failed(path: path, message: error.localizedDescription)
                     }
@@ -804,12 +800,10 @@ struct CalibrationPreparationService {
 
         var outcome = KindOutcome(
             summary: CalibrationPreparationKindSummary(kind: kind),
-            warnings: planWarnings,
-            plan: plan)
+            warnings: planWarnings)
         let selectedProbes = plan.selectedPaths.compactMap { path in
             candidatesByPath[LiveStackPath.normalize(path).lowercased()]
         }
-        outcome.selectedProbes = selectedProbes
         if let failure = selectionFailureMessage(
             plan: plan, selectedProbes: selectedProbes, kind: kind) {
             outcome.summary.warning = failure
@@ -862,8 +856,6 @@ struct CalibrationPreparationService {
             coreVersion: coreVersion,
             rejection: CalibrationMasterRejection(),
             defectSuppression: defectSuppression,
-            darkExposureSeconds: nil,
-            exposureSeconds: nil,
             biasFingerprint: bias?.fingerprint,
             darkFingerprint: dark?.fingerprint,
             inputs: identities)
@@ -923,8 +915,7 @@ struct CalibrationPreparationService {
         lockURL: URL,
         retainURL: URL
     ) async throws -> BuildOutcome {
-        let buildLease = try CalibrationFileLease.acquireExclusive(
-            at: lockURL, waitingWith: { Task.isCancelled })
+        let buildLease = try await CalibrationFileLease.acquireExclusive(at: lockURL)
         defer { buildLease.release() }
 
         let buildRequest = CalibrationMasterBuildRequest(
@@ -946,7 +937,7 @@ struct CalibrationPreparationService {
             minimum: plan.minimum) {
             try? FileManager.default.setAttributes(
                 [.modificationDate: Date()], ofItemAtPath: reportURL.path)
-            let retention = try CalibrationFileLease.acquireShared(at: retainURL)
+            let retention = try await CalibrationFileLease.acquireShared(at: retainURL)
             return BuildOutcome(
                 summary: CalibrationPreparationKindSummary(
                     kind: logicalKind,
@@ -980,7 +971,7 @@ struct CalibrationPreparationService {
                 try CalibrationService.buildMaster(
                     requestForBuild,
                     cancellation: cancellation,
-                    isCancelled: { Task.isCancelled })
+                    isCancelled: { cancellation.wasCancelled })
             }
         } onCancel: {
             cancellation.cancel()
@@ -1019,7 +1010,7 @@ struct CalibrationPreparationService {
         try? FileManager.default.removeItem(at: reportURL)
         try FileManager.default.moveItem(at: stagingReport, to: reportURL)
 
-        let retention = try CalibrationFileLease.acquireShared(at: retainURL)
+        let retention = try await CalibrationFileLease.acquireShared(at: retainURL)
         return BuildOutcome(
             summary: CalibrationPreparationKindSummary(
                 kind: logicalKind,
@@ -1047,9 +1038,7 @@ struct CalibrationPreparationService {
         progress: @escaping @Sendable (CalibrationPreparationProgress) -> Void
     ) async throws -> KindOutcome {
         var outcome = KindOutcome(
-            summary: CalibrationPreparationKindSummary(kind: CalibrationFrameRole.flat),
-            plan: flatPlan,
-            selectedProbes: selectedFlatProbes)
+            summary: CalibrationPreparationKindSummary(kind: CalibrationFrameRole.flat))
         if let failure = selectionFailureMessage(
             plan: flatPlan,
             selectedProbes: selectedFlatProbes,
@@ -1379,8 +1368,6 @@ struct CalibrationPreparationService {
         coreVersion: String,
         rejection: CalibrationMasterRejection,
         defectSuppression: CalibrationDefectSuppression?,
-        darkExposureSeconds: Double?,
-        exposureSeconds: Double?,
         biasFingerprint: String?,
         darkFingerprint: String?,
         inputs: [InputIdentity]
@@ -1402,8 +1389,10 @@ struct CalibrationPreparationService {
         append("\(rejection.highSigma)")
         append(defectSuppression.map { "\($0.lowSigma)" } ?? "none")
         append(defectSuppression.map { "\($0.highSigma)" } ?? "none")
-        append(darkExposureSeconds.map { "\($0)" } ?? "none")
-        append(exposureSeconds.map { "\($0)" } ?? "none")
+        // Exposure overrides never participate today; the two literals keep
+        // existing fingerprints stable.
+        append("none")
+        append("none")
         append(biasFingerprint ?? "none")
         append(darkFingerprint ?? "none")
         for input in inputs {
@@ -1411,7 +1400,7 @@ struct CalibrationPreparationService {
             append("\(input.length)")
             append("\(input.modifiedNanoseconds)")
         }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        return SeizaDigest.hex(hasher.finalize())
     }
 
     private func unixNanoseconds(_ date: Date) -> Int64 {
@@ -1540,6 +1529,10 @@ struct CalibrationPreparationService {
 
         var reclaimed: Int64 = 0
         for file in entry.files {
+            // Lease marker files stay in place: unlinking a held flock would
+            // let a fresh lock on a new inode coexist with the old holder.
+            let name = file.lastPathComponent
+            if name.hasSuffix(".lock") || name.hasSuffix(".retain") { continue }
             let values = try? file.resourceValues(forKeys: [.fileSizeKey])
             do {
                 try FileManager.default.removeItem(at: file)
@@ -1548,8 +1541,6 @@ struct CalibrationPreparationService {
                 continue
             }
         }
-        try? FileManager.default.removeItem(at: lockURL)
-        try? FileManager.default.removeItem(at: retainURL)
         return reclaimed
     }
 }

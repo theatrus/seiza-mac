@@ -45,3 +45,5 @@ xcuserdata/
 AuthKey_*.p8
 *.keychain
 *.keychain-db
+/DerivedData-run/
+/DerivedData-sign/
