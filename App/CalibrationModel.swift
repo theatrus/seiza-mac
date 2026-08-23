@@ -121,6 +121,32 @@ enum CalibrationLightEligibility {
     }
 }
 
+/// Splits a group's probed lights into calibration-matching targets and
+/// set-aside frames. A frame that cannot serve as a target — a master, a
+/// non-light, a preprocessed light — is a warning, not a reason to refuse
+/// the whole batch: the native stacker's per-frame admission remains
+/// authoritative when the frame is pushed.
+enum CalibrationTargetSelection {
+    struct Partition {
+        var eligible: [CalibrationFrameProbe] = []
+        var warnings: [String] = []
+    }
+
+    static func partition(_ probes: [CalibrationFrameProbe]) -> Partition {
+        var partition = Partition()
+        for probe in probes {
+            if let reason = CalibrationLightEligibility.ineligibilityReason(probe) {
+                let name = URL(fileURLWithPath: probe.path).lastPathComponent
+                partition.warnings.append(
+                    "Set aside \(name) for calibration matching; \(reason).")
+            } else {
+                partition.eligible.append(probe)
+            }
+        }
+        return partition
+    }
+}
+
 enum CalibrationTargetMetadata {
     /// Fills a target light's missing FILTER header from a recognized
     /// filename filter, using the conventional header spelling. Calibration

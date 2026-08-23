@@ -253,7 +253,7 @@ final class LiveStackWindowModel: ObservableObject {
         return prepared.calibration
     }
 
-    nonisolated private static func findReferenceLight(
+    nonisolated static func findReferenceLight(
         inFolder folder: String,
         includeSubdirectories: Bool
     ) throws -> CalibrationFrameProbe? {
@@ -293,7 +293,9 @@ final class LiveStackWindowModel: ObservableObject {
             guard let probe = try? CalibrationService.probe(path: file.path) else {
                 continue
             }
-            if probe.role == CalibrationFrameRole.light {
+            // A master or preprocessed frame in the capture folder is not a
+            // usable anchor; keep scanning for a raw light.
+            if CalibrationLightEligibility.ineligibilityReason(probe) == nil {
                 return probe
             }
         }
