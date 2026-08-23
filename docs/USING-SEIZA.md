@@ -104,6 +104,27 @@ checkpoint's masters by choosing **None**, pick existing masters, or build them
 from a raw library; a new selection applies atomically as a fresh calibration
 epoch for future frames.
 
+## Measure stars and sensor tilt
+
+Click **Analyze** in the toolbar (or **Analyze Stars** in the inspector) to
+measure stars in the linear FITS or XISF source. No plate solve or catalog is
+needed, and nothing leaves the Mac. The inspector reports the star count,
+average HFR and FWHM, background, noise, a corner-tilt percentage, a signed
+field-curvature percentage, and a 3-by-3 cell grid with per-region medians.
+Seiza withholds a verdict until every required region holds at least three
+stars, and flags a verdict computed from sparse regions as low confidence.
+
+After an analysis, the Overlays menu adds four layers: **Measured Stars**
+(HFR-scaled ellipses with labels), **Sensor Tilt Grid** (the shaded 3-by-3
+diagnostic), and the off-by-default **Parallelogram Tilt Diagram** and
+**Triangle Tilt Diagram**. The parallelogram normalizes each corner against
+the softest corner; the triangle normalizes each 120-degree sector against
+the worst sector, with angle 0 pointing to the top of the image. The two
+percentages differ by design: corner tilt comes from the four grid corners,
+sector tilt from the triangle annulus. Exports and the image clipboard
+composite whichever layers are visible. Compare several frames before
+drawing conclusions: seeing, guiding, and wind can imitate optical tilt.
+
 ## Build an astronomy stretch
 
 Click the **Stretch** toolbar button to open the compact editor. Stages run from

@@ -176,6 +176,28 @@ SNR against the square-root ideal anchored at the shallowest point. Live
 previews render natively from the physical linear mean through a
 robust-percentile sample-domain mapping before the display stretch.
 
+## Measured stars and sensor tilt
+
+Star measurement crosses the ABI as one call: `seiza_stars_detect_path_json`
+opens the FITS or XISF source and runs the native detector on its linear
+16-bit luminance — the host never derives detector input from the stretched
+viewport. The camelCase response carries per-star measurements, the 3-by-3
+cell grid, the corner-tilt summary, and, when an angle was requested, the
+triangle-tilt block with its full provenance (radii, minimum stars per
+region, per-sector axes). Swift validates every cross-field invariant before
+rendering and rejects a response that contradicts itself or its request.
+
+The analysis service keeps a four-entry LRU keyed by normalized path, file
+size and timestamp, core version, and the exact options JSON; one native
+detector job runs at a time, concurrent requests for the same key share it,
+a queued job abandoned by every waiter is dropped before it starts, and a
+source that changes mid-analysis is discarded rather than cached. Overlay
+geometry is computed once per result in source-pixel space; the viewport and
+the composited export share it, with stroke widths in screen points and
+shapes scaled by zoom. Measured stars stay separate from plate-solve
+detections end to end: different producers, triggers, toggles, colors, and
+labels.
+
 ## Data and provenance
 
 The app keeps these values distinct:

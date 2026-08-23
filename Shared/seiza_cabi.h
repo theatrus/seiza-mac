@@ -290,6 +290,11 @@ char *seiza_calibration_describe_optics_mismatch(
 
 size_t seiza_checkpoint_depths(size_t total, size_t *out, size_t out_len);
 
+char *seiza_stars_detect_path_json(
+    const char *path,
+    const char *options_json,
+    char **error_out);
+
 char *seiza_solve_image_json(
     const char *path,
     const char *catalog_directory,

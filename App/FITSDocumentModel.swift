@@ -109,9 +109,22 @@ final class ImageDocumentModel: ObservableObject {
         case failed(String)
     }
 
+    enum StarAnalysisState {
+        case idle
+        case analyzing
+        case analyzed(StarAnalysisOverlayModel)
+        case failed(String)
+
+        var overlayModel: StarAnalysisOverlayModel? {
+            if case .analyzed(let model) = self { return model }
+            return nil
+        }
+    }
+
     let url: URL
     @Published private(set) var loadState: LoadState = .loading
     @Published private(set) var solveState: SolveState = .idle
+    @Published private(set) var starAnalysisState: StarAnalysisState = .idle
     @Published private(set) var previewImage: CGImage?
     @Published private(set) var image: CGImage?
     @Published private(set) var metadata: ImageMetadata?
@@ -121,6 +134,7 @@ final class ImageDocumentModel: ObservableObject {
     @Published private(set) var previewError: String?
     private var loadGeneration = 0
     private var previewGeneration = 0
+    private var starAnalysisGeneration = 0
     private var committedImage: CGImage?
     private var committedMetadata: ImageMetadata?
     private var fullResolutionPreview: (
@@ -458,6 +472,52 @@ final class ImageDocumentModel: ObservableObject {
         metadata = rendered.metadata
         committedMetadata = rendered.metadata
         loadState = .loaded
+    }
+
+    /// Measures stars and sensor tilt in the linear source image. Explicit
+    /// only; a stale result from an earlier request or an edited document is
+    /// discarded by the generation guard.
+    func analyzeStars() {
+        starAnalysisGeneration &+= 1
+        let generation = starAnalysisGeneration
+        starAnalysisState = .analyzing
+        let url = url
+        let expectedWidth = metadata?.width
+        let expectedHeight = metadata?.height
+        Task { @MainActor [weak self] in
+            let accessingFile = url.startAccessingSecurityScopedResource()
+            defer {
+                if accessingFile { url.stopAccessingSecurityScopedResource() }
+            }
+            let outcome: Result<StarAnalysisResult, Error>
+            do {
+                let result = try await StarAnalysisService.shared.analyze(
+                    path: url.path,
+                    options: .interactiveDefault)
+                outcome = .success(result)
+            } catch {
+                outcome = .failure(error)
+            }
+            guard let self, self.starAnalysisGeneration == generation else { return }
+            switch outcome {
+            case .success(let result):
+                if let expectedWidth, let expectedHeight,
+                    result.width != expectedWidth || result.height != expectedHeight {
+                    self.starAnalysisState = .failed(
+                        "Star analysis returned \(result.width) × \(result.height) "
+                            + "for a \(expectedWidth) × \(expectedHeight) source image.")
+                } else {
+                    self.starAnalysisState = .analyzed(
+                        StarAnalysisOverlayModel(result: result))
+                }
+            case .failure(is CancellationError):
+                if case .analyzing = self.starAnalysisState {
+                    self.starAnalysisState = .idle
+                }
+            case .failure(let error):
+                self.starAnalysisState = .failed(error.localizedDescription)
+            }
+        }
     }
 
     func solve(catalogDirectory: URL?) {
