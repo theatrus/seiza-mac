@@ -189,8 +189,11 @@ final class LiveStackFinishedSnapshot: @unchecked Sendable {
     }
 }
 
-/// Atomic FITS publication: the native writer targets a hidden staging file
-/// beside the destination, which is renamed into place only on success.
+/// Atomic FITS publication. The native writer targets a staging file in a
+/// same-volume item-replacement directory — never beside the destination,
+/// where a sandboxed save-panel grant covers only the exact chosen path —
+/// and the finished file is swapped into place with the sandbox-sanctioned
+/// atomic replace.
 enum LiveStackAtomicFITS {
     static let stagingPrefix = ".seiza-stack-"
 
@@ -199,10 +202,21 @@ enum LiveStackAtomicFITS {
         using writer: (String, inout UnsafeMutablePointer<CChar>?) -> Bool
     ) throws {
         let destination = URL(fileURLWithPath: path)
+        let stagingDirectory = (try? FileManager.default.url(
+            for: .itemReplacementDirectory,
+            in: .userDomainMask,
+            appropriateFor: destination,
+            create: true))
+            ?? FileManager.default.temporaryDirectory
         let token = UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        let staging = destination.deletingLastPathComponent()
+        let staging = stagingDirectory
             .appendingPathComponent("\(stagingPrefix)\(token).fits")
-        defer { try? FileManager.default.removeItem(at: staging) }
+        defer {
+            try? FileManager.default.removeItem(at: staging)
+            if stagingDirectory != FileManager.default.temporaryDirectory {
+                try? FileManager.default.removeItem(at: stagingDirectory)
+            }
+        }
         var errorPointer: UnsafeMutablePointer<CChar>?
         guard writer(staging.path, &errorPointer) else {
             throw LiveStackSessionError.core(
@@ -210,8 +224,14 @@ enum LiveStackAtomicFITS {
                     "The Seiza core could not write the stack output."))
         }
         CalibrationService.discardError(&errorPointer)
-        try? FileManager.default.removeItem(at: destination)
-        try FileManager.default.moveItem(at: staging, to: destination)
+        do {
+            _ = try FileManager.default.replaceItemAt(destination, withItemAt: staging)
+        } catch {
+            // A cross-volume staging directory cannot be swapped; copy into
+            // the granted destination path instead.
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.copyItem(at: staging, to: destination)
+        }
     }
 }
 

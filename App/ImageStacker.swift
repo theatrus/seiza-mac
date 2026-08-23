@@ -561,12 +561,15 @@ enum ImageStackEngine {
         defer { seiza_stack_snapshot_free(snapshot) }
 
         if cancellation.isCancelled { throw CancellationError() }
-        errorPointer = nil
-        let wroteOutput = request.output.path.withCString { path in
-            seiza_stack_snapshot_write_fits(snapshot, path, &errorPointer)
-        }
-        guard wroteOutput else {
-            throw ImageStackError.core(takeCABIError(&errorPointer))
+        do {
+            try LiveStackAtomicFITS.write(to: request.output.path) {
+                stagingPath, stagingError in
+                stagingPath.withCString { path in
+                    seiza_stack_snapshot_write_fits(snapshot, path, &stagingError)
+                }
+            }
+        } catch {
+            throw ImageStackError.core(error.localizedDescription)
         }
         return ImageStackResult(
             output: request.output,
