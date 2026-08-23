@@ -46,6 +46,13 @@ struct SeizaApp: App {
                     appDelegate.openDocument(nil)
                 }
                 .keyboardShortcut("o")
+
+                Divider()
+
+                Button("Live Stack…") {
+                    appDelegate.openLiveStack(nil)
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
             }
             CommandGroup(after: .saveItem) {
                 Button("Export…") {
@@ -428,7 +435,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                     with: result.results.map(\.output),
                     additionalAccessURLs: result.outputAccessURLs
                 )
-                if result.rejectedFrames > 0 {
+                let showsSummary = result.results.count > 1
+                    || result.rejectedFrames > 0
+                    || result.results.contains {
+                        $0.snrAnalysis.points.count > 1 || $0.snrWarning != nil
+                    }
+                if showsSummary {
                     self.presentStackSummary(result, in: window)
                 }
             }
@@ -476,13 +488,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     private func presentStackSummary(_ result: ImageStackBatchResult, in window: NSWindow) {
         let alert = NSAlert()
-        alert.messageText = "Stack Complete"
-        let files = result.results.map { $0.output.lastPathComponent }.joined(separator: ", ")
-        alert.informativeText = "Saved \(files) with \(result.acceptedFrames) accepted and "
-            + "\(result.rejectedFrames) rejected frames."
+        alert.messageText = result.results.count == 1 ? "Stack Complete" : "Stacks Complete"
+        var lines = result.results.map { single in
+            var line = "\(single.output.lastPathComponent): "
+                + "\(single.acceptedFrames) accepted, \(single.rejectedFrames) rejected"
+            if single.snrAnalysis.points.count > 1 {
+                line += String(
+                    format: " · noise %.2f× lower", single.snrAnalysis.noiseImprovement)
+            }
+            return line
+        }
+        let warnings = Set(result.results.compactMap(\.snrWarning))
+        lines.append(contentsOf: warnings.sorted())
+        alert.informativeText = lines.joined(separator: "\n")
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Done")
+        if result.results.count == 1, let single = result.results.first,
+           single.snrAnalysis.points.count > 1 {
+            let analysis = single.snrAnalysis
+            let accessory = VStack(alignment: .leading, spacing: 8) {
+                StackSnrChartView(points: analysis.points)
+                    .frame(width: 400, height: 210)
+                Text(Self.describeStackSnr(analysis))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 400, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            let hosting = NSHostingView(rootView: accessory)
+            hosting.setFrameSize(hosting.fittingSize)
+            alert.accessoryView = hosting
+        }
         alert.beginSheetModal(for: window)
+    }
+
+    static func describeStackSnr(_ analysis: StackSnrAnalysis) -> String {
+        String(
+            format: "Measured noise improved %.2f×; an ideal square-root stack at "
+                + "this depth improves %.2f× (%.0f%% efficiency).",
+            analysis.noiseImprovement,
+            analysis.idealImprovement,
+            analysis.efficiency * 100)
+    }
+
+    @objc func openLiveStack(_ sender: Any?) {
+        LiveStackWindowController.present(
+            initialFolder: activeDocumentRootDirectory()
+        ) { [weak self] output in
+            self?.open([output])
+        }
+    }
+
+    private func activeDocumentRootDirectory() -> URL? {
+        let candidateWindows = [NSApp.keyWindow, NSApp.mainWindow].compactMap { $0 }
+        for window in candidateWindows {
+            guard let entry = documentWindows.first(where: {
+                $0.value.controller?.window === window
+            }) else { continue }
+            let root = entry.key
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(
+                atPath: root.path, isDirectory: &isDirectory)
+            else { continue }
+            return isDirectory.boolValue ? root : root.deletingLastPathComponent()
+        }
+        return nil
     }
 
     private var activeDocumentSession: DocumentWindowSession? {

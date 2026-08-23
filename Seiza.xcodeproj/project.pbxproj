@@ -41,6 +41,17 @@
 		A00000000000000000000022 /* ThumbnailLayout.swift in App Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000026 /* ThumbnailLayout.swift */; };
 		A00000000000000000000023 /* ThumbnailLayout.swift in Thumbnail Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000026 /* ThumbnailLayout.swift */; };
 		A00000000000000000000024 /* ThumbnailLayout.swift in Quick Look Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000026 /* ThumbnailLayout.swift */; };
+		A00000000000000000000030 /* StackSnr.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000030 /* StackSnr.swift */; };
+		A00000000000000000000031 /* StackSnrChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000031 /* StackSnrChartView.swift */; };
+		A00000000000000000000032 /* CalibrationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000032 /* CalibrationModel.swift */; };
+		A00000000000000000000033 /* CalibrationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000033 /* CalibrationService.swift */; };
+		A00000000000000000000034 /* CalibrationPreparationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000034 /* CalibrationPreparationService.swift */; };
+		A00000000000000000000035 /* LiveStackSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000035 /* LiveStackSession.swift */; };
+		A00000000000000000000036 /* LiveStackSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000036 /* LiveStackSessionStore.swift */; };
+		A00000000000000000000037 /* StackFolderMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000037 /* StackFolderMonitor.swift */; };
+		A00000000000000000000038 /* LiveStackCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000038 /* LiveStackCoordinator.swift */; };
+		A00000000000000000000039 /* LiveStackWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000039 /* LiveStackWindow.swift */; };
+		A0000000000000000000003A /* LiveStackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000003A /* LiveStackTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -123,6 +134,17 @@
 		B00000000000000000000024 /* SeizaThumbnail.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = SeizaThumbnail.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		B00000000000000000000025 /* QuickLookThumbnailing.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuickLookThumbnailing.framework; path = System/Library/Frameworks/QuickLookThumbnailing.framework; sourceTree = SDKROOT; };
 		B00000000000000000000026 /* ThumbnailLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThumbnailLayout.swift; sourceTree = "<group>"; };
+		B00000000000000000000030 /* StackSnr.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StackSnr.swift; sourceTree = "<group>"; };
+		B00000000000000000000031 /* StackSnrChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StackSnrChartView.swift; sourceTree = "<group>"; };
+		B00000000000000000000032 /* CalibrationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibrationModel.swift; sourceTree = "<group>"; };
+		B00000000000000000000033 /* CalibrationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibrationService.swift; sourceTree = "<group>"; };
+		B00000000000000000000034 /* CalibrationPreparationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibrationPreparationService.swift; sourceTree = "<group>"; };
+		B00000000000000000000035 /* LiveStackSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveStackSession.swift; sourceTree = "<group>"; };
+		B00000000000000000000036 /* LiveStackSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveStackSessionStore.swift; sourceTree = "<group>"; };
+		B00000000000000000000037 /* StackFolderMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StackFolderMonitor.swift; sourceTree = "<group>"; };
+		B00000000000000000000038 /* LiveStackCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveStackCoordinator.swift; sourceTree = "<group>"; };
+		B00000000000000000000039 /* LiveStackWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveStackWindow.swift; sourceTree = "<group>"; };
+		B0000000000000000000003A /* LiveStackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveStackTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -138,12 +160,12 @@
 			children = (G00000000000000000000002 /* App */, G00000000000000000000003 /* Shared */, G00000000000000000000004 /* QuickLook */, G00000000000000000000009 /* Thumbnail */, G00000000000000000000008 /* Tests */, G00000000000000000000006 /* Frameworks */, G00000000000000000000007 /* Products */, );
 			sourceTree = "<group>";
 		};
-		G00000000000000000000002 /* App */ = {isa = PBXGroup; children = (B00000000000000000000001, B00000000000000000000002, B00000000000000000000003, B00000000000000000000018, B0000000000000000000001D, B0000000000000000000001E, B0000000000000000000001F, B00000000000000000000020, B00000000000000000000004, B00000000000000000000005, B00000000000000000000016, B00000000000000000000017, B0000000000000000000001C, B0000000000000000000000B, B00000000000000000000009, ); path = App; sourceTree = "<group>"; };
+		G00000000000000000000002 /* App */ = {isa = PBXGroup; children = (B00000000000000000000001, B00000000000000000000002, B00000000000000000000003, B00000000000000000000018, B0000000000000000000001D, B0000000000000000000001E, B0000000000000000000001F, B00000000000000000000020, B00000000000000000000004, B00000000000000000000005, B00000000000000000000016, B00000000000000000000017, B0000000000000000000001C, B00000000000000000000030, B00000000000000000000031, B00000000000000000000032, B00000000000000000000033, B00000000000000000000034, B00000000000000000000035, B00000000000000000000036, B00000000000000000000037, B00000000000000000000038, B00000000000000000000039, B0000000000000000000000B, B00000000000000000000009, ); path = App; sourceTree = "<group>"; };
 		G00000000000000000000003 /* Shared */ = {isa = PBXGroup; children = (B00000000000000000000006, B00000000000000000000007, B00000000000000000000019, B00000000000000000000026, B00000000000000000000014, B00000000000000000000015, ); path = Shared; sourceTree = "<group>"; };
 		G00000000000000000000004 /* QuickLook */ = {isa = PBXGroup; children = (B00000000000000000000008, B0000000000000000000000C, B0000000000000000000000A, ); path = QuickLook; sourceTree = "<group>"; };
 		G00000000000000000000006 /* Frameworks */ = {isa = PBXGroup; children = (B00000000000000000000010, B00000000000000000000011, B00000000000000000000012, B00000000000000000000013, B00000000000000000000025, ); name = Frameworks; sourceTree = "<group>"; };
 		G00000000000000000000007 /* Products */ = {isa = PBXGroup; children = (B0000000000000000000000D, B0000000000000000000000F, B00000000000000000000024, B0000000000000000000001B, ); name = Products; sourceTree = "<group>"; };
-		G00000000000000000000008 /* Tests */ = {isa = PBXGroup; children = (B0000000000000000000001A, ); path = Tests; sourceTree = "<group>"; };
+		G00000000000000000000008 /* Tests */ = {isa = PBXGroup; children = (B0000000000000000000003A, B0000000000000000000001A, ); path = Tests; sourceTree = "<group>"; };
 		G00000000000000000000009 /* Thumbnail */ = {isa = PBXGroup; children = (B00000000000000000000021, B00000000000000000000022, ); path = Thumbnail; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
@@ -228,9 +250,9 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		F00000000000000000000005 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000001, A00000000000000000000002, A00000000000000000000003, A00000000000000000000013, A00000000000000000000018, A00000000000000000000019, A0000000000000000000001B, A0000000000000000000001C, A00000000000000000000004, A00000000000000000000005, A00000000000000000000006, A00000000000000000000007, A00000000000000000000022, A00000000000000000000011, A00000000000000000000014, ); runOnlyForDeploymentPostprocessing = 0; };
+		F00000000000000000000005 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000001, A00000000000000000000002, A00000000000000000000003, A00000000000000000000013, A00000000000000000000018, A00000000000000000000019, A0000000000000000000001B, A0000000000000000000001C, A00000000000000000000004, A00000000000000000000005, A00000000000000000000006, A00000000000000000000007, A00000000000000000000022, A00000000000000000000011, A00000000000000000000014, A00000000000000000000030, A00000000000000000000031, A00000000000000000000032, A00000000000000000000033, A00000000000000000000034, A00000000000000000000035, A00000000000000000000036, A00000000000000000000037, A00000000000000000000038, A00000000000000000000039, ); runOnlyForDeploymentPostprocessing = 0; };
 		F00000000000000000000008 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000008, A00000000000000000000009, A0000000000000000000000A, A00000000000000000000024, ); runOnlyForDeploymentPostprocessing = 0; };
-		F0000000000000000000000A /* Test Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000015, ); runOnlyForDeploymentPostprocessing = 0; };
+		F0000000000000000000000A /* Test Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000015, A0000000000000000000003A, ); runOnlyForDeploymentPostprocessing = 0; };
 		F0000000000000000000000E /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A0000000000000000000001D, A0000000000000000000001E, A00000000000000000000023, ); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
