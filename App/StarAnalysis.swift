@@ -64,14 +64,24 @@ struct StarAnalysisOptions: Equatable, Sendable {
     var noiseReductionRadius: Int? = nil
     var sensitivity: Double? = nil
     var triangleAngleDegrees: Double? = nil
+    /// A positive count makes the core retry detection with progressively
+    /// more permissive settings (a relaxed SNR gate, then native-resolution
+    /// unblurred detection) until it measures at least this many stars,
+    /// returning the best pass otherwise.
+    var targetStarCount: Int? = nil
 
     /// The only options the interactive UI sends: bounded work on large
-    /// frames without overriding the core's header classification.
+    /// frames without overriding the core's header classification. The
+    /// target count keeps rigs whose stars span only a few pixels from
+    /// starving the tilt analysis: the strict binned-and-blurred first
+    /// pass measures a fraction of such frames' stars, and the core's
+    /// adaptive ladder then re-measures at native scale.
     static let interactiveDefault = StarAnalysisOptions(
         psfType: .moffat4,
         detectionBinning: 2,
         sensitivity: 30,
-        triangleAngleDegrees: 0)
+        triangleAngleDegrees: 0,
+        targetStarCount: 200)
 
     func validate() throws {
         if (focalLengthMm == nil) != (pixelSizeUm == nil) {
@@ -103,6 +113,10 @@ struct StarAnalysisOptions: Equatable, Sendable {
         if let triangleAngleDegrees, !triangleAngleDegrees.isFinite {
             throw StarAnalysisError.invalidOptions("The triangle angle must be finite.")
         }
+        if let targetStarCount, targetStarCount <= 0 {
+            throw StarAnalysisError.invalidOptions(
+                "The target star count must be positive.")
+        }
     }
 
     /// Deterministic camelCase JSON with absent keys omitted. Validates
@@ -127,6 +141,7 @@ struct StarAnalysisOptions: Equatable, Sendable {
         if let triangleAngleDegrees {
             payload.append(("triangleAngleDegrees", triangleAngleDegrees))
         }
+        if let targetStarCount { payload.append(("targetStarCount", targetStarCount)) }
         let fields = payload.map { key, value -> String in
             switch value {
             case let text as String:
