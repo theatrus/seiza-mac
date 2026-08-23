@@ -125,6 +125,57 @@ persistent controller, allowing the Settings window to close without canceling
 it. The sandboxed app has outbound-network and user-selected read/write
 entitlements; selected directories are retained as security-scoped bookmarks.
 
+## Frame stacking and live sessions
+
+Directory stacking and live folder stacking share one native accumulator: the
+C ABI's live stacker owns registration, calibration, frame-to-frame
+normalization, rejection state, and the accepted/rejected counters. Swift
+never touches pixel math. Header classification, calibration planning, and
+frame admission all cross the ABI as versioned JSON (`seiza_probe_frame_json`,
+`seiza_calibration_plan_json`, `seiza_calibration_build_master_json`) rather
+than being reimplemented in Swift.
+
+Automatic calibration preparation probes a raw library, asks the native
+planner for one coherent selection per kind that satisfies every target light,
+and builds bias, dark, dark-flat, and flat masters in dependency order. The
+dark-flat is an internal intermediate: it is built with the native `dark`
+kind and consumed only as the flat's pedestal reference. Without a bias, the
+flat is withheld unless an uncalibrated dark-flat or dark with a known
+exposure matches every selected flat, and a freshly built flat is re-probed so
+its written metadata must still match every target. Masters are cached under
+`Application Support/Seiza/CalibrationMasters/<library-id>` keyed by a SHA-256
+fingerprint over the native kind, core version, build options, upstream
+master fingerprints, and each input's path, size, and timestamp. `flock`-based
+lock and retain leases let concurrent preparations share builds and keep
+pruning (8 GiB / 30 days) away from masters still in use.
+
+Live sessions live under `Application Support/Seiza/LiveStacks/<folder-id>`.
+The folder monitor enumerates the capture folder on a short interval; a file
+becomes a candidate only after two observations spanning a stability window
+with the same size, timestamp, and `(device, inode)` identity, so renames and
+hard links never stack twice and files still being written are never opened.
+Admission gates run in order: role must be `light`, a configured master set
+requires a raw unprocessed light, the locked filter must match, and the
+camera/geometry signature must match the reference. Checkpoints publish a
+generation pair — an opaque native context from
+`seiza_live_stacker_save_context` plus a JSON manifest holding the app-owned
+ledger, calibration epochs, SNR samples, and the expected native state — and
+flip a pointer file, keeping the previous complete generation as a fallback.
+Resume reopens the context, verifies it describes the manifest's checkpoint,
+and re-derives the reference identity before admitting new lights. Three
+invariants hold throughout: a successful native push is always followed by a
+non-cancellable ledger update; every native mutation that changes resumable
+meaning is followed by a forced checkpoint; and a completed session is retired
+only after its final export is on disk.
+
+SNR analysis reads the accumulator through `seiza_live_stacker_measure_depth`
+at doubling depths (plus the final depth). Depth comparisons divide the
+deepest measured signal by each depth's noise, because the per-reading
+signal-to-noise flatters shallow stacks; the depth chart plots that relative
+SNR against the square-root ideal anchored at the shallowest point. Live
+previews render natively from the physical linear mean through a
+robust-percentile sample-domain mapping before the display stretch.
+
 ## Data and provenance
 
 The app keeps these values distinct:

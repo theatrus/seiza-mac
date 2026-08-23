@@ -33,6 +33,20 @@ enum StackRejectionMode: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+enum StackCalibrationSource: String, CaseIterable, Identifiable, Sendable {
+    case masters
+    case automatic
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .masters: "None or existing masters"
+        case .automatic: "Build from calibration frames"
+        }
+    }
+}
+
 struct ImageStackOptions: Equatable, Sendable {
     var normalization = StackNormalizationMode.global
     var localTileSize = 256
@@ -313,6 +327,8 @@ struct ImageStackResult: Sendable {
     let acceptedFrames: Int
     let rejectedFrames: Int
     let dispositions: [ImageStackDisposition]
+    var snrAnalysis: StackSnrAnalysis = .empty
+    var snrWarning: String? = nil
 }
 
 struct ImageStackBatchResult: Sendable {
@@ -453,6 +469,18 @@ enum ImageStackEngine {
 
         var dispositions: [ImageStackDisposition] = []
         var unreadableFrames = 0
+        let snrDepths = StackSnrMeasurementSchedule.depths(
+            totalFrames: request.inputs.count)
+        var snrAttemptedDepths: Set<Int> = []
+        var snrSamples: [StackSnrMeasurement] = []
+        var snrWarning: String?
+        tryMeasureSnr(
+            liveStacker,
+            scheduledDepths: snrDepths,
+            attemptedDepths: &snrAttemptedDepths,
+            samples: &snrSamples,
+            warning: &snrWarning,
+            includeCurrentDepth: false)
         progress(ImageStackProgress(
             phase: .stacking,
             message: request.inputs[0].lastPathComponent,
@@ -487,6 +515,13 @@ enum ImageStackEngine {
             let accepted = Int(seiza_live_stacker_accepted_frames(liveStacker))
             let rejected = Int(seiza_live_stacker_rejected_frames(liveStacker))
                 + unreadableFrames
+            tryMeasureSnr(
+                liveStacker,
+                scheduledDepths: snrDepths,
+                attemptedDepths: &snrAttemptedDepths,
+                samples: &snrSamples,
+                warning: &snrWarning,
+                includeCurrentDepth: false)
             progress(ImageStackProgress(
                 phase: .stacking,
                 message: url.lastPathComponent,
@@ -501,6 +536,13 @@ enum ImageStackEngine {
         guard seiza_live_stacker_accepted_frames(liveStacker) > 1 else {
             throw ImageStackError.noAdditionalFrames(dispositions)
         }
+        tryMeasureSnr(
+            liveStacker,
+            scheduledDepths: snrDepths,
+            attemptedDepths: &snrAttemptedDepths,
+            samples: &snrSamples,
+            warning: &snrWarning,
+            includeCurrentDepth: true)
         progress(ImageStackProgress(
             phase: .writing,
             message: "Writing \(request.output.lastPathComponent)…",
@@ -531,8 +573,58 @@ enum ImageStackEngine {
             acceptedFrames: Int(seiza_stack_snapshot_accepted_frames(snapshot)),
             rejectedFrames: Int(seiza_stack_snapshot_rejected_frames(snapshot))
                 + unreadableFrames,
-            dispositions: dispositions
+            dispositions: dispositions,
+            snrAnalysis: StackSnrAnalyzer.analyze(snrSamples),
+            snrWarning: snrWarning
         )
+    }
+
+    /// Measures accumulator noise at the scheduled doubling depths and once
+    /// more at the final depth. A missing reading or a failure never affects
+    /// the stack; the first failure is kept as a warning.
+    private static func tryMeasureSnr(
+        _ liveStacker: OpaquePointer?,
+        scheduledDepths: Set<Int>,
+        attemptedDepths: inout Set<Int>,
+        samples: inout [StackSnrMeasurement],
+        warning: inout String?,
+        includeCurrentDepth: Bool
+    ) {
+        guard let liveStacker else { return }
+        let accepted = Int(seiza_live_stacker_accepted_frames(liveStacker))
+        guard accepted > 0 else { return }
+        if includeCurrentDepth {
+            // The closing measurement may retry a depth that was unavailable
+            // earlier.
+        } else {
+            guard scheduledDepths.contains(accepted),
+                attemptedDepths.insert(accepted).inserted
+            else { return }
+        }
+        guard !samples.contains(where: { Int($0.frames) == accepted }) else { return }
+
+        var sample = SeizaSnrSample()
+        var errorPointer: UnsafeMutablePointer<CChar>?
+        let result = seiza_live_stacker_measure_depth(
+            liveStacker, &sample, &errorPointer)
+        switch result {
+        case 1:
+            CalibrationService.discardError(&errorPointer)
+            guard Int(sample.frames) == accepted else { return }
+            samples.append(StackSnrMeasurement(
+                frames: sample.frames,
+                noise: sample.noise,
+                background: sample.background,
+                signal: sample.signal))
+        case 0 where errorPointer == nil:
+            break
+        default:
+            let message = CalibrationService.takeOwnedError(
+                &errorPointer, fallback: "The Seiza core could not measure the stack.")
+            if warning == nil {
+                warning = "SNR analysis was unavailable: \(message)"
+            }
+        }
     }
 
     private static func withOptionalCString<Result>(
@@ -720,11 +812,20 @@ struct ImageStackWorkflowView: View {
     @State private var referenceURLs: [String: URL] = [:]
     @State private var options = ImageStackOptions()
     @State private var calibration = ImageStackCalibration()
+    @State private var calibrationSource = StackCalibrationSource.masters
+    @State private var calibrationLibrary: URL?
     @State private var splitByFilenameFilter = true
     @State private var outputBaseName = "stacked"
     @State private var showsAdvancedOptions = false
     @State private var showsCalibration = false
     @State private var isChoosingFile = false
+    @State private var isPreparingCalibration = false
+    @State private var preparationMessage = ""
+    @State private var preparationNotice: String?
+    @State private var pendingWarnings: [String]?
+    @State private var pendingJobs: [ImageStackJob]?
+    @State private var preparedResults: [CalibrationPreparationResult] = []
+    @State private var preparationTask: Task<Void, Never>?
 
     init(urls: [URL], onComplete: @escaping (ImageStackBatchResult) -> Void) {
         precondition(!urls.isEmpty)
@@ -735,14 +836,55 @@ struct ImageStackWorkflowView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if coordinator.isRunning {
+            if coordinator.isRunning || isPreparingCalibration {
                 progressView
             } else {
                 configurationView
             }
         }
         .frame(width: 620, height: 640)
-        .interactiveDismissDisabled(coordinator.isRunning)
+        .interactiveDismissDisabled(coordinator.isRunning || isPreparingCalibration)
+        .sheet(isPresented: warningSheetBinding) {
+            CalibrationWarningsSheet(
+                warnings: pendingWarnings ?? [],
+                primaryTitle: "Continue Stacking",
+                onPrimary: {
+                    let jobs = pendingJobs
+                    pendingWarnings = nil
+                    pendingJobs = nil
+                    if let jobs {
+                        startBatch(jobs)
+                    }
+                },
+                onCancel: {
+                    pendingWarnings = nil
+                    pendingJobs = nil
+                    preparationNotice = "Stacking was cancelled before any light "
+                        + "frames were processed."
+                    releasePreparedResults()
+                })
+        }
+        .onDisappear {
+            preparationTask?.cancel()
+            releasePreparedResults()
+        }
+    }
+
+    private var warningSheetBinding: Binding<Bool> {
+        Binding(
+            get: { pendingWarnings != nil },
+            set: { presented in
+                if !presented, pendingWarnings != nil {
+                    pendingWarnings = nil
+                    pendingJobs = nil
+                    releasePreparedResults()
+                }
+            })
+    }
+
+    private func releasePreparedResults() {
+        preparedResults.forEach { $0.release() }
+        preparedResults = []
     }
 
     private var configurationView: some View {
@@ -852,18 +994,53 @@ struct ImageStackWorkflowView: View {
                     }
                 }
 
-                DisclosureGroup("Calibration Masters", isExpanded: $showsCalibration) {
-                    calibrationRow("Bias", selection: $calibration.bias)
-                    calibrationRow("Dark", selection: $calibration.dark)
-                    calibrationRow("Flat", selection: $calibration.flat)
-                    Toggle("Override dark exposure", isOn: $calibration.overridesDarkExposure)
-                        .disabled(calibration.dark == nil)
-                    if calibration.overridesDarkExposure {
-                        TextField(
-                            "Dark exposure (seconds)",
-                            value: $calibration.darkExposureSeconds,
-                            format: .number
+                DisclosureGroup("Calibration", isExpanded: $showsCalibration) {
+                    Picker("Source", selection: $calibrationSource) {
+                        ForEach(StackCalibrationSource.allCases) { source in
+                            Text(source.title).tag(source)
+                        }
+                    }
+                    if calibrationSource == .masters {
+                        calibrationRow("Bias", selection: $calibration.bias)
+                        calibrationRow("Dark", selection: $calibration.dark)
+                        calibrationRow("Flat", selection: $calibration.flat)
+                        Toggle(
+                            "Override dark exposure",
+                            isOn: $calibration.overridesDarkExposure
                         )
+                        .disabled(calibration.dark == nil)
+                        if calibration.overridesDarkExposure {
+                            TextField(
+                                "Dark exposure (seconds)",
+                                value: $calibration.darkExposureSeconds,
+                                format: .number
+                            )
+                        }
+                    } else {
+                        Text("Seiza proves one compatible calibration set across "
+                            + "every selected light, builds bias, dark, dark-flat, "
+                            + "and flat masters in dependency order, and caches "
+                            + "them for reuse.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        LabeledContent("Library") {
+                            HStack {
+                                Text(calibrationLibrary?.path
+                                    ?? "Calibration library folder")
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .foregroundStyle(
+                                        calibrationLibrary == nil
+                                            ? .secondary : .primary)
+                                Button("Choose…") { chooseCalibrationLibrary() }
+                            }
+                        }
+                        if calibrationLibrary != nil {
+                            Text("Masters will be matched independently for each "
+                                + "filter stack and cached for reuse.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
 
@@ -898,6 +1075,10 @@ struct ImageStackWorkflowView: View {
                     Text(message)
                         .foregroundStyle(.red)
                         .font(.callout)
+                } else if let message = preparationNotice {
+                    Text(message)
+                        .foregroundStyle(.secondary)
+                        .font(.callout)
                 } else if let message = coordinator.cancellationMessage {
                     Text(message)
                         .foregroundStyle(.secondary)
@@ -928,10 +1109,18 @@ struct ImageStackWorkflowView: View {
             Image(systemName: "square.stack.3d.up.fill")
                 .font(.system(size: 42))
                 .foregroundStyle(.tint)
-            Text(coordinator.isCancelling ? "Stopping…" : "Stacking Images")
+            Text(progressTitle)
                 .font(.title2.weight(.semibold))
 
-            if let progress = coordinator.progress {
+            if isPreparingCalibration {
+                ProgressView()
+                    .controlSize(.large)
+                Text(preparationMessage)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 440)
+                    .foregroundStyle(.secondary)
+            } else if let progress = coordinator.progress {
                 if let fraction = progress.fractionCompleted {
                     ProgressView(value: fraction)
                         .frame(width: 360)
@@ -952,13 +1141,22 @@ struct ImageStackWorkflowView: View {
             }
             Spacer()
             Button(coordinator.isCancelling ? "Stopping…" : "Cancel") {
-                coordinator.cancel()
+                if isPreparingCalibration {
+                    preparationTask?.cancel()
+                } else {
+                    coordinator.cancel()
+                }
             }
             .disabled(coordinator.isCancelling)
             .keyboardShortcut(.cancelAction)
             .padding(.bottom, 20)
         }
         .padding(28)
+    }
+
+    private var progressTitle: String {
+        if isPreparingCalibration { return "Preparing Calibration" }
+        return coordinator.isCancelling ? "Stopping…" : "Stacking Images"
     }
 
     private var selectedFrames: [URL] {
@@ -995,6 +1193,14 @@ struct ImageStackWorkflowView: View {
             guard !baseName.isEmpty, !baseName.contains("/"), !baseName.contains(":") else {
                 return "Enter a valid output base name."
             }
+        }
+        if calibrationSource == .automatic {
+            guard let calibrationLibrary,
+                FileManager.default.fileExists(atPath: calibrationLibrary.path)
+            else {
+                return "Choose a calibration library folder."
+            }
+            return options.validationMessage
         }
         return options.validationMessage ?? calibration.validationMessage(for: selectedFrames)
     }
@@ -1060,6 +1266,30 @@ struct ImageStackWorkflowView: View {
         }
     }
 
+    private func chooseCalibrationLibrary() {
+        isChoosingFile = true
+        Task { @MainActor in
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.allowsMultipleSelection = false
+            panel.directoryURL = calibrationLibrary
+                ?? urls.first?.deletingLastPathComponent()
+            panel.message = "Choose a library containing raw bias, dark, "
+                + "dark-flat, and flat frames."
+            panel.prompt = "Choose"
+            let url: URL? = await withCheckedContinuation { continuation in
+                panel.begin { response in
+                    continuation.resume(returning: response == .OK ? panel.url : nil)
+                }
+            }
+            if let url {
+                calibrationLibrary = url
+            }
+            isChoosingFile = false
+        }
+    }
+
     private func chooseOutputAndStart() {
         guard setupValidationMessage == nil else { return }
         isChoosingFile = true
@@ -1073,26 +1303,149 @@ struct ImageStackWorkflowView: View {
             )
             isChoosingFile = false
             guard let outputSelection else { return }
-            coordinator.start(
-                request: ImageStackBatchRequest(
-                    jobs: zip(groups, outputSelection.outputs).map { group, output in
-                        ImageStackJob(
-                            group: group,
-                            request: ImageStackRequest(
-                                inputs: orderedInputs(for: group),
-                                output: output,
-                                outputAccessURL: outputSelection.accessURL,
-                                options: options,
-                                calibration: calibration
-                            )
-                        )
+            preparationNotice = nil
+
+            guard calibrationSource == .automatic, let library = calibrationLibrary
+            else {
+                startBatch(makeJobs(
+                    groups: groups,
+                    outputSelection: outputSelection,
+                    calibrationsByGroup: [:]))
+                return
+            }
+
+            isPreparingCalibration = true
+            preparationMessage = "Inspecting target light headers…"
+            preparationTask = Task { @MainActor in
+                do {
+                    let prepared = try await prepareCalibrations(
+                        groups: groups, library: library)
+                    isPreparingCalibration = false
+                    let jobs = makeJobs(
+                        groups: groups,
+                        outputSelection: outputSelection,
+                        calibrationsByGroup: prepared.byGroup)
+                    if prepared.warnings.isEmpty {
+                        startBatch(jobs)
+                    } else {
+                        pendingJobs = jobs
+                        pendingWarnings = prepared.warnings
                     }
-                ),
-                onSuccess: { result in
-                    dismiss()
-                    onComplete(result)
+                } catch is CancellationError {
+                    isPreparingCalibration = false
+                    preparationNotice = "Calibration preparation was cancelled."
+                    releasePreparedResults()
+                } catch {
+                    isPreparingCalibration = false
+                    preparationNotice = error.localizedDescription
+                    releasePreparedResults()
                 }
+            }
+        }
+    }
+
+    private func makeJobs(
+        groups: [ImageStackGroup],
+        outputSelection: StackFilePanels.OutputSelection,
+        calibrationsByGroup: [String: ImageStackCalibration]
+    ) -> [ImageStackJob] {
+        zip(groups, outputSelection.outputs).map { group, output in
+            ImageStackJob(
+                group: group,
+                request: ImageStackRequest(
+                    inputs: orderedInputs(for: group),
+                    output: output,
+                    outputAccessURL: outputSelection.accessURL,
+                    options: options,
+                    calibration: calibrationsByGroup[group.id]
+                        ?? (calibrationSource == .automatic
+                            ? ImageStackCalibration()
+                            : calibration)
+                )
             )
+        }
+    }
+
+    private func startBatch(_ jobs: [ImageStackJob]) {
+        coordinator.start(
+            request: ImageStackBatchRequest(jobs: jobs),
+            onSuccess: { result in
+                dismiss()
+                onComplete(result)
+            }
+        )
+    }
+
+    private struct BatchPreparation {
+        var byGroup: [String: ImageStackCalibration] = [:]
+        var warnings: [String] = []
+    }
+
+    /// Probes every group's lights and prepares one master set per filter
+    /// group, protecting masters produced for earlier groups from pruning.
+    private func prepareCalibrations(
+        groups: [ImageStackGroup],
+        library: URL
+    ) async throws -> BatchPreparation {
+        var preparation = BatchPreparation()
+        var protectedMasters: [String] = []
+        let cacheDirectory = CalibrationCachePaths.forLibrary(library.path)
+        let service = CalibrationPreparationService()
+
+        for (index, group) in groups.enumerated() {
+            preparationMessage = "\(group.title): inspecting target light headers…"
+            let inputs = orderedInputs(for: group).map(\.path)
+            let probes = try await probeLights(inputs)
+            guard let reference = probes.first else { continue }
+
+            let request = CalibrationPreparationRequest(
+                reference: reference,
+                targetLights: Array(probes.dropFirst()),
+                sourcePaths: [library.path],
+                cacheDirectory: cacheDirectory,
+                protectedMasterPaths: protectedMasters)
+            let title = group.title
+            let count = groups.count
+            let position = index + 1
+            let result = try await service.prepare(request) { update in
+                Task { @MainActor in
+                    preparationMessage =
+                        "\(title) (\(position) of \(count)): \(update.message)"
+                }
+            }
+            preparedResults.append(result)
+            preparation.byGroup[group.id] = result.calibration
+            preparation.warnings.append(
+                contentsOf: result.warnings.map { "\(title): \($0)" })
+            protectedMasters.append(
+                contentsOf: result.summaries.compactMap(\.masterPath))
+        }
+        return preparation
+    }
+
+    private func probeLights(_ paths: [String]) async throws -> [CalibrationFrameProbe] {
+        var probesByPath: [String: CalibrationFrameProbe] = [:]
+        try await withThrowingTaskGroup(of: CalibrationFrameProbe.self) { group in
+            var iterator = paths.makeIterator()
+            var inFlight = 0
+            func enqueueNext() {
+                guard let path = iterator.next() else { return }
+                inFlight += 1
+                group.addTask {
+                    try CalibrationService.probe(path: path)
+                }
+            }
+            for _ in 0..<4 {
+                enqueueNext()
+            }
+            while inFlight > 0, let probe = try await group.next() {
+                inFlight -= 1
+                probesByPath[probe.path.lowercased()] = probe
+                enqueueNext()
+            }
+        }
+        return paths.compactMap { path in
+            probesByPath[LiveStackPath.normalize(path).lowercased()]
         }
     }
 }
