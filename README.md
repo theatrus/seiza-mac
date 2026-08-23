@@ -7,7 +7,7 @@ FITS or XISF data, inspect headers, plate-solve a frame, and see the stars and d
 objects in it. Everything runs locally, and Seiza never solves an image until
 you ask it to.
 
-[**Download Seiza for Mac 0.6.2**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.6.2-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
+[**Download Seiza for Mac 0.7.0**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.7.0-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
 **Also from Seiza:** [Core, CLI, and libraries](https://github.com/theatrus/seiza) ·
 [Seiza for Windows](https://github.com/theatrus/seiza-win)
@@ -60,7 +60,7 @@ Electron, web view, or local server.
 
 ## Download
 
-[**Download Seiza for Mac 0.6.2**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.6.2-universal.dmg), open it, and drag Seiza to Applications.
+[**Download Seiza for Mac 0.7.0**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.7.0-universal.dmg), open it, and drag Seiza to Applications.
 
 Or install with [Homebrew](https://brew.sh) from the
 [theatrus/homebrew-seiza tap](https://github.com/theatrus/homebrew-seiza):
