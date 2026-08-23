@@ -61,8 +61,12 @@ raw bias, dark, dark-flat, and flat frames. Seiza inspects each frame's
 headers, matches camera and optics metadata against every selected light, and
 builds masters in dependency order into a cache it reuses on later runs. Seiza
 withholds a flat unless a bias, or an uncalibrated dark-flat with a matching
-known exposure, proves a safe pedestal-removal path. If preparation raises warnings,
-Seiza shows them before it processes any light frame so you can cancel.
+known exposure, proves a safe pedestal-removal path. A selected frame that
+cannot be inspected, or that is not a raw light — a master, or an already
+calibrated file — is set aside from matching with a warning; the stack still
+runs, and the native per-frame admission decides that frame's fate. If
+preparation raises warnings, Seiza shows them before it processes any light
+frame so you can cancel.
 
 For a filter split, enter a base name, click **Choose Output and Stack**, and
 choose an output folder. Seiza adds suffixes such as `-Ha` and `-OIII`. Without

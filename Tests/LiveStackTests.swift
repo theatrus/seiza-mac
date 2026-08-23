@@ -853,6 +853,72 @@ final class LiveStackNativeSessionTests: XCTestCase {
     }
 }
 
+// MARK: - Target selection tolerance
+
+final class CalibrationTargetSelectionTests: XCTestCase {
+    func testIneligibleFramesAreSetAsideWithAWarningNotRefused() {
+        var master = CalibrationFrameProbe(path: "/frames/master.fits", role: "light")
+        master.isMaster = true
+        var preprocessed = CalibrationFrameProbe(
+            path: "/frames/processed.fits", role: "light")
+        preprocessed.calibrationState.darkSubtracted = true
+        let flat = CalibrationFrameProbe(path: "/frames/flat.fits", role: "flat")
+        let light = CalibrationFrameProbe(path: "/frames/light.fits", role: "light")
+
+        let partition = CalibrationTargetSelection.partition(
+            [master, preprocessed, flat, light])
+        XCTAssertEqual(partition.eligible.map(\.path), ["/frames/light.fits"])
+        XCTAssertEqual(partition.warnings.count, 3)
+        XCTAssertTrue(partition.warnings[0].contains("master.fits"))
+        XCTAssertTrue(partition.warnings[0].contains("already a master"))
+        XCTAssertTrue(partition.warnings[1].contains("already preprocessed"))
+        XCTAssertTrue(partition.warnings[2].contains("not a light frame"))
+    }
+
+    func testAnAllEligibleGroupProducesNoWarnings() {
+        let lights = (1...3).map {
+            CalibrationFrameProbe(path: "/frames/light-\($0).fits", role: "light")
+        }
+        let partition = CalibrationTargetSelection.partition(lights)
+        XCTAssertEqual(partition.eligible.count, 3)
+        XCTAssertTrue(partition.warnings.isEmpty)
+    }
+}
+
+final class LiveStackReferenceScanTests: XCTestCase {
+    func testReferenceScanSkipsMastersAndPreprocessedFrames() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("seiza-reference-scan-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let values = SyntheticFrame.starField(width: 160, height: 128)
+        // Oldest first: a declared master, then a preprocessed light, then
+        // an unreadable file, then the raw light the scan should anchor on.
+        _ = try SyntheticFrame.write(
+            width: 160, height: 128, values: values,
+            cards: ["SEIZAMST= 'LIGHT'"] + SyntheticFrame.lightCards(),
+            directory: directory, name: "a-master.fits")
+        _ = try SyntheticFrame.write(
+            width: 160, height: 128, values: values,
+            cards: ["BIASSUB =                    T"] + SyntheticFrame.lightCards(),
+            directory: directory, name: "b-processed.fits")
+        try Data("not a fits file".utf8).write(
+            to: directory.appendingPathComponent("c-truncated.fits"))
+        let raw = try SyntheticFrame.write(
+            width: 160, height: 128, values: values,
+            cards: SyntheticFrame.lightCards(),
+            directory: directory, name: "d-light.fits")
+
+        let reference = try LiveStackWindowModel.findReferenceLight(
+            inFolder: directory.path, includeSubdirectories: false)
+        XCTAssertEqual(reference?.path, LiveStackPath.normalize(raw.path))
+        XCTAssertEqual(reference?.role, "light")
+        XCTAssertEqual(reference?.isMaster, false)
+    }
+}
+
 // MARK: - Calibration preparation end to end
 
 final class CalibrationPreparationServiceTests: XCTestCase {

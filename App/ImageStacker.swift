@@ -1385,17 +1385,27 @@ struct ImageStackWorkflowView: View {
 
         for (index, group) in groups.enumerated() {
             preparationMessage = "\(group.title): inspecting target light headers…"
+            let title = group.title
             let inputs = orderedInputs(for: group).map(\.path)
-            let probes = try await probeLights(inputs)
-            guard let reference = probes.first else { continue }
+            let probed = try await probeLights(inputs)
+            preparation.warnings.append(
+                contentsOf: probed.warnings.map { "\(title): \($0)" })
+            let selection = CalibrationTargetSelection.partition(probed.probes)
+            preparation.warnings.append(
+                contentsOf: selection.warnings.map { "\(title): \($0)" })
+            guard let reference = selection.eligible.first else {
+                preparation.warnings.append(
+                    "\(title): no raw light frame could be inspected; the stack "
+                        + "runs without automatic calibration.")
+                continue
+            }
 
             let request = CalibrationPreparationRequest(
                 reference: reference,
-                targetLights: Array(probes.dropFirst()),
+                targetLights: Array(selection.eligible.dropFirst()),
                 sourcePaths: [library.path],
                 cacheDirectory: cacheDirectory,
                 protectedMasterPaths: protectedMasters)
-            let title = group.title
             let count = groups.count
             let position = index + 1
             let result = try await service.prepare(request) { update in
@@ -1414,32 +1424,61 @@ struct ImageStackWorkflowView: View {
         return preparation
     }
 
-    private func probeLights(_ paths: [String]) async throws -> [CalibrationFrameProbe] {
-        var probesByPath: [String: CalibrationFrameProbe] = [:]
-        try await withThrowingTaskGroup(of: CalibrationFrameProbe.self) { group in
-            var iterator = paths.makeIterator()
+    /// Probes a group's lights, tolerating unreadable files: an overnight
+    /// batch is not refused because one frame's header cannot be read. The
+    /// frame is still offered to the stacker, whose native admission decides
+    /// its fate.
+    private func probeLights(
+        _ paths: [String]
+    ) async throws -> (probes: [CalibrationFrameProbe], warnings: [String]) {
+        enum ProbeResult: Sendable {
+            case probed(index: Int, probe: CalibrationFrameProbe)
+            case failed(index: Int, path: String, message: String)
+        }
+
+        var probesByIndex: [Int: CalibrationFrameProbe] = [:]
+        var failures: [(index: Int, path: String, message: String)] = []
+        try await withThrowingTaskGroup(of: ProbeResult.self) { group in
+            var iterator = paths.enumerated().makeIterator()
             var inFlight = 0
             func enqueueNext() {
-                guard let path = iterator.next() else { return }
+                guard let (index, path) = iterator.next() else { return }
                 inFlight += 1
                 group.addTask {
-                    try await runBlocking {
-                        try CalibrationService.probe(path: path)
+                    do {
+                        let probe = try await runBlocking {
+                            try CalibrationService.probe(path: path)
+                        }
+                        return .probed(index: index, probe: probe)
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        return .failed(
+                            index: index, path: path,
+                            message: error.localizedDescription)
                     }
                 }
             }
             for _ in 0..<4 {
                 enqueueNext()
             }
-            while inFlight > 0, let probe = try await group.next() {
+            while inFlight > 0, let result = try await group.next() {
                 inFlight -= 1
-                probesByPath[probe.path.lowercased()] = probe
+                switch result {
+                case .probed(let index, let probe):
+                    probesByIndex[index] = probe
+                case .failed(let index, let path, let message):
+                    failures.append((index, path, message))
+                }
                 enqueueNext()
             }
         }
-        return paths.compactMap { path in
-            probesByPath[LiveStackPath.normalize(path).lowercased()]
+        let probes = paths.indices.compactMap { probesByIndex[$0] }
+        let warnings = failures.sorted { $0.index < $1.index }.map { failure in
+            let name = URL(fileURLWithPath: failure.path).lastPathComponent
+            return "Could not inspect \(name): \(failure.message)"
         }
+        return (probes, warnings)
     }
 }
 
