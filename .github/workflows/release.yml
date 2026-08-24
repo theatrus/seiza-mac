@@ -225,11 +225,9 @@ jobs:
             '' \
             "### New in ${version}" \
             '' \
-            '- Live folder stacking watches a capture session, calibrates each light frame with matched darks and flats, and stacks it as it lands, with accepted and rejected counts and an SNR depth chart.' \
-            '- Live stacks checkpoint their exact native state, so you can pause, quit, or crash and resume the same accumulator.' \
-            '- Automatic calibration sets aside unreadable or mismatched frames with a warning instead of refusing the whole batch.' \
-            '- A new Analyze action measures stars in the linear source image without a solve: HFR, FWHM, background, and noise, with a 3-by-3 sensor-tilt grid, corner tilt and field-curvature verdicts, and parallelogram and triangle tilt diagrams.' \
-            '- The native core moves to Seiza 0.15.5.' \
+            '- Star measurement now retries with progressively finer detection when a frame yields too few stars, following ASTAP. Rigs whose stars span only a few pixels go from tens to hundreds of measured stars, the sensor tilt grid fills, and the tilt diagrams become available on frames that previously could not support them.' \
+            '- Measured HFR and FWHM on such frames now reflect the native pixel scale instead of values inflated by detection binning and blur.' \
+            '- The native core moves to Seiza 0.18.8.' \
             '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
             "- [Download the zipped application](${release_base}/Seiza-${version}-universal.zip)" \
