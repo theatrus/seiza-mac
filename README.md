@@ -7,7 +7,7 @@ FITS or XISF data, inspect headers, plate-solve a frame, and see the stars and d
 objects in it. Everything runs locally, and Seiza never solves an image until
 you ask it to.
 
-[**Download Seiza for Mac 0.7.1**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.7.1-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
+[**Download Seiza for Mac 0.7.2**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.7.2-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
 **Also from Seiza:** [Core, CLI, and libraries](https://github.com/theatrus/seiza) ·
 [Seiza for Windows](https://github.com/theatrus/seiza-win)
@@ -42,7 +42,7 @@ Electron, web view, or local server.
 | Fast folder review | Browses mixed-format local or network folders without blocking the app, with arrow keys, a thumbnail drawer, a local cache, and nearby-image preloading. |
 | Directory stacking | Aligns and combines selected FITS or XISF frames from an open folder. It recognizes common filename filters such as L/R/G/B, Ha, OIII, S/SII, and H-beta, while keeping custom filter names unchanged. Save one stack per detected filter or turn grouping off for one output. Choose references, normalization, sample rejection, registration limits, and calibration: pick existing masters, or point Seiza at raw bias, dark, dark-flat, and flat frames and let the shared core match camera metadata, prove one safe set against every light in each group, and build masters in dependency order into a reusable cache. Follow progress, cancel between frames, and open the saved 32-bit floating-point FITS results. Measurements at doubling depths show the achieved noise reduction against the square-root ideal. |
 | Live folder stacking | Watches a capture folder while an imaging session runs. Seiza waits until each FITS or XISF file stops changing, checks that it is a raw, compatible light frame, and registers it into a filter-locked stack. The live window shows a bounded autostretched preview, accepted and rejected counts, calibration epochs, checkpoint health, and an SNR depth chart. Save a non-destructive FITS snapshot at any time or finish the accumulator into the final 32-bit floating-point stack. Sessions checkpoint the exact native state: pause, close, or crash, then reopen the window and resume the same accumulator, with the previous complete generation as a fallback after an interrupted write. |
-| Astronomy rendering | Displays mono, planar RGB, and Bayer/OSC data through the full-precision Seiza core. |
+| Astronomy rendering | Displays mono, planar RGB, and Bayer/OSC data through the full-precision Seiza core. Filtered reductions limit noise aliasing in the viewer and previews, while full-resolution images keep crisp source pixels at 1:1 and higher zoom. |
 | Live stretch stacks | Adds, removes, reorders, and edits automatic or manual stages. Pick GHS symmetry points from the image, choose linked, per-channel, or luminance-preserving color, copy settings between images, and undo or redo each change. |
 | Responsive previews | Renders a quick zoom-aware preview off the main thread, cancels stale work, then replaces it with a source-resolution render. |
 | Background correction | Fits automatic, polynomial, or radial-basis gradient models to linear mono or color data. Choose additive subtraction or multiplicative illumination correction, tune the amount, and inspect each change through live preview. |
@@ -60,7 +60,7 @@ Electron, web view, or local server.
 
 ## Download
 
-[**Download Seiza for Mac 0.7.1**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.7.1-universal.dmg), open it, and drag Seiza to Applications.
+[**Download Seiza for Mac 0.7.2**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.7.2-universal.dmg), open it, and drag Seiza to Applications.
 
 Or install with [Homebrew](https://brew.sh) from the
 [theatrus/homebrew-seiza tap](https://github.com/theatrus/homebrew-seiza):
