@@ -225,9 +225,10 @@ jobs:
             '' \
             "### New in ${version}" \
             '' \
-            '- Star measurement now retries with progressively finer detection when a frame yields too few stars, following ASTAP. Rigs whose stars span only a few pixels go from tens to hundreds of measured stars, the sensor tilt grid fills, and the tilt diagrams become available on frames that previously could not support them.' \
-            '- Measured HFR and FWHM on such frames now reflect the native pixel scale instead of values inflated by detection binning and blur.' \
-            '- The native core moves to Seiza 0.18.8.' \
+            '- Reduced images now use filtered scaling throughout the viewer, thumbnail drawer, live-stack pane, and Finder previews. Area averaging in the core reduces noise aliasing and keeps small bright features in the reduced image.' \
+            '- Viewport filtering accounts for Retina scale and the actual preview bitmap. Full-resolution images keep crisp source pixels at 1:1 and higher zoom.' \
+            '- Thumbnail caches now track the core version so updates discard old point-sampled previews.' \
+            '- The native core moves to Seiza 0.18.14, including updated FITS/XISF decoding and stacking fixes. Full-size exports keep their source resolution and bit depth.' \
             '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
             "- [Download the zipped application](${release_base}/Seiza-${version}-universal.zip)" \
