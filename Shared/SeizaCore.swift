@@ -1363,7 +1363,7 @@ enum SeizaCore {
         data: Data,
         width: Int,
         height: Int,
-        shouldInterpolate: Bool = false
+        shouldInterpolate: Bool = true
     ) -> CGImage? {
         guard width > 0, height > 0, data.count == width * height * 4,
             let provider = CGDataProvider(data: data as CFData)

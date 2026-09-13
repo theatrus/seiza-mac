@@ -200,7 +200,8 @@ enum ImageThumbnailCache {
         // and render lookup, and a source may sit on a slow network share.
         // A full render overwrites the path-based thumbnail with current data.
         let signature = [
-            "thumbnail-cache-v2",
+            "thumbnail-cache-v3",
+            "core:\(SeizaCore.version)",
             url.standardizedFileURL.path,
             "astronomy-processing:\(processing.cacheIdentifier)",
         ].joined(separator: "\n")

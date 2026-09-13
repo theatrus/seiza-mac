@@ -390,7 +390,7 @@ private struct ImageBrowserRow: View {
 
                 if let image = model.image {
                     Image(decorative: image, scale: 1)
-                        .interpolation(.none)
+                        .interpolation(.high)
                         .resizable()
                         .scaledToFit()
                 } else if model.failed {
@@ -1458,7 +1458,12 @@ private struct ImagePageView: View {
                     Color.black
                     ZStack(alignment: .topLeading) {
                         Image(decorative: image, scale: 1)
-                            .interpolation(.none)
+                            .interpolation(ImageSampling.needsFiltering(
+                                bitmapSize: CGSize(width: image.width, height: image.height),
+                                sourceSize: sourceSize(for: image),
+                                drawingSize: metrics.imageSize,
+                                displayScale: displayScale
+                            ) ? .high : .none)
                             .resizable()
                             .frame(width: metrics.imageSize.width, height: metrics.imageSize.height)
                             .clipped(antialiased: false)

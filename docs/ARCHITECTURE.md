@@ -63,6 +63,26 @@ including them does not down-convert the source. This boundary is based on the
 rendered pixels rather than the source extension, allowing another supported
 high-depth input such as XISF to reuse it.
 
+### Display scaling
+
+The viewport uses high-quality interpolation when it reduces a bitmap. It
+compares the drawn size in physical screen pixels with the actual bitmap size,
+so the choice stays correct on Retina displays and during live previews.
+Full-resolution images at 1:1 or larger use nearest-neighbor sampling for pixel
+inspection. Reduced live-preview bitmaps stay filtered when enlarged.
+
+The directory drawer and live-stack pane use high-quality interpolation.
+Quick Look, Finder thumbnails, and thumbnails made from full renders also use
+high-quality native drawing. RGBA8 images allow interpolation; each drawing
+surface chooses its filter. Export still draws at source size without a display
+resize. Thumbnail cache keys include the core version, so a core update does
+not reuse old point-sampled thumbnails.
+
+The locked `seiza-cabi` 0.18.14 includes the area-downsampling change in
+[seiza#177](https://github.com/theatrus/seiza/pull/177). It averages covered pixels
+inside the C ABI for bounded RGBA8/RGBA16 renders, interactive linear samples,
+and live-stack previews. Native filtering then handles the final display size.
+
 FITS and XISF display rendering sends a non-empty, ordered stack of validated stretch
 configurations to the C ABI. Rust keeps intermediate stage data in `f32` and
 only converts the final result to RGBA, so the Swift undo/redo history never
@@ -90,8 +110,9 @@ document changes or disappears, so it cannot keep editing a stale image model.
 Interactive controls debounce edits and submit them to a serial latest-only
 preview queue. Pending work is cancelled when a newer edit arrives; a native
 render already inside the C ABI may finish, but its result is discarded. Only
-the newest result can update the document. The preview is bounded to 2048
-pixels while the committed full-resolution render remains separate for export,
+the newest result can update the document. The preview starts with a 2048-pixel
+limit and raises it to match zoom and screen scale, up to source resolution.
+A full-resolution render follows a bounded preview. The committed image remains separate for export,
 and source dimensions from metadata keep zoom and overlay geometry stable while
 the preview is visible. The C ABI retains the two most recent prepared linear
 preview buffers, keyed by file identity, preview size, and background settings.

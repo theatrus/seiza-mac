@@ -791,6 +791,7 @@ private struct LiveStackRunningView: View {
                 .fill(Color(red: 0.035, green: 0.04, blue: 0.047))
             if let image = model.previewImage {
                 Image(decorative: image, scale: 1)
+                    .interpolation(.high)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .padding(6)
