@@ -1335,6 +1335,33 @@ final class RenderBoundaryTests: XCTestCase {
         }
     }
 
+    func testPublishedCoreAveragesReducedFITS() throws {
+        let values: [Int16] = (0..<64).map { index in
+            (index / 8 + index % 8) % 2 == 0 ? Int16.min : Int16.max
+        }
+        let url = try writeSyntheticFITS(width: 8, height: 8, values: values)
+        defer { try? FileManager.default.removeItem(at: url) }
+        // Keep this sampling test independent of auto-stretch statistics.
+        let processing = FITSImageProcessingConfiguration(
+            stretchStack: FITSStretchStack(stages: [.identity]),
+            extractsBackground: false
+        )
+        let full = try SeizaCore.render(url: url, processing: processing)
+        let reduced = try SeizaCore.render(url: url, maxDimension: 2, processing: processing)
+        XCTAssertEqual(reduced.image.width, 2)
+        XCTAssertEqual(reduced.image.height, 2)
+        let source = try XCTUnwrap(full.image.dataProvider?.data) as Data
+        let output = try XCTUnwrap(reduced.image.dataProvider?.data) as Data
+        XCTAssertNotEqual(source[0], source[4])
+        for channel in 0..<3 {
+            let expected = UInt8((Int(source[channel]) + Int(source[4 + channel]) + 1) / 2)
+            for pixel in 0..<4 {
+                XCTAssertEqual(output[pixel * 4 + channel], expected)
+                XCTAssertEqual(output[pixel * 4 + 3], 255)
+            }
+        }
+    }
+
     private func writeSyntheticFITS(
         width: Int,
         height: Int,

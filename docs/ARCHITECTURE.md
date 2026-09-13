@@ -78,11 +78,10 @@ surface chooses its filter. Export still draws at source size without a display
 resize. Thumbnail cache keys include the core version, so a core update does
 not reuse old point-sampled thumbnails.
 
-The locked core still needs the area-downsampling change in
-[seiza#177](https://github.com/theatrus/seiza/pull/177). Once that change ships on
-crates.io, update the lockfile. It fixes reductions inside the C ABI for bounded
-RGBA8/RGBA16 renders, interactive linear samples, and live-stack previews. Native
-filtering cannot restore samples already lost by the old core reduction.
+The locked `seiza-cabi` 0.18.14 includes the area-downsampling change in
+[seiza#177](https://github.com/theatrus/seiza/pull/177). It averages covered pixels
+inside the C ABI for bounded RGBA8/RGBA16 renders, interactive linear samples,
+and live-stack previews. Native filtering then handles the final display size.
 
 FITS and XISF display rendering sends a non-empty, ordered stack of validated stretch
 configurations to the C ABI. Rust keeps intermediate stage data in `f32` and
