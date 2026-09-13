@@ -434,6 +434,75 @@ final class DocumentRegistrationTests: XCTestCase {
     }
 }
 
+final class ImageSamplingTests: XCTestCase {
+    func testReductionUsesPhysicalPixels() {
+        let source = CGSize(width: 4000, height: 2000)
+        XCTAssertTrue(ImageSampling.needsFiltering(
+            bitmapSize: source, sourceSize: source,
+            drawingSize: CGSize(width: 1000, height: 500), displayScale: 2
+        ))
+        XCTAssertFalse(ImageSampling.needsFiltering(
+            bitmapSize: source, sourceSize: source,
+            drawingSize: CGSize(width: 2000, height: 1000), displayScale: 2
+        ))
+        XCTAssertFalse(ImageSampling.needsFiltering(
+            bitmapSize: source, sourceSize: source,
+            drawingSize: source, displayScale: 2
+        ))
+    }
+
+    func testEnlargedResponsivePreviewStaysFiltered() {
+        XCTAssertTrue(ImageSampling.needsFiltering(
+            bitmapSize: CGSize(width: 2048, height: 1024),
+            sourceSize: CGSize(width: 8000, height: 4000),
+            drawingSize: CGSize(width: 4000, height: 2000), displayScale: 2
+        ))
+    }
+
+    func testEitherShrinkingAxisNeedsFiltering() {
+        XCTAssertTrue(ImageSampling.needsFiltering(
+            bitmapSize: CGSize(width: 100, height: 100),
+            sourceSize: CGSize(width: 100, height: 100),
+            drawingSize: CGSize(width: 200, height: 50), displayScale: 1
+        ))
+    }
+
+    func testDisplayImagesAllowInterpolation() throws {
+        let image = try XCTUnwrap(SeizaCore.makeRGBA8Image(
+            data: Data([100, 100, 100, 255]), width: 1, height: 1
+        ))
+        XCTAssertTrue(image.shouldInterpolate)
+        let unfiltered = try XCTUnwrap(SeizaCore.makeRGBA8Image(
+            data: Data([100, 100, 100, 255]), width: 1, height: 1,
+            shouldInterpolate: false
+        ))
+        XCTAssertFalse(unfiltered.shouldInterpolate)
+    }
+
+    func testNativeThumbnailReductionAveragesFineNoise() throws {
+        let pixels = (0..<64 * 64).flatMap { index -> [UInt8] in
+            let value: UInt8 = (index / 64 + index % 64) % 2 == 0 ? 0 : 255
+            return [value, value, value, 255]
+        }
+        let image = try XCTUnwrap(SeizaCore.makeRGBA8Image(
+            data: Data(pixels), width: 64, height: 64
+        ))
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 32,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        ThumbnailLayout.draw(image, in: context)
+        let bytes = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
+        for y in 1..<7 {
+            for x in 1..<7 {
+                let value = Int(bytes[(y * 8 + x) * 4])
+                XCTAssertLessThan(abs(value - 128), 8)
+            }
+        }
+    }
+}
+
 final class ThumbnailLayoutTests: XCTestCase {
     func testAspectFitRectTracksTheCurrentPreviewBounds() {
         let wideImage = CGSize(width: 4_000, height: 2_000)

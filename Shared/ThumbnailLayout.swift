@@ -1,5 +1,22 @@
 import CoreGraphics
 
+enum ImageSampling {
+    /// Compare bitmap pixels with physical display pixels, not window points.
+    /// A reduced live preview stays filtered even when enlarged; it is not a
+    /// source-resolution pixel-inspection image.
+    static func needsFiltering(
+        bitmapSize: CGSize,
+        sourceSize: CGSize,
+        drawingSize: CGSize,
+        displayScale: CGFloat
+    ) -> Bool {
+        bitmapSize.width < sourceSize.width
+            || bitmapSize.height < sourceSize.height
+            || drawingSize.width * displayScale < bitmapSize.width
+            || drawingSize.height * displayScale < bitmapSize.height
+    }
+}
+
 enum ThumbnailLayout {
     static func aspectFitRect(
         imageSize: CGSize,
