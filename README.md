@@ -89,9 +89,12 @@ The bundles support Apple silicon and Intel and are Developer ID signed,
 notarized, and stapled. Configure import defaults under
 **Photoshop → About Plug-In → FITS/XISF**.
 
+Starting with plugin 0.5.0, same-format saves retain source headers and metadata;
+switching formats copies compatible FITS keywords on a best-effort basis.
 Keep your original FITS/XISF files: 16-bit import rescales the image and loses
-absolute scale and precision, and plugin saves flatten pixels and omit source
-metadata. Use PSD/PSB to retain Photoshop layers.
+absolute scale and precision. Re-solve astrometry after geometric edits, and use
+PSD/PSB to retain Photoshop layers. See the
+[metadata retention limits](https://github.com/theatrus/xisf-photoshop#metadata-retention).
 
 ## Build
 
