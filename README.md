@@ -81,12 +81,18 @@ let you open and save astronomy images directly in Photoshop using Seiza's codec
 Import as Float32 or rescaled 16-bit integer, optionally debayer Bayer mosaics to
 RGB, and save at the document's 16- or 32-bit depth by default.
 
-Download the **universal macOS plugin ZIP** from the
+Download the **universal macOS plugin DMG** from the
 [latest release](https://github.com/theatrus/xisf-photoshop/releases/latest).
-Extract it on your Mac, close Photoshop, copy both `.plugin` bundles from the
-`macos` folder into Photoshop's `Plug-ins` folder, and restart Photoshop.
-The bundles support Apple silicon and Intel and are Developer ID signed,
-notarized, and stapled. Configure import defaults under
+Close Photoshop, open the DMG, and drag both `.plugin` bundles onto the
+**Photoshop Plug-ins** shortcut. Approve any administrator prompt, eject the
+DMG, and restart Photoshop. The shortcut targets Adobe's shared folder at
+`/Library/Application Support/Adobe/Plug-Ins/CC`. Remove older copies from
+Photoshop application or custom folders when switching to this location.
+If the shared folder is missing, see the
+[installation guide](https://github.com/theatrus/xisf-photoshop#macos-installation-dmg).
+A ZIP remains available as an alternative. The DMG and bundles support Apple
+silicon and Intel and are Developer ID signed, notarized, and stapled.
+Configure import defaults under
 **Photoshop → About Plug-In → FITS/XISF**.
 
 Starting with plugin 0.5.0, same-format saves retain source headers and metadata;
