@@ -10,7 +10,8 @@ you ask it to.
 [**Download Seiza for Mac 0.7.2**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.7.2-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
 **Also from Seiza:** [Core, CLI, and libraries](https://github.com/theatrus/seiza) ·
-[Seiza for Windows](https://github.com/theatrus/seiza-win)
+[Seiza for Windows](https://github.com/theatrus/seiza-win) ·
+[FITS and XISF for Photoshop](https://github.com/theatrus/xisf-photoshop)
 
 ## See what is in the frame
 
@@ -72,6 +73,25 @@ brew install --cask theatrus/seiza/seiza-mac
 Seiza requires macOS 15 or newer. The same download runs natively on Apple
 silicon and Intel Macs. Release builds are signed with Developer ID and
 notarized by Apple.
+
+## Open FITS and XISF in Photoshop
+
+The separate [FITS and XISF Photoshop plugins](https://github.com/theatrus/xisf-photoshop)
+let you open and save astronomy images directly in Photoshop using Seiza's codecs.
+Import as Float32 or rescaled 16-bit integer, optionally debayer Bayer mosaics to
+RGB, and save at the document's 16- or 32-bit depth by default.
+
+Download the **universal macOS plugin ZIP** from the
+[latest release](https://github.com/theatrus/xisf-photoshop/releases/latest).
+Extract it on your Mac, close Photoshop, copy both `.plugin` bundles from the
+`macos` folder into Photoshop's `Plug-ins` folder, and restart Photoshop.
+The bundles support Apple silicon and Intel and are Developer ID signed,
+notarized, and stapled. Configure import defaults under
+**Photoshop → About Plug-In → FITS/XISF**.
+
+Keep your original FITS/XISF files: 16-bit import rescales the image and loses
+absolute scale and precision, and plugin saves flatten pixels and omit source
+metadata. Use PSD/PSB to retain Photoshop layers.
 
 ## Build
 
