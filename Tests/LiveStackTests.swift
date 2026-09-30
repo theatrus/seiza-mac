@@ -841,6 +841,29 @@ final class LiveStackNativeSessionTests: XCTestCase {
             atPath: exportURL.path)[.size] as? Int ?? 0
         XCTAssertGreaterThan(exportSize, 0)
 
+        // Frames pushed from files can be integrated again. The result is a
+        // separate snapshot and leaves the live stacker usable.
+        XCTAssertNil(state.reintegrationUnavailable)
+        let steps = ReintegrationSteps()
+        let reintegrated = try await session.reintegrate(
+            lowSigma: 0, highSigma: 0
+        ) { step in
+            steps.append(step)
+        }
+        XCTAssertEqual(reintegrated.acceptedFrames, 2)
+        let reintegratedURL = directory.appendingPathComponent("reintegrated.fits")
+        try reintegrated.writeFITS(to: reintegratedURL.path)
+        reintegrated.free()
+        let reintegratedSize = try FileManager.default.attributesOfItem(
+            atPath: reintegratedURL.path)[.size] as? Int ?? 0
+        XCTAssertGreaterThan(reintegratedSize, 0)
+        let recorded = steps.all
+        XCTAssertEqual(recorded.first?.pass, 0)
+        XCTAssertEqual(recorded.last?.pass, 1)
+        XCTAssertTrue(recorded.allSatisfy { $0.count == 2 })
+        counts = try await session.counts()
+        XCTAssertEqual(counts.acceptedFrames, 2)
+
         // Finishing consumes the session and writes the final stack.
         let outputURL = directory.appendingPathComponent("final.fits")
         let snapshot = try await session.finish()
@@ -850,6 +873,61 @@ final class LiveStackNativeSessionTests: XCTestCase {
         let finalSize = try FileManager.default.attributesOfItem(
             atPath: outputURL.path)[.size] as? Int ?? 0
         XCTAssertGreaterThan(finalSize, 0)
+    }
+}
+
+private final class ReintegrationSteps: @unchecked Sendable {
+    private let lock = NSLock()
+    private var steps: [LiveStackReintegrationProgress] = []
+
+    func append(_ step: LiveStackReintegrationProgress) {
+        lock.withLock { steps.append(step) }
+    }
+
+    var all: [LiveStackReintegrationProgress] {
+        lock.withLock { steps }
+    }
+}
+
+// MARK: - Native state decoding
+
+final class LiveStackNativeStateDecodingTests: XCTestCase {
+    private func stateJSON(_ extra: String = "") -> Data {
+        let fingerprint = String(repeating: "ab", count: 32)
+        return Data(("{\"schemaVersion\":1,\"coreVersion\":\"0.18.18\","
+            + "\"configurationFingerprint\":\"\(fingerprint)\","
+            + "\"width\":160,\"height\":128,\"channels\":1,"
+            + "\"acceptedFrames\":2,\"rejectedFrames\":0,"
+            + "\"inputMode\":\"calibrate-and-prepare\","
+            + "\"inputPaths\":[\"/a.fits\",\"/b.fits\"]\(extra)}").utf8)
+    }
+
+    func testReadsTheReintegrationReason() throws {
+        let state = try JSONDecoder().decode(
+            LiveStackNativeState.self,
+            from: stateJSON(",\"reintegrationUnavailable\":\"Saved by an older Seiza.\""))
+        XCTAssertEqual(state.reintegrationUnavailable, "Saved by an older Seiza.")
+        XCTAssertTrue(state.isValidFromCore)
+    }
+
+    func testNullAndMissingReasonsMeanReplayable() throws {
+        let explicit = try JSONDecoder().decode(
+            LiveStackNativeState.self,
+            from: stateJSON(",\"reintegrationUnavailable\":null"))
+        XCTAssertNil(explicit.reintegrationUnavailable)
+        // Manifests written before the field existed still decode.
+        let old = try JSONDecoder().decode(LiveStackNativeState.self, from: stateJSON())
+        XCTAssertNil(old.reintegrationUnavailable)
+        XCTAssertTrue(old.isValidFromCore)
+    }
+
+    func testTheReasonDoesNotAffectCheckpointIdentity() throws {
+        let old = try JSONDecoder().decode(LiveStackNativeState.self, from: stateJSON())
+        let current = try JSONDecoder().decode(
+            LiveStackNativeState.self,
+            from: stateJSON(",\"reintegrationUnavailable\":\"Frames were supplied as pixels.\""))
+        XCTAssertTrue(old.describesSameCheckpoint(current))
+        XCTAssertTrue(current.describesSameCheckpoint(old))
     }
 }
 

@@ -439,6 +439,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                     || result.rejectedFrames > 0
                     || result.results.contains {
                         $0.snrAnalysis.points.count > 1 || $0.snrWarning != nil
+                            || $0.transientNote != nil
                     }
                 if showsSummary {
                     self.presentStackSummary(result, in: window)
@@ -500,6 +501,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
         let warnings = Set(result.results.compactMap(\.snrWarning))
         lines.append(contentsOf: warnings.sorted())
+        for single in result.results {
+            guard let note = single.transientNote else { continue }
+            lines.append(result.results.count == 1
+                ? note
+                : "\(single.output.lastPathComponent): \(note)")
+        }
         alert.informativeText = lines.joined(separator: "\n")
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Done")

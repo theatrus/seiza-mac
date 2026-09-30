@@ -37,6 +37,9 @@ struct LiveStackNativeState: Codable, Equatable, Sendable {
     var inputMode: String
     var inputPaths: [String]
     var referenceFrame: ReferenceFrame? = nil
+    /// Why the stack cannot be integrated again from its source files, or
+    /// nil when it can. Older cores and manifests omit the field.
+    var reintegrationUnavailable: String? = nil
 
     var isValidFromCore: Bool {
         schemaVersion == 1
@@ -172,6 +175,92 @@ final class LiveStackFinishedSnapshot: @unchecked Sendable {
 
     deinit {
         free()
+    }
+}
+
+/// One step of a transient-removing reintegration: `pass` is 0 while the
+/// core estimates statistics and 1 while it integrates; `index` is the
+/// zero-based frame within `count` admitted frames.
+struct LiveStackReintegrationProgress: Sendable, Equatable {
+    let pass: Int
+    let index: Int
+    let count: Int
+
+    static let passCount = 2
+
+    var fractionCompleted: Double {
+        guard count > 0 else { return 0 }
+        let done = Double(pass * count + index)
+        return min(max(done / Double(Self.passCount * count), 0), 1)
+    }
+
+    var message: String {
+        "Removing transients: pass \(pass + 1) of \(Self.passCount), "
+            + "frame \(index + 1) of \(count)"
+    }
+}
+
+private final class ReintegrateProgressSink {
+    let handler: (LiveStackReintegrationProgress) -> Void
+
+    init(handler: @escaping (LiveStackReintegrationProgress) -> Void) {
+        self.handler = handler
+    }
+}
+
+private let reintegrateProgressCallback: @convention(c) (
+    UInt32,
+    Int,
+    Int,
+    UnsafeMutableRawPointer?
+) -> Void = { pass, index, count, context in
+    guard let context else { return }
+    let sink = Unmanaged<ReintegrateProgressSink>.fromOpaque(context)
+        .takeUnretainedValue()
+    sink.handler(LiveStackReintegrationProgress(
+        pass: Int(pass), index: index, count: count))
+}
+
+/// Blocking wrappers over the native reintegration call, shared by the live
+/// session and the one-shot directory stacker. The caller must hold the
+/// stacker exclusively for the duration of each call.
+enum LiveStackReintegration {
+    /// Reads the core's reason the stack cannot be replayed, or nil when it
+    /// can.
+    static func unavailableReason(_ handle: OpaquePointer) throws -> String? {
+        try LiveStackNativeSession.decodeState(handle).reintegrationUnavailable
+    }
+
+    /// Integrates every admitted frame again with leave-one-out rejection
+    /// and returns a new snapshot. The live stacker is not changed. Sigma
+    /// values of zero or less take the core's default.
+    static func run(
+        _ handle: OpaquePointer,
+        lowSigma: Double,
+        highSigma: Double,
+        cancel: CalibrationCancelSignal?,
+        progress: (LiveStackReintegrationProgress) -> Void
+    ) throws -> LiveStackFinishedSnapshot {
+        try withoutActuallyEscaping(progress) { handler in
+            let sink = Unmanaged.passRetained(ReintegrateProgressSink(handler: handler))
+            defer { sink.release() }
+            var errorPointer: UnsafeMutablePointer<CChar>?
+            let snapshot = seiza_live_stacker_reintegrate(
+                handle,
+                Float(lowSigma.isFinite ? lowSigma : 0),
+                Float(highSigma.isFinite ? highSigma : 0),
+                cancel?.pointer,
+                reintegrateProgressCallback,
+                sink.toOpaque(),
+                &errorPointer)
+            guard let snapshot else {
+                throw LiveStackSessionError.core(
+                    CalibrationService.takeOwnedError(&errorPointer, fallback:
+                        "The Seiza core could not remove transients from the stack."))
+            }
+            CalibrationService.discardError(&errorPointer)
+            return LiveStackFinishedSnapshot(pointer: snapshot)
+        }
     }
 }
 
@@ -471,6 +560,25 @@ actor LiveStackNativeSession {
         }
     }
 
+    /// Integrates every admitted frame again from its source file with
+    /// leave-one-out rejection and returns the result as a separate
+    /// snapshot. The live stacker is unchanged, so this must run before
+    /// `finish()`. Progress is reported on the session's queue.
+    func reintegrate(
+        lowSigma: Double,
+        highSigma: Double,
+        cancel: CalibrationCancelSignal? = nil,
+        progress: @Sendable (LiveStackReintegrationProgress) -> Void = { _ in }
+    ) throws -> LiveStackFinishedSnapshot {
+        let handle = try requireHandle()
+        return try LiveStackReintegration.run(
+            handle,
+            lowSigma: lowSigma,
+            highSigma: highSigma,
+            cancel: cancel,
+            progress: progress)
+    }
+
     /// Consumes the stacker and returns the finished snapshot. After this
     /// call the session cannot push or checkpoint again.
     func finish() throws -> LiveStackFinishedSnapshot {
@@ -501,6 +609,12 @@ actor LiveStackNativeSession {
     }
 
     private func readState(_ handle: OpaquePointer) throws -> LiveStackNativeState {
+        try Self.decodeState(handle)
+    }
+
+    fileprivate static func decodeState(
+        _ handle: OpaquePointer
+    ) throws -> LiveStackNativeState {
         var errorPointer: UnsafeMutablePointer<CChar>?
         let response = seiza_live_stacker_state_json(handle, &errorPointer)
         guard let response else {

@@ -58,6 +58,16 @@ struct ImageStackOptions: Equatable, Sendable {
     var maximumDriftPixels = 256.0
     var maximumDriftFraction = 0.15
     var minimumOverlap = 0.60
+    /// Integrate every accepted frame again after stacking, with
+    /// leave-one-out rejection, to remove trails that live rejection kept in
+    /// the first frames. Not part of `jsonData`: it does not change how the
+    /// native stacker is configured, so live checkpoints stay resumable.
+    var removesTransients = true
+
+    /// Sigma limits for the reintegration pass; zero takes the core default.
+    var reintegrationSigmas: (low: Double, high: Double) {
+        rejection == .deltaSigma ? (sigmaLow, sigmaHigh) : (0, 0)
+    }
 
     var validationMessage: String? {
         if normalization == .local, localTileSize < 16 {
@@ -306,6 +316,7 @@ struct ImageStackProgress: Sendable {
     enum Phase: Sendable {
         case preparing
         case stacking
+        case removingTransients
         case writing
     }
 
@@ -315,8 +326,14 @@ struct ImageStackProgress: Sendable {
     let totalFrames: Int
     let acceptedFrames: Int
     let rejectedFrames: Int
+    /// Progress through the current phase when it does not advance by
+    /// input frame, as while removing transients.
+    var phaseFraction: Double? = nil
 
     var fractionCompleted: Double? {
+        if let phaseFraction {
+            return min(max(phaseFraction, 0), 1)
+        }
         guard totalFrames > 0 else { return nil }
         return min(max(Double(completedFrames) / Double(totalFrames), 0), 1)
     }
@@ -329,6 +346,9 @@ struct ImageStackResult: Sendable {
     let dispositions: [ImageStackDisposition]
     var snrAnalysis: StackSnrAnalysis = .empty
     var snrWarning: String? = nil
+    /// Set when transient removal was requested but did not run, saying
+    /// why; the stack was written from the live result instead.
+    var transientNote: String? = nil
 }
 
 struct ImageStackBatchResult: Sendable {
@@ -376,6 +396,14 @@ enum ImageStackError: LocalizedError {
 final class ImageStackCancellation: @unchecked Sendable {
     private let lock = NSLock()
     private var value = false
+    /// Stops long native calls, such as transient removal, mid-call. Nil
+    /// only if the core could not create a signal; cancellation then waits
+    /// for the call to return.
+    let nativeSignal: CalibrationCancelSignal?
+
+    init() {
+        nativeSignal = try? CalibrationCancelSignal()
+    }
 
     var isCancelled: Bool {
         lock.withLock { value }
@@ -383,6 +411,7 @@ final class ImageStackCancellation: @unchecked Sendable {
 
     func cancel() {
         lock.withLock { value = true }
+        nativeSignal?.cancel()
     }
 }
 
@@ -546,16 +575,64 @@ enum ImageStackEngine {
             samples: &snrSamples,
             warning: &snrWarning,
             includeCurrentDepth: true)
+        let acceptedBeforeFinish = Int(seiza_live_stacker_accepted_frames(liveStacker))
+        let rejectedBeforeFinish = Int(seiza_live_stacker_rejected_frames(liveStacker))
+            + unreadableFrames
+
+        var reintegrated: LiveStackFinishedSnapshot?
+        var transientNote: String?
+        if request.options.removesTransients, let handle = liveStacker {
+            do {
+                if let reason = try LiveStackReintegration.unavailableReason(handle) {
+                    transientNote = "Transients were not removed: \(reason)"
+                } else {
+                    progress(ImageStackProgress(
+                        phase: .removingTransients,
+                        message: "Removing transients…",
+                        completedFrames: request.inputs.count,
+                        totalFrames: request.inputs.count,
+                        acceptedFrames: acceptedBeforeFinish,
+                        rejectedFrames: rejectedBeforeFinish,
+                        phaseFraction: 0
+                    ))
+                    let sigmas = request.options.reintegrationSigmas
+                    reintegrated = try LiveStackReintegration.run(
+                        handle,
+                        lowSigma: sigmas.low,
+                        highSigma: sigmas.high,
+                        cancel: cancellation.nativeSignal
+                    ) { step in
+                        progress(ImageStackProgress(
+                            phase: .removingTransients,
+                            message: step.message,
+                            completedFrames: request.inputs.count,
+                            totalFrames: request.inputs.count,
+                            acceptedFrames: acceptedBeforeFinish,
+                            rejectedFrames: rejectedBeforeFinish,
+                            phaseFraction: step.fractionCompleted
+                        ))
+                    }
+                }
+            } catch {
+                if cancellation.isCancelled { throw CancellationError() }
+                transientNote = "Transients were not removed: "
+                    + error.localizedDescription
+            }
+        }
+        defer { reintegrated?.free() }
+
+        if cancellation.isCancelled { throw CancellationError() }
         progress(ImageStackProgress(
             phase: .writing,
             message: "Writing \(request.output.lastPathComponent)…",
             completedFrames: request.inputs.count,
             totalFrames: request.inputs.count,
-            acceptedFrames: Int(seiza_live_stacker_accepted_frames(liveStacker)),
-            rejectedFrames: Int(seiza_live_stacker_rejected_frames(liveStacker))
-                + unreadableFrames
+            acceptedFrames: acceptedBeforeFinish,
+            rejectedFrames: rejectedBeforeFinish
         ))
 
+        // Finish even when the reintegrated snapshot is written, so the
+        // stacker is consumed and freed on one path.
         errorPointer = nil
         let snapshot = seiza_live_stacker_finish(&liveStacker, &errorPointer)
         guard let snapshot else {
@@ -566,10 +643,14 @@ enum ImageStackEngine {
 
         if cancellation.isCancelled { throw CancellationError() }
         do {
-            try LiveStackAtomicFITS.write(to: request.output.path) {
-                stagingPath, stagingError in
-                stagingPath.withCString { path in
-                    seiza_stack_snapshot_write_fits(snapshot, path, &stagingError)
+            if let reintegrated {
+                try reintegrated.writeFITS(to: request.output.path)
+            } else {
+                try LiveStackAtomicFITS.write(to: request.output.path) {
+                    stagingPath, stagingError in
+                    stagingPath.withCString { path in
+                        seiza_stack_snapshot_write_fits(snapshot, path, &stagingError)
+                    }
                 }
             }
         } catch {
@@ -582,7 +663,8 @@ enum ImageStackEngine {
                 + unreadableFrames,
             dispositions: dispositions,
             snrAnalysis: StackSnrAnalyzer.analyze(snrSamples),
-            snrWarning: snrWarning
+            snrWarning: snrWarning,
+            transientNote: transientNote
         )
     }
 
@@ -674,7 +756,8 @@ enum ImageStackBatchEngine {
                             completedFrames: completedBeforeJob + update.completedFrames,
                             totalFrames: totalFrames,
                             acceptedFrames: acceptedBeforeJob + update.acceptedFrames,
-                            rejectedFrames: rejectedBeforeJob + update.rejectedFrames
+                            rejectedFrames: rejectedBeforeJob + update.rejectedFrames,
+                            phaseFraction: update.phaseFraction
                         ))
                     }
                 )
@@ -983,6 +1066,12 @@ struct ImageStackWorkflowView: View {
                             in: 2...100
                         )
                     }
+
+                    Toggle("Remove transients after stacking", isOn: $options.removesTransients)
+                    Text("Reads every accepted frame twice more to reject satellite "
+                        + "trails that live rejection kept in the first frames.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 DisclosureGroup("Calibration", isExpanded: $showsCalibration) {

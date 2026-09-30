@@ -14,6 +14,10 @@ typedef struct SeizaStackSnapshot SeizaStackSnapshot;
 typedef struct SeizaStackExportSnapshot SeizaStackExportSnapshot;
 typedef struct SeizaCancelSignal SeizaCancelSignal;
 typedef void (*SeizaCatalogSetupProgressCallback)(const char *, void *);
+/* Progress for seiza_live_stacker_reintegrate: pass (0 estimating, 1
+   integrating), zero-based frame index, admitted-frame count, context.
+   Called on the calling thread before each frame is read. */
+typedef void (*SeizaStackReintegrateProgressCallback)(uint32_t, size_t, size_t, void *);
 
 #define SEIZA_SNR_MAX_CHANNELS 3
 
@@ -220,6 +224,22 @@ SeizaStackExportSnapshot *seiza_live_stacker_export_snapshot(
 int32_t seiza_live_stacker_measure_depth(
     const SeizaLiveStacker *stacker,
     SeizaSnrSample *sample,
+    char **error_out);
+
+/* Integrates every admitted frame again, reading each twice more from its
+   source file, with leave-one-out rejection, and returns a new owned
+   snapshot. The live stacker is not changed; call before
+   seiza_live_stacker_finish. Sigma <= 0 uses the default of 3. Returns
+   null with error_out set when the stack cannot be replayed (see
+   `reintegrationUnavailable` in the state JSON), a source file changed,
+   or `cancel` fired. `cancel` may be null. */
+SeizaStackSnapshot *seiza_live_stacker_reintegrate(
+    const SeizaLiveStacker *stacker,
+    float low_sigma,
+    float high_sigma,
+    const SeizaCancelSignal *cancel,
+    SeizaStackReintegrateProgressCallback progress,
+    void *context,
     char **error_out);
 
 uint32_t seiza_live_stacker_accepted_frames(const SeizaLiveStacker *stacker);
