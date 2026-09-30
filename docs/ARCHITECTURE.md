@@ -78,7 +78,7 @@ surface chooses its filter. Export still draws at source size without a display
 resize. Thumbnail cache keys include the core version, so a core update does
 not reuse old point-sampled thumbnails.
 
-The locked `seiza-cabi` 0.18.14 includes the area-downsampling change in
+The locked `seiza-cabi` 0.18.15 includes the area-downsampling change in
 [seiza#177](https://github.com/theatrus/seiza/pull/177). It averages covered pixels
 inside the C ABI for bounded RGBA8/RGBA16 renders, interactive linear samples,
 and live-stack previews. Native filtering then handles the final display size.
