@@ -225,10 +225,10 @@ jobs:
             '' \
             "### New in ${version}" \
             '' \
-            '- Reduced images now use filtered scaling throughout the viewer, thumbnail drawer, live-stack pane, and Finder previews. Area averaging in the core reduces noise aliasing and keeps small bright features in the reduced image.' \
-            '- Viewport filtering accounts for Retina scale and the actual preview bitmap. Full-resolution images keep crisp source pixels at 1:1 and higher zoom.' \
-            '- Thumbnail caches now track the core version so updates discard old point-sampled previews.' \
-            '- The native core moves to Seiza 0.18.14, including updated FITS/XISF decoding and stacking fixes. Full-size exports keep their source resolution and bit depth.' \
+            '- XISF files open more widely in the viewer, Quick Look, and Finder thumbnails. The native core moves to Seiza 0.18.16, whose XISF reader follows the XISF 1.0 Revision 1 specification.' \
+            '- XISF images whose pixels are stored inside the file header, as PixInsight does for small images, and images stored pixel by pixel now open.' \
+            '- Compressed XISF data split into subblocks now opens, including subblocks PixInsight stores uncompressed, and CIELab images open in color.' \
+            '- A file'"'"'s main image opens even when another image in it uses a format Seiza cannot read.' \
             '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
             "- [Download the zipped application](${release_base}/Seiza-${version}-universal.zip)" \
