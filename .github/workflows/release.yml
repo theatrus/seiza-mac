@@ -225,10 +225,9 @@ jobs:
             '' \
             "### New in ${version}" \
             '' \
-            '- XISF files open more widely in the viewer, Quick Look, and Finder thumbnails. The native core moves to Seiza 0.18.16, whose XISF reader follows the XISF 1.0 Revision 1 specification.' \
-            '- XISF images whose pixels are stored inside the file header, as PixInsight does for small images, and images stored pixel by pixel now open.' \
-            '- Compressed XISF data split into subblocks now opens, including subblocks PixInsight stores uncompressed, and CIELab images open in color.' \
-            '- A file'"'"'s main image opens even when another image in it uses a format Seiza cannot read.' \
+            '- Remove transients after stacking, on by default in directory and live stacking, rejects satellite and aircraft trails that stacking used to keep in its first frames. When a stack is done, Seiza reads every accepted frame twice more and rejects samples that stand out from the other frames.' \
+            '- Directory stacking shows each pass and frame and can be cancelled during this step. When a stack cannot be replayed, Seiza writes the normal stack and says why.' \
+            '- The native core moves to Seiza 0.18.18.' \
             '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
             "- [Download the zipped application](${release_base}/Seiza-${version}-universal.zip)" \
