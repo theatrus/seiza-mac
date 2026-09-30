@@ -216,6 +216,45 @@ final class ImageStackOptionsTests: XCTestCase {
         XCTAssertEqual(rejection["mode"] as? String, "none")
         XCTAssertNil(rejection["options"])
     }
+
+    func testTransientRemovalLeavesTheNativeOptionsUnchanged() throws {
+        XCTAssertTrue(ImageStackOptions().removesTransients)
+        var on = ImageStackOptions()
+        on.removesTransients = true
+        var off = ImageStackOptions()
+        off.removesTransients = false
+        // Live checkpoints resume only when this JSON matches, so the
+        // setting must not appear in it.
+        XCTAssertEqual(try on.jsonData, try off.jsonData)
+        let text = String(decoding: try on.jsonData, as: UTF8.self)
+        XCTAssertFalse(text.lowercased().contains("transient"))
+    }
+
+    func testReintegrationSigmasFollowTheRejectionMode() {
+        var options = ImageStackOptions()
+        options.sigmaLow = 2.5
+        options.sigmaHigh = 4
+        XCTAssertEqual(options.reintegrationSigmas.low, 2.5)
+        XCTAssertEqual(options.reintegrationSigmas.high, 4)
+        options.rejection = .none
+        XCTAssertEqual(options.reintegrationSigmas.low, 0)
+        XCTAssertEqual(options.reintegrationSigmas.high, 0)
+    }
+
+    func testRemovingTransientsProgressUsesItsOwnFraction() {
+        let step = LiveStackReintegrationProgress(pass: 1, index: 2, count: 40)
+        XCTAssertEqual(step.message, "Removing transients: pass 2 of 2, frame 3 of 40")
+        XCTAssertEqual(step.fractionCompleted, 42.0 / 80.0, accuracy: 1e-12)
+        let progress = ImageStackProgress(
+            phase: .removingTransients,
+            message: step.message,
+            completedFrames: 40,
+            totalFrames: 40,
+            acceptedFrames: 40,
+            rejectedFrames: 0,
+            phaseFraction: step.fractionCompleted)
+        XCTAssertEqual(progress.fractionCompleted ?? -1, 42.0 / 80.0, accuracy: 1e-12)
+    }
 }
 
 final class ViewportMathTests: XCTestCase {

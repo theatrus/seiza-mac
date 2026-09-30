@@ -419,6 +419,14 @@ final class LiveStackWindowModel: ObservableObject {
                 let output = URL(fileURLWithPath: result.outputPath)
                 await teardown()
                 isBusy = false
+                if let note = result.transientNote {
+                    let alert = NSAlert()
+                    alert.messageText = "Stack Saved"
+                    alert.informativeText = note
+                    alert.alertStyle = .informational
+                    alert.addButton(withTitle: "OK")
+                    alert.runModal()
+                }
                 onOpenOutput(output)
                 requestClose()
             } catch {
@@ -649,6 +657,14 @@ private struct LiveStackConfigurationView: View {
                             value: $model.options.rejectionWarmup,
                             in: 2...100)
                     }
+                    Toggle(
+                        "Remove transients after stacking",
+                        isOn: $model.options.removesTransients)
+                    Text("When you finish, reads every accepted frame twice more "
+                        + "to reject satellite trails that live rejection kept "
+                        + "in the first frames.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     DisclosureGroup("Advanced registration limits") {
                         TextField(
                             "Maximum RMS (pixels)",

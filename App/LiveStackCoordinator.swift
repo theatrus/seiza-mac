@@ -190,6 +190,9 @@ struct LiveStackExportResult: Sendable {
     var outputPath: String
     var acceptedFrames: Int
     var rejectedFrames: Int
+    /// Set when transient removal was requested but did not run, saying
+    /// why; the live result was written instead.
+    var transientNote: String? = nil
 }
 
 enum LiveStackRunError: LocalizedError {
@@ -303,6 +306,7 @@ actor LiveStackCoordinator {
     private var persistenceRevision = 0
     private var checkpointBlocked = false
     private var nativeFinalized = false
+    private var reintegrating = false
     private var initialized = false
     private var disposed = false
 
@@ -1463,6 +1467,9 @@ actor LiveStackCoordinator {
             throw LiveStackRunError.invalidOperation(
                 "There is no live stack to finish yet.")
         }
+        let (reintegrated, transientNote) = await removeTransients(session)
+        defer { reintegrated?.free() }
+
         setState(.finishing, "Finalizing the live stack…")
         nativeFinalized = true
         let snapshot: LiveStackFinishedSnapshot
@@ -1476,9 +1483,10 @@ actor LiveStackCoordinator {
         }
         self.session = nil
 
+        let output = reintegrated ?? snapshot
         do {
             try await runBlocking {
-                try snapshot.writeFITS(to: normalized)
+                try output.writeFITS(to: normalized)
             }
         } catch {
             snapshot.free()
@@ -1499,13 +1507,58 @@ actor LiveStackCoordinator {
                 "The completed session could not be retired: "
                     + error.localizedDescription)
         }
-        setState(.completed,
-            "Saved the completed stack to "
-                + "\(URL(fileURLWithPath: normalized).lastPathComponent).")
+        var completedMessage = "Saved the completed stack to "
+            + "\(URL(fileURLWithPath: normalized).lastPathComponent)."
+        if let transientNote {
+            completedMessage += " \(transientNote)"
+        }
+        setState(.completed, completedMessage)
         return LiveStackExportResult(
             outputPath: normalized,
             acceptedFrames: acceptedAtFinish,
-            rejectedFrames: nativeRejectedFrames + policyRejectedFrames)
+            rejectedFrames: nativeRejectedFrames + policyRejectedFrames,
+            transientNote: transientNote)
+    }
+
+    /// Integrates every admitted frame again with leave-one-out rejection
+    /// when the option is on and the stack can be replayed. Returns the new
+    /// snapshot, or nil with a note saying why the live result must be used
+    /// instead. Runs before `finish()` consumes the stacker.
+    private func removeTransients(
+        _ session: LiveStackNativeSession
+    ) async -> (LiveStackFinishedSnapshot?, String?) {
+        guard configuration.options.removesTransients else { return (nil, nil) }
+        do {
+            if let reason = try await session.state().reintegrationUnavailable {
+                return (nil, "Transients were not removed: \(reason)")
+            }
+        } catch {
+            return (nil, "Transients were not removed: \(error.localizedDescription)")
+        }
+        setState(.finishing, "Removing transients…")
+        reintegrating = true
+        defer { reintegrating = false }
+        let sigmas = configuration.options.reintegrationSigmas
+        do {
+            let snapshot = try await session.reintegrate(
+                lowSigma: sigmas.low,
+                highSigma: sigmas.high
+            ) { step in
+                // About twenty status updates per pass is plenty.
+                let stride = max(1, step.count / 20)
+                guard step.index % stride == 0 else { return }
+                Task { await self.reportReintegration(step) }
+            }
+            return (snapshot, nil)
+        } catch {
+            return (nil, "Transients were not removed: \(error.localizedDescription)")
+        }
+    }
+
+    private func reportReintegration(_ step: LiveStackReintegrationProgress) {
+        // Late updates must not overwrite the state that follows.
+        guard reintegrating, state == .finishing else { return }
+        setState(.finishing, step.message + "…")
     }
 
     func dispose() async {
