@@ -7,6 +7,7 @@ enum StackNormalizationMode: String, CaseIterable, Identifiable, Sendable {
     case none
     case global
     case local
+    case localBackground = "local-background"
 
     var id: Self { self }
 
@@ -15,8 +16,53 @@ enum StackNormalizationMode: String, CaseIterable, Identifiable, Sendable {
         case .none: "None"
         case .global: "Global"
         case .local: "Local"
+        case .localBackground: "Local background"
         }
     }
+}
+
+enum StackRegistrationModel: String, CaseIterable, Identifiable, Sendable {
+    case similarity, affine, quadratic
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .similarity: "Similarity (default)"
+        case .affine: "Affine"
+        case .quadratic: "Quadratic"
+        }
+    }
+}
+
+enum StackWeighting: String, CaseIterable, Identifiable, Sendable {
+    case equal
+    case inverseNoiseVariance = "inverse-noise-variance"
+    var id: Self { self }
+    var title: String { self == .equal ? "Equal (default)" : "Inverse noise variance" }
+}
+
+enum StackInterpolation: String, CaseIterable, Identifiable, Sendable {
+    case bilinear, lanczos3
+    var id: Self { self }
+    var title: String { self == .bilinear ? "Bilinear (default)" : "Lanczos-3" }
+}
+
+enum StackDemosaic: String, CaseIterable, Identifiable, Sendable {
+    case vng, mhc, bilinear
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .vng: "VNG (default)"
+        case .mhc: "MHC"
+        case .bilinear: "Bilinear"
+        }
+    }
+}
+
+enum StackCfaIntegration: String, CaseIterable, Identifiable, Sendable {
+    case demosaic
+    case bayerDrizzle = "bayer_drizzle"
+    var id: Self { self }
+    var title: String { self == .demosaic ? "Demosaic (default)" : "Bayer drizzle" }
 }
 
 enum StackRejectionMode: String, CaseIterable, Identifiable, Sendable {
@@ -58,6 +104,18 @@ struct ImageStackOptions: Equatable, Sendable {
     var maximumDriftPixels = 256.0
     var maximumDriftFraction = 0.15
     var minimumOverlap = 0.60
+    var registrationModel = StackRegistrationModel.similarity
+    var weighting = StackWeighting.equal
+    var minimumWeight = 0.05
+    var maximumWeight = 20.0
+    var interpolation = StackInterpolation.bilinear
+    var demosaic = StackDemosaic.vng
+    var cfaIntegration = StackCfaIntegration.demosaic
+    var suppressesHotPixels = false
+    var cosmeticLowSigma = 16.0
+    var cosmeticHighSigma = 16.0
+
+    var usesLocalTiles: Bool { normalization == .local || normalization == .localBackground }
     /// Integrate every accepted frame again after stacking, with
     /// leave-one-out rejection, to remove trails that live rejection kept in
     /// the first frames. Not part of `jsonData`: it does not change how the
@@ -70,11 +128,11 @@ struct ImageStackOptions: Equatable, Sendable {
     }
 
     var validationMessage: String? {
-        if normalization == .local, localTileSize < 16 {
+        if usesLocalTiles, localTileSize < 16 {
             return "Local normalization tiles must be at least 16 pixels wide."
         }
         if rejection == .deltaSigma {
-            guard sigmaLow.isFinite, sigmaLow > 0, sigmaHigh.isFinite, sigmaHigh > 0 else {
+            guard Self.isPositiveNativeFloat(sigmaLow), Self.isPositiveNativeFloat(sigmaHigh) else {
                 return "Sigma thresholds must be positive numbers."
             }
             guard rejectionWarmup >= 2 else {
@@ -93,11 +151,26 @@ struct ImageStackOptions: Equatable, Sendable {
         guard minimumOverlap.isFinite, (0...1).contains(minimumOverlap) else {
             return "Minimum overlap must be between 0 and 1."
         }
+        if weighting == .inverseNoiseVariance,
+            !(Self.isPositiveNativeFloat(minimumWeight) && minimumWeight <= 1
+                && Self.isPositiveNativeFloat(maximumWeight) && maximumWeight >= 1) {
+            return "Frame weights must satisfy 0 < minimum ≤ 1 ≤ maximum."
+        }
+        if suppressesHotPixels,
+            !(Self.isPositiveNativeFloat(cosmeticLowSigma)
+                && Self.isPositiveNativeFloat(cosmeticHighSigma)) {
+            return "Hot/dead pixel thresholds must be positive finite numbers."
+        }
         return nil
+    }
+
+    private static func isPositiveNativeFloat(_ value: Double) -> Bool {
+        value.isFinite && Float(value).isFinite && Float(value) > 0
     }
 
     var jsonData: Data {
         get throws {
+            if let message = validationMessage { throw ImageStackError.invalidRequest(message) }
             let payload = StackOptionsPayload(options: self)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
@@ -111,11 +184,23 @@ private struct StackOptionsPayload: Encodable {
     let normalization: NormalizationPayload
     let rejection: RejectionPayload
     let acceptance: AcceptancePayload
+    let cosmetic: CosmeticPayload?
+    let weighting: WeightingPayload?
+    let interpolation: String?
+    let demosaic: String?
+    let cfaIntegration: String?
+
+    enum CodingKeys: String, CodingKey {
+        case registration, normalization, rejection, acceptance, cosmetic, weighting
+        case interpolation, demosaic
+        case cfaIntegration = "cfa_integration"
+    }
 
     init(options: ImageStackOptions) {
         registration = RegistrationPayload(
             maximumDriftPixels: options.maximumDriftPixels,
-            maximumDriftFraction: options.maximumDriftFraction
+            maximumDriftFraction: options.maximumDriftFraction,
+            model: options.registrationModel == .similarity ? nil : options.registrationModel.rawValue
         )
         normalization = NormalizationPayload(options: options)
         rejection = RejectionPayload(options: options)
@@ -123,15 +208,36 @@ private struct StackOptionsPayload: Encodable {
             maximumRegistrationRMS: options.maximumRegistrationRMS,
             minimumOverlap: options.minimumOverlap
         )
+        cosmetic = options.suppressesHotPixels
+            ? CosmeticPayload(low_sigma: options.cosmeticLowSigma, high_sigma: options.cosmeticHighSigma) : nil
+        weighting = options.weighting == .equal ? nil : WeightingPayload(
+            mode: options.weighting.rawValue, minimum_weight: options.minimumWeight,
+            maximum_weight: options.maximumWeight)
+        interpolation = options.interpolation == .bilinear ? nil : options.interpolation.rawValue
+        demosaic = options.demosaic == .vng ? nil : options.demosaic.rawValue
+        cfaIntegration = options.cfaIntegration == .demosaic ? nil : options.cfaIntegration.rawValue
+    }
+
+    struct CosmeticPayload: Encodable {
+        let low_sigma: Double
+        let high_sigma: Double
+    }
+
+    struct WeightingPayload: Encodable {
+        let mode: String
+        let minimum_weight: Double
+        let maximum_weight: Double
     }
 
     struct RegistrationPayload: Encodable {
         let maximumDriftPixels: Double
         let maximumDriftFraction: Double
+        let model: String?
 
         enum CodingKeys: String, CodingKey {
             case maximumDriftPixels = "maximum_drift_pixels"
             case maximumDriftFraction = "maximum_drift_fraction"
+            case model
         }
     }
 
@@ -141,7 +247,7 @@ private struct StackOptionsPayload: Encodable {
 
         init(options stackOptions: ImageStackOptions) {
             mode = stackOptions.normalization.rawValue
-            options = stackOptions.normalization == .local
+            options = stackOptions.usesLocalTiles
                 ? LocalOptions(tileSize: stackOptions.localTileSize)
                 : nil
         }
@@ -198,6 +304,104 @@ private struct StackOptionsPayload: Encodable {
             case maximumRegistrationRMS = "maximum_registration_rms_pixels"
             case minimumOverlap = "minimum_overlap_fraction"
         }
+    }
+}
+
+/// Shared controls for directory and live stacks. Every choice is opt-in.
+struct StackProcessingOptionsView: View {
+    @Binding var options: ImageStackOptions
+
+    var body: some View {
+        DisclosureGroup("Registration and processing") {
+            Picker("Registration model", selection: $options.registrationModel) {
+                ForEach(StackRegistrationModel.allCases) { Text($0.title).tag($0) }
+            }
+            Text("Similarity fits shift, rotation, and scale. Affine adds shear; quadratic can fit lens distortion. Too few matched stars falls back to similarity.")
+                .font(.caption).foregroundStyle(.secondary)
+            Picker("Frame weights", selection: $options.weighting) {
+                ForEach(StackWeighting.allCases) { Text($0.title).tag($0) }
+            }
+            if options.weighting == .inverseNoiseVariance {
+                TextField("Minimum weight", value: $options.minimumWeight, format: .number)
+                TextField("Maximum weight", value: $options.maximumWeight, format: .number)
+                Text("Give less weight to noisier frames. The reference has weight 1.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Picker("Interpolation", selection: $options.interpolation) {
+                ForEach(StackInterpolation.allCases) { Text($0.title).tag($0) }
+            }
+            Text("Lanczos-3 can keep stars sharper, but takes longer and may ring near bright edges.")
+                .font(.caption).foregroundStyle(.secondary)
+            Picker("Bayer integration", selection: $options.cfaIntegration) {
+                ForEach(StackCfaIntegration.allCases) { Text($0.title).tag($0) }
+            }
+            if options.cfaIntegration == .bayerDrizzle {
+                Text("Bayer drizzle needs well-dithered frames to fill each color channel. It does not enlarge the output. Mono and RGB frames use normal integration.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Picker("Bayer demosaic", selection: $options.demosaic) {
+                ForEach(StackDemosaic.allCases) { Text($0.title).tag($0) }
+            }
+            Text("Bayer frames only. VNG keeps star colors even; MHC is sharper but may ring; bilinear is faster and softer. Drizzle still uses demosaicing for registration and normalization.")
+                .font(.caption).foregroundStyle(.secondary)
+            Toggle("Suppress hot and dead pixels", isOn: $options.suppressesHotPixels)
+            if options.suppressesHotPixels {
+                TextField("Low sigma", value: $options.cosmeticLowSigma, format: .number)
+                TextField("High sigma", value: $options.cosmeticHighSigma, format: .number)
+                Text("Replace isolated outlier pixels after calibration and before demosaicing.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+struct StackReferenceSelection: Decodable, Sendable {
+    struct Score: Decodable, Sendable {
+        let stars: Int
+        let medianStarArea: Double
+        let background: Double
+        let backgroundVariation: Double
+        let score: Double
+    }
+    let schemaVersion: Int
+    let referenceIndex: Int
+    let referencePath: String
+    let scores: [Score?]
+
+    func validate(paths: [String]) throws {
+        guard schemaVersion == 1, scores.count == paths.count,
+            paths.indices.contains(referenceIndex), paths[referenceIndex] == referencePath,
+            scores[referenceIndex] != nil,
+            scores.compactMap({ $0 }).allSatisfy({
+                $0.stars >= 0 && $0.medianStarArea.isFinite && $0.medianStarArea > 0
+                    && $0.background.isFinite && $0.backgroundVariation.isFinite
+                    && $0.backgroundVariation >= 0 && $0.score.isFinite && $0.score > 0
+            })
+        else { throw ImageStackError.core("Seiza returned an invalid reference selection.") }
+    }
+}
+
+enum StackReferenceSelector {
+    /// Synchronous native scoring; callers run this away from the main actor.
+    /// One frame at a time bounds memory use. Cancellation is checked around
+    /// the call because this C ABI does not provide a cancellation callback.
+    static func choose(_ urls: [URL]) throws -> StackReferenceSelection {
+        guard !urls.isEmpty else { throw ImageStackError.invalidRequest("Choose reference candidates first.") }
+        let accessed = urls.filter { $0.startAccessingSecurityScopedResource() }
+        defer { accessed.forEach { $0.stopAccessingSecurityScopedResource() } }
+        let paths = urls.map(\.path)
+        let json = String(decoding: try JSONEncoder().encode(paths), as: UTF8.self)
+        var error: UnsafeMutablePointer<CChar>?
+        let pointer = json.withCString { seiza_stack_choose_reference_json($0, 1, &error) }
+        guard let pointer else {
+            throw ImageStackError.core(CalibrationService.takeOwnedError(
+                &error, fallback: "No frame could be scored as a reference."))
+        }
+        defer { seiza_string_free(pointer) }
+        let result = try JSONDecoder().decode(StackReferenceSelection.self,
+            from: Data(bytes: pointer, count: strlen(pointer)))
+        try result.validate(paths: paths)
+        return result
     }
 }
 
@@ -1018,6 +1222,10 @@ struct ImageStackWorkflowView: View {
                             }
                         }
                         .disabled(group.inputs.isEmpty)
+                        Button("Choose \(group.title) reference automatically…") {
+                            chooseReference(for: group)
+                        }
+                        .disabled(group.inputs.isEmpty)
                     }
 
                     Text(groupSummary)
@@ -1029,12 +1237,13 @@ struct ImageStackWorkflowView: View {
                 }
 
                 Section("Stack") {
+                    StackProcessingOptionsView(options: $options)
                     Picker("Normalization", selection: $options.normalization) {
                         ForEach(StackNormalizationMode.allCases) { mode in
                             Text(mode.title).tag(mode)
                         }
                     }
-                    if options.normalization == .local {
+                    if options.usesLocalTiles {
                         Picker("Tile size", selection: $options.localTileSize) {
                             ForEach([64, 128, 256, 512], id: \.self) { size in
                                 Text("\(size) px").tag(size)
@@ -1068,7 +1277,7 @@ struct ImageStackWorkflowView: View {
                     }
 
                     Toggle("Remove transients after stacking", isOn: $options.removesTransients)
-                    Text("Reads every accepted frame twice more to reject satellite "
+                    Text("Runs three passes over accepted frames to reject satellite "
                         + "trails that live rejection kept in the first frames.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -1235,7 +1444,7 @@ struct ImageStackWorkflowView: View {
     }
 
     private var progressTitle: String {
-        if isPreparingCalibration { return "Preparing Calibration" }
+        if isPreparingCalibration { return "Preparing Stack" }
         return coordinator.isCancelling ? "Stopping…" : "Stacking Images"
     }
 
@@ -1313,6 +1522,25 @@ struct ImageStackWorkflowView: View {
     private func orderedInputs(for group: ImageStackGroup) -> [URL] {
         let reference = referenceBinding(for: group).wrappedValue
         return [reference] + group.inputs.filter { $0 != reference }
+    }
+
+    private func chooseReference(for group: ImageStackGroup) {
+        isPreparingCalibration = true
+        preparationMessage = "Scoring \(group.inputs.count) reference candidates…"
+        preparationNotice = nil
+        preparationTask = Task { @MainActor in
+            defer { isPreparingCalibration = false }
+            do {
+                let choice = try await runBlocking { try StackReferenceSelector.choose(group.inputs) }
+                try Task.checkCancellation()
+                referenceURLs[group.id] = group.inputs[choice.referenceIndex]
+                preparationNotice = "Selected \(group.inputs[choice.referenceIndex].lastPathComponent) as the reference."
+            } catch is CancellationError {
+                preparationNotice = "Reference selection was cancelled."
+            } catch {
+                preparationNotice = error.localizedDescription
+            }
+        }
     }
 
     @ViewBuilder

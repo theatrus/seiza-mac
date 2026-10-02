@@ -11,6 +11,7 @@ struct LiveStackRunConfiguration: Sendable {
     var resumeExisting = true
     var applyCalibrationOnResume = false
     var initialReferencePath: String? = nil
+    var choosesReferenceAutomatically = false
     var options = ImageStackOptions()
     var calibration = ImageStackCalibration()
     var previewProcessingJSON = LiveStackRunConfiguration.defaultPreviewProcessingJSON
@@ -271,6 +272,7 @@ final class AsyncGate: @unchecked Sendable {
 /// is on disk.
 actor LiveStackCoordinator {
     private let configuration: LiveStackRunConfiguration
+    private let referenceSelector: @Sendable ([URL]) throws -> StackReferenceSelection
     private let store: LiveStackSessionStore
     private let monitor: StackFolderMonitor
     private var session: LiveStackNativeSession?
@@ -319,7 +321,10 @@ actor LiveStackCoordinator {
 
     private static let maximumAttentionItems = 50
 
-    init(configuration: LiveStackRunConfiguration) throws {
+    init(
+        configuration: LiveStackRunConfiguration,
+        referenceSelector: @escaping @Sendable ([URL]) throws -> StackReferenceSelection = { try StackReferenceSelector.choose($0) }
+    ) throws {
         if let message = configuration.validationMessage() {
             throw LiveStackRunError.invalidConfiguration(message)
         }
@@ -328,6 +333,7 @@ actor LiveStackCoordinator {
         normalized.initialReferencePath = configuration.initialReferencePath
             .map { LiveStackPath.normalize($0) }
         self.configuration = normalized
+        self.referenceSelector = referenceSelector
         self.calibration = normalized.calibration
         self.store = try LiveStackSessionStore(
             sessionRootDirectory: normalized.sessionRootDirectory,
@@ -338,7 +344,7 @@ actor LiveStackCoordinator {
             watchFolder: normalized.watchFolder,
             includeSubdirectories: normalized.includeSubdirectories,
             excludedPaths: normalized.monitorExcludedPaths(),
-            excludedDirectories: [store.groupDirectory.path],
+            excludedDirectories: [normalized.sessionRootDirectory.path],
             scanInterval: normalized.monitorScanInterval,
             tracker: trackerConfiguration))
     }
@@ -610,7 +616,9 @@ actor LiveStackCoordinator {
             break
         }
 
-        if !restored, let initialReference = configuration.initialReferencePath {
+        if !restored, configuration.choosesReferenceAutomatically {
+            if try await openAutomaticReference() { return }
+        } else if !restored, let initialReference = configuration.initialReferencePath {
             try await openInitialReference(initialReference)
             return
         }
@@ -782,9 +790,71 @@ actor LiveStackCoordinator {
         }
     }
 
-    private func openInitialReference(_ referencePath: String) async throws {
+    private func openAutomaticReference() async throws -> Bool {
+        do {
+            setState(.restoring, "Waiting for existing reference candidates to settle…")
+            let config = configuration
+            let observations = StackFolderMonitor(configuration: .init(
+                watchFolder: config.watchFolder,
+                includeSubdirectories: config.includeSubdirectories,
+                excludedPaths: config.monitorExcludedPaths(),
+                excludedDirectories: [config.sessionRootDirectory.path],
+                tracker: .init(minimumStableDuration: config.monitorStabilityDuration)))
+            _ = try await runBlocking { observations.observeReferenceCandidates() }
+            try await Task.sleep(for: .seconds(max(0, config.monitorStabilityDuration)))
+            let stable = try await runBlocking { observations.observeReferenceCandidates() }
+            var eligible: [StackFileCandidate] = []
+            var anchor: CalibrationFrameProbe?
+            if let initial = config.initialReferencePath {
+                anchor = try await runBlocking { try CalibrationService.probe(path: initial) }
+            }
+            for candidate in stable {
+                try Task.checkCancellation()
+                let probe = try await runBlocking { () -> CalibrationFrameProbe? in
+                    guard StackFolderMonitor.isUnchanged(candidate),
+                        let probe = try? CalibrationService.probe(path: candidate.path),
+                        CalibrationLightEligibility.ineligibilityReason(probe) == nil,
+                        StackFolderMonitor.isUnchanged(candidate)
+                    else { return nil }
+                    return probe
+                }
+                guard let probe else { continue }
+                if let anchor {
+                    guard LiveStackFilterIdentity.fromProbe(anchor).matches(.fromProbe(probe)),
+                        LiveStackCalibrationIdentity.mismatchReason(
+                            reference: anchor.signature, candidate: probe.signature) == nil
+                    else { continue }
+                } else { anchor = probe }
+                eligible.append(candidate)
+            }
+            guard !eligible.isEmpty else { return false }
+            setState(.restoring, "Scoring \(eligible.count) reference candidates…")
+            let urls = eligible.map { URL(fileURLWithPath: $0.path) }
+            let selector = referenceSelector
+            let selected = try await runBlocking { try selector(urls) }
+            try selected.validate(paths: urls.map(\.path))
+            try Task.checkCancellation()
+            let candidate = eligible[selected.referenceIndex]
+            try await openInitialReference(candidate.path, expected: candidate)
+            return true
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            guard session == nil else { throw error }
+            addAttention("Could not choose a reference; waiting for the first stable light. "
+                + error.localizedDescription)
+            return false
+        }
+    }
+
+    private func openInitialReference(
+        _ referencePath: String, expected: StackFileCandidate? = nil
+    ) async throws {
         let probe = try await runBlocking {
-            try CalibrationService.probe(path: referencePath)
+            if let expected, !StackFolderMonitor.isUnchanged(expected) {
+                throw LiveStackRunError.invalidOperation("The selected reference changed during scoring.")
+            }
+            return try CalibrationService.probe(path: referencePath)
         }
         guard probe.role == CalibrationFrameRole.light else {
             throw LiveStackRunError.invalidOperation(
@@ -795,7 +865,8 @@ actor LiveStackCoordinator {
             throw LiveStackRunError.invalidOperation(
                 "The initial reference cannot be calibrated; \(reason).")
         }
-        try await openReference(probe: probe, reason: "Selected reference frame")
+        try Task.checkCancellation()
+        try await openReference(probe: probe, reason: "Selected reference frame", expected: expected)
         seedCalibrationPaths()
         try await forcedCheckpoint()
         setState(.waitingForLight,
@@ -961,7 +1032,7 @@ actor LiveStackCoordinator {
     }
 
     private func openReference(
-        probe: CalibrationFrameProbe, reason: String
+        probe: CalibrationFrameProbe, reason: String, expected: StackFileCandidate? = nil
     ) async throws {
         guard FileManager.default.fileExists(atPath: probe.path) else {
             throw LiveStackRunError.invalidOperation(
@@ -971,12 +1042,23 @@ actor LiveStackCoordinator {
         let referencePath = probe.path
         let openCalibration = calibration
         let opened = try await runBlocking {
-            try LiveStackNativeSession.open(
+            if let expected, !StackFolderMonitor.isUnchanged(expected) {
+                throw LiveStackRunError.invalidOperation("The selected reference changed during scoring.")
+            }
+            return try LiveStackNativeSession.open(
                 referencePath: referencePath,
                 optionsJSON: optionsJSONString,
                 calibration: openCalibration)
         }
         let counts = try await opened.counts()
+        if let expected, !StackFolderMonitor.isUnchanged(expected) {
+            await opened.close()
+            throw LiveStackRunError.invalidOperation("The selected reference changed while opening.")
+        }
+        if Task.isCancelled {
+            await opened.close()
+            throw CancellationError()
+        }
         guard counts.acceptedFrames == 1 else {
             await opened.close()
             throw LiveStackRunError.invalidOperation(

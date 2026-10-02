@@ -552,6 +552,21 @@ final class StackFolderMonitor: @unchecked Sendable {
 
     // MARK: Coordinator surface
 
+    /// Use a separate monitor for the two startup reference observations.
+    func observeReferenceCandidates() -> [StackFileCandidate] {
+        let now = configuration.now()
+        tracker.beginScan()
+        enumerate(URL(fileURLWithPath: configuration.watchFolder), now: now)
+        return tracker.dueCandidates(now: now)
+    }
+
+    static func isUnchanged(_ candidate: StackFileCandidate) -> Bool {
+        guard let current = StackFileIdentity.snapshot(forPath: candidate.path) else { return false }
+        return current.length == candidate.length
+            && current.modifiedUnixNanoseconds == candidate.lastWriteUnixNanoseconds
+            && current.identity == candidate.fileIdentity
+    }
+
     func isCandidateCurrent(_ candidate: StackFileCandidate) -> Bool {
         tracker.isCandidateCurrent(candidate)
     }

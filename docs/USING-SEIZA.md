@@ -48,12 +48,42 @@ them into separate stacks. Each group gets its own reference and output file;
 files with no filter token stay in an Other group. You can turn this split off
 if the filename guess is wrong. Names after a `filter` token, along with
 unknown single-letter or uppercase tokens, keep their original label.
+Click **Choose reference automatically…** for a group to score its selected
+frames with the native core. Seiza favors clear, sharp stars and shows the
+chosen file in the reference picker. You can choose another file afterward.
+Scoring runs off the main thread, one image at a time. Cancel discards the result
+when the current native scoring call ends; it cannot stop that call mid-frame.
+
 You can also choose:
 
-- no, global, or local normalization;
+- no, global, local, or local-background normalization;
 - no sample rejection or delta-sigma rejection;
 - registration error, drift, and overlap limits; and
 - calibration from existing masters or built automatically.
+
+Expand **Registration and processing** for the new options. The defaults stay
+unchanged: similarity registration, equal frame weights, bilinear interpolation,
+VNG demosaicing, normal Bayer integration, and no hot/dead pixel suppression.
+
+- **Affine** registration adds shear and unequal scale. **Quadratic** can fit
+  lens distortion. If too few stars match, the core keeps the similarity fit.
+- **Local background** uses a global gain with tiled background offsets to
+  reduce seams without fitting a separate local gain.
+- **Inverse noise variance** gives noisier frames less weight. Its minimum and
+  maximum weights bound that change; the reference has weight 1.
+- **Lanczos-3** can keep stars sharper than bilinear interpolation, at more CPU
+  cost and with possible ringing near bright edges.
+- **MHC** demosaicing is sharper but can ring. **Bilinear** is faster and softer.
+  **VNG** remains the default for even star colors.
+- **Bayer drizzle** fills color channels from dithered photosites at the same
+  output size. It needs enough well-dithered frames; it can lower SNR with too
+  little coverage. Demosaicing still supplies registration and normalization.
+- **Suppress hot and dead pixels** replaces isolated outliers after calibration
+  and before demosaicing, with separate low and high sigma limits.
+
+**Remove transients after stacking** remains on by default. Progress now covers
+all three rejection passes. The core caches prepared frames on disk where
+supported; Bayer drizzle still rereads the sources. Allow space for that cache.
 
 For calibration, either pick integrated bias, dark, and flat masters, or set
 the source to **Build from calibration frames** and choose a library folder of
@@ -79,6 +109,14 @@ at doubling depths; the completion summary reports the achieved noise reduction
 against the square-root ideal, with a depth chart for a single stack.
 
 ## Stack a folder live
+
+The same **Registration and processing** controls are available here. Turn on
+**Choose reference automatically** to rank stable, compatible raw lights already
+in the capture folder when starting a new stack. This stays off by default.
+Saved sessions restore their original reference before any scoring runs.
+If the folder is empty or candidates change during scoring, Seiza waits for
+the first stable light. Files from another sensor/filter group, calibration
+masters, and session files do not enter the candidate list.
 
 Choose **File > Live Stack** to watch a capture folder while an imaging
 session runs. Pick the folder where new exposures appear, choose stacking and

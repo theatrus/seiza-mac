@@ -192,7 +192,7 @@ commit both to `main`, and make sure CI is green. Create and push an annotated
 tag with the same marketing version:
 
 ```sh
-version=0.7.4
+version=0.7.5
 git tag -a "v${version}" -m "Seiza for Mac ${version}"
 git push origin "v${version}"
 ```

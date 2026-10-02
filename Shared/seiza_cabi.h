@@ -6,6 +6,12 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+/* Scores FITS/XISF paths, returning owned schema-1 reference selection JSON.
+   Pass a JSON array of paths and a bounded worker count. Free the returned
+   string (or error) with seiza_string_free. This synchronous call does not
+   support cancellation; run it off the UI thread. */
+char *seiza_stack_choose_reference_json(const char *paths_json,
+                                      size_t concurrency, char **error_out);
 
 typedef struct SeizaRenderedImage SeizaRenderedImage;
 typedef struct SeizaRenderedImage16 SeizaRenderedImage16;
@@ -14,8 +20,8 @@ typedef struct SeizaStackSnapshot SeizaStackSnapshot;
 typedef struct SeizaStackExportSnapshot SeizaStackExportSnapshot;
 typedef struct SeizaCancelSignal SeizaCancelSignal;
 typedef void (*SeizaCatalogSetupProgressCallback)(const char *, void *);
-/* Progress for seiza_live_stacker_reintegrate: pass (0 estimating, 1
-   integrating), zero-based frame index, admitted-frame count, context.
+/* Progress for seiza_live_stacker_reintegrate: pass (0 trimmed estimate,
+   1 refined estimate, 2 integration), zero-based frame index, frame count, context.
    Called on the calling thread before each frame is read. */
 typedef void (*SeizaStackReintegrateProgressCallback)(uint32_t, size_t, size_t, void *);
 
@@ -226,8 +232,8 @@ int32_t seiza_live_stacker_measure_depth(
     SeizaSnrSample *sample,
     char **error_out);
 
-/* Integrates every admitted frame again, reading each twice more from its
-   source file, with leave-one-out rejection, and returns a new owned
+/* Integrates every admitted frame again in three rejection passes,
+   caching prepared frames where supported, and returns a new owned
    snapshot. The live stacker is not changed; call before
    seiza_live_stacker_finish. Sigma <= 0 uses the default of 3. Returns
    null with error_out set when the stack cannot be replayed (see

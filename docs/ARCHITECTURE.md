@@ -78,10 +78,21 @@ surface chooses its filter. Export still draws at source size without a display
 resize. Thumbnail cache keys include the core version, so a core update does
 not reuse old point-sampled thumbnails.
 
-The locked `seiza-cabi` 0.18.18 includes the area-downsampling change in
+The locked `seiza-cabi` 0.19.0 includes the area-downsampling change in
 [seiza#177](https://github.com/theatrus/seiza/pull/177). It averages covered pixels
 inside the C ABI for bounded RGBA8/RGBA16 renders, interactive linear samples,
 and live-stack previews. Native filtering then handles the final display size.
+
+The same crate exposes stacking 0.20.0. `ImageStackOptions` carries all Swift
+stacking choices, and one `StackProcessingOptionsView` serves directory and live
+stacking. Default values for new fields stay absent from JSON to preserve old
+session identity bytes. Nondefault modes and their parameters enter that identity.
+Native reference scoring uses `seiza_stack_choose_reference_json` on a worker
+queue with concurrency 1. Live startup restores first; new automatic sessions
+score only stable raw lights in one compatible sensor/filter group and recheck
+file identity before committing a reference. A changed or unscorable candidate
+falls back to watching without a partial stack. Scoring cannot be interrupted
+inside the C ABI; cancellation discards its result afterward.
 
 FITS and XISF display rendering sends a non-empty, ordered stack of validated stretch
 configurations to the C ABI. Rust keeps intermediate stage data in `f32` and
