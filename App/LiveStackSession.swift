@@ -186,7 +186,7 @@ struct LiveStackReintegrationProgress: Sendable, Equatable {
     let index: Int
     let count: Int
 
-    static let passCount = 2
+    static let passCount = 3
 
     var fractionCompleted: Double {
         guard count > 0 else { return 0 }

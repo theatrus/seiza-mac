@@ -225,9 +225,11 @@ jobs:
             '' \
             "### New in ${version}" \
             '' \
-            '- Remove transients after stacking, on by default in directory and live stacking, rejects satellite and aircraft trails that stacking used to keep in its first frames. When a stack is done, Seiza reads every accepted frame twice more and rejects samples that stand out from the other frames.' \
-            '- Directory stacking shows each pass and frame and can be cancelled during this step. When a stack cannot be replayed, Seiza writes the normal stack and says why.' \
-            '- The native core moves to Seiza 0.18.18.' \
+            '- Choose a directory reference automatically by scoring the selected frames. Live stacking can rank stable matching lights at startup; saved sessions keep their reference.' \
+            '- Directory and live stacking share controls for similarity, affine, or quadratic registration; local-background normalization; frame weighting; Lanczos-3 interpolation; VNG, MHC, or bilinear demosaicing; Bayer drizzle; and hot/dead pixel suppression.' \
+            '- New processing modes are opt-in. Default recipe bytes stay unchanged, and nondefault choices form part of saved-session identity.' \
+            '- Transient-removal progress covers all three rejection passes. Prepared frames use a disk cache where supported.' \
+            '- The native core moves to published Seiza/C ABI 0.19.0 and seiza-stacking 0.20.0.' \
             '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
             "- [Download the zipped application](${release_base}/Seiza-${version}-universal.zip)" \

@@ -8,6 +8,15 @@ import XCTest
 /// probe classifies roles and signatures the way real capture software's
 /// output would.
 enum SyntheticFrame {
+    static func noisyStarField(width: Int = 160, height: Int = 128) -> [Int16] {
+        starField(width: width, height: height).enumerated().map { index, value in
+            var hash = UInt32(index) &+ 0x9e3779b9
+            hash = (hash ^ (hash >> 16)) &* 0x85ebca6b
+            hash = (hash ^ (hash >> 13)) &* 0xc2b2ae35
+            hash ^= hash >> 16
+            return value + Int16(hash % 61) - 30
+        }
+    }
     static func write(
         width: Int,
         height: Int,
@@ -752,6 +761,63 @@ final class CalibrationMatchingNativeTests: XCTestCase {
 // MARK: - Native session and probe
 
 final class LiveStackNativeSessionTests: XCTestCase {
+    func testAutomaticReferenceScoringLeavesSourcesUntouched() throws {
+        let url = try SyntheticFrame.write(width: 160, height: 128,
+            values: SyntheticFrame.noisyStarField(),
+            cards: SyntheticFrame.lightCards())
+        defer { try? FileManager.default.removeItem(at: url) }
+        let before = try Data(contentsOf: url)
+        let missing = url.deletingLastPathComponent().appendingPathComponent("missing-\(UUID()).fits")
+        let selection = try StackReferenceSelector.choose([missing, url])
+        XCTAssertEqual(selection.referenceIndex, 1)
+        XCTAssertNil(selection.scores[0])
+        XCTAssertGreaterThan(try XCTUnwrap(selection.scores[1]).stars, 0)
+        XCTAssertEqual(try Data(contentsOf: url), before)
+        XCTAssertThrowsError(try StackReferenceSelector.choose([missing]))
+        XCTAssertThrowsError(try StackReferenceSelector.choose([]))
+    }
+
+    func testEveryAdvancedRecipeOpensAndResumesThroughCABI() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let values = SyntheticFrame.noisyStarField()
+        let reference = try SyntheticFrame.write(width: 160, height: 128, values: values,
+            cards: SyntheticFrame.lightCards() + ["BAYERPAT= 'RGGB'"], directory: directory)
+        let second = try SyntheticFrame.write(width: 160, height: 128, values: values,
+            cards: SyntheticFrame.lightCards() + ["BAYERPAT= 'RGGB'"], directory: directory)
+        let before = try Data(contentsOf: reference)
+        for model in StackRegistrationModel.allCases {
+            for demosaic in StackDemosaic.allCases {
+                var options = ImageStackOptions()
+                options.registrationModel = model
+                options.demosaic = demosaic
+                options.interpolation = .lanczos3
+                options.weighting = .inverseNoiseVariance
+                options.cfaIntegration = .bayerDrizzle
+                options.suppressesHotPixels = true
+                options.normalization = .localBackground
+                options.localTileSize = 64
+                let session = try LiveStackNativeSession.open(referencePath: reference.path,
+                    optionsJSON: String(decoding: try options.jsonData, as: UTF8.self),
+                    calibration: ImageStackCalibration())
+                let outcome = try await session.push(path: second.path)
+                XCTAssertTrue(try XCTUnwrap(outcome.disposition).accepted, outcome.disposition?.reason ?? "")
+                let context = directory.appendingPathComponent("checkpoint.seiza-stack")
+                let saved = try await session.saveContext(to: context.path)
+                let restored = try LiveStackNativeSession.resume(contextPath: context.path)
+                let state = try await restored.state()
+                XCTAssertTrue(saved.describesSameCheckpoint(state))
+                let preview = try await restored.renderPreview(
+                    configJSON: LiveStackRunConfiguration.defaultPreviewProcessingJSON, maxDimension: 64)
+                XCTAssertNotNil(preview.makeCGImage())
+                await restored.close()
+                await session.close()
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: reference), before)
+    }
+
     func testProbeReadsRoleFilterAndExposure() throws {
         let url = try SyntheticFrame.write(
             width: 160, height: 128,
@@ -859,7 +925,7 @@ final class LiveStackNativeSessionTests: XCTestCase {
         XCTAssertGreaterThan(reintegratedSize, 0)
         let recorded = steps.all
         XCTAssertEqual(recorded.first?.pass, 0)
-        XCTAssertEqual(recorded.last?.pass, 1)
+        XCTAssertEqual(recorded.last?.pass, 2)
         XCTAssertTrue(recorded.allSatisfy { $0.count == 2 })
         counts = try await session.counts()
         XCTAssertEqual(counts.acceptedFrames, 2)
@@ -894,12 +960,15 @@ private final class ReintegrationSteps: @unchecked Sendable {
 final class LiveStackNativeStateDecodingTests: XCTestCase {
     private func stateJSON(_ extra: String = "") -> Data {
         let fingerprint = String(repeating: "ab", count: 32)
-        return Data(("{\"schemaVersion\":1,\"coreVersion\":\"0.18.18\","
-            + "\"configurationFingerprint\":\"\(fingerprint)\","
-            + "\"width\":160,\"height\":128,\"channels\":1,"
-            + "\"acceptedFrames\":2,\"rejectedFrames\":0,"
-            + "\"inputMode\":\"calibrate-and-prepare\","
-            + "\"inputPaths\":[\"/a.fits\",\"/b.fits\"]\(extra)}").utf8)
+        let json = """
+            {"schemaVersion":1,"coreVersion":"0.18.18",
+            "configurationFingerprint":"\(fingerprint)",
+            "width":160,"height":128,"channels":1,
+            "acceptedFrames":2,"rejectedFrames":0,
+            "inputMode":"calibrate-and-prepare",
+            "inputPaths":["/a.fits","/b.fits"]\(extra)}
+            """
+        return Data(json.utf8)
     }
 
     func testReadsTheReintegrationReason() throws {
@@ -1134,6 +1203,66 @@ final class CalibrationPreparationServiceTests: XCTestCase {
 // MARK: - Coordinator end to end
 
 final class LiveStackCoordinatorTests: XCTestCase {
+    func testAutomaticReferenceFiltersCandidatesAndRestoresBeforeScoring() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let watch = root.appendingPathComponent("lights")
+        try FileManager.default.createDirectory(at: watch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for (name, filter) in [("a.fits", "Ha"), ("b.fits", "Ha"), ("c.fits", "OIII")] {
+            _ = try SyntheticFrame.write(width: 160, height: 128, values: SyntheticFrame.noisyStarField(),
+                cards: SyntheticFrame.lightCards(filter: filter), directory: watch, name: name)
+        }
+        var config = LiveStackRunConfiguration(watchFolder: watch.path,
+            sessionRootDirectory: root.appendingPathComponent("sessions"))
+        config.choosesReferenceAutomatically = true
+        config.monitorStabilityDuration = 0.01
+        config.monitorScanInterval = 3600
+        let coordinator = try LiveStackCoordinator(configuration: config) { urls in
+            XCTAssertEqual(urls.map(\.lastPathComponent), ["a.fits", "b.fits"])
+            return try StackReferenceSelector.choose(urls)
+        }
+        try await coordinator.start()
+        let first = await coordinator.currentSnapshot()
+        XCTAssertEqual(first.acceptedFrames, 1)
+        XCTAssertEqual(first.filter?.key, "hydrogen-alpha")
+        try await coordinator.pauseAndSave()
+        await coordinator.dispose()
+        let restored = try LiveStackCoordinator(configuration: config) { _ in
+            XCTFail("A restored stack must not score a new reference")
+            throw CancellationError()
+        }
+        try await restored.start()
+        let resumed = await restored.currentSnapshot()
+        XCTAssertEqual(resumed.acceptedFrames, 1)
+        await restored.dispose()
+    }
+
+    func testChangedAutomaticReferenceFallsBackToWatching() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let light = try SyntheticFrame.write(width: 160, height: 128, values: SyntheticFrame.noisyStarField(),
+            cards: SyntheticFrame.lightCards(), directory: root)
+        var config = LiveStackRunConfiguration(watchFolder: root.path,
+            sessionRootDirectory: root.appendingPathComponent("sessions"))
+        config.choosesReferenceAutomatically = true
+        config.monitorStabilityDuration = 0.01
+        config.monitorScanInterval = 3600
+        let coordinator = try LiveStackCoordinator(configuration: config) { urls in
+            let result = try StackReferenceSelector.choose(urls)
+            var changed = try Data(contentsOf: light)
+            changed.append(0)
+            try changed.write(to: light)
+            return result
+        }
+        try await coordinator.start()
+        let snapshot = await coordinator.currentSnapshot()
+        XCTAssertEqual(snapshot.acceptedFrames, 0)
+        XCTAssertEqual(snapshot.state, .waitingForLight)
+        XCTAssertTrue(snapshot.attention.contains { $0.message.contains("changed during scoring") })
+        await coordinator.dispose()
+    }
+
     func testMonitorExclusionsCoverMastersButNotTheInitialReference() throws {
         var configuration = LiveStackRunConfiguration(
             watchFolder: "/captures",

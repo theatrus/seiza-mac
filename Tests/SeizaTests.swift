@@ -177,6 +177,75 @@ final class ImageCollectionTests: XCTestCase {
 }
 
 final class ImageStackOptionsTests: XCTestCase {
+    func testNewDefaultsPreserveRecipeBytes() throws {
+        let expected = #"{"acceptance":{"maximum_registration_rms_pixels":2,"minimum_overlap_fraction":0.6},"normalization":{"mode":"global"},"registration":{"maximum_drift_fraction":0.15,"maximum_drift_pixels":256},"rejection":{"mode":"delta-sigma","options":{"high_sigma":3,"low_sigma":3,"minimum_sigma":1e-06,"warmup_samples":5}}}"#
+        XCTAssertEqual(String(decoding: try ImageStackOptions().jsonData, as: UTF8.self), expected)
+        XCTAssertFalse(LiveStackRunConfiguration(
+            watchFolder: "/tmp", sessionRootDirectory: URL(fileURLWithPath: "/tmp/sessions"))
+            .choosesReferenceAutomatically)
+    }
+
+    func testAdvancedOptionsEncodeCoreNames() throws {
+        var options = ImageStackOptions()
+        options.registrationModel = .quadratic
+        options.normalization = .localBackground
+        options.weighting = .inverseNoiseVariance
+        options.minimumWeight = 0.1
+        options.maximumWeight = 10
+        options.interpolation = .lanczos3
+        options.demosaic = .mhc
+        options.cfaIntegration = .bayerDrizzle
+        options.suppressesHotPixels = true
+        let data = try options.jsonData
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual((object["registration"] as? [String: Any])?["model"] as? String, "quadratic")
+        XCTAssertEqual((object["normalization"] as? [String: Any])?["mode"] as? String, "local-background")
+        XCTAssertEqual((object["weighting"] as? [String: Any])?["minimum_weight"] as? Double, 0.1)
+        XCTAssertEqual((object["weighting"] as? [String: Any])?["maximum_weight"] as? Double, 10)
+        XCTAssertEqual((object["cosmetic"] as? [String: Any])?["low_sigma"] as? Double, 16)
+        XCTAssertEqual(object["interpolation"] as? String, "lanczos3")
+        XCTAssertEqual(object["demosaic"] as? String, "mhc")
+        XCTAssertEqual(object["cfa_integration"] as? String, "bayer_drizzle")
+        let snapshot = options
+        options.registrationModel = .affine
+        XCTAssertNotEqual(try options.jsonData, data)
+        XCTAssertEqual(try snapshot.jsonData, data)
+    }
+
+    func testNativeFloatBoundsAndConditionalValidation() throws {
+        for invalid in [Double.nan, .infinity, 0, -1, 1e100, 1e-100] {
+            var options = ImageStackOptions()
+            options.weighting = .inverseNoiseVariance
+            options.minimumWeight = invalid
+            XCTAssertNotNil(options.validationMessage)
+            XCTAssertThrowsError(try options.jsonData)
+            options = ImageStackOptions()
+            options.suppressesHotPixels = true
+            options.cosmeticHighSigma = invalid
+            XCTAssertNotNil(options.validationMessage)
+        }
+        var options = ImageStackOptions()
+        options.normalization = .localBackground
+        options.localTileSize = 1
+        XCTAssertNotNil(options.validationMessage)
+        options.normalization = .global
+        options.minimumWeight = .nan
+        options.cosmeticHighSigma = .infinity
+        XCTAssertNil(options.validationMessage)
+        XCTAssertNoThrow(try options.jsonData)
+    }
+
+    func testReferenceResponseRejectsMismatchedPathsAndScores() throws {
+        let valid = #"{"schemaVersion":1,"referenceIndex":0,"referencePath":"/one.fits","scores":[{"stars":12,"medianStarArea":2,"background":10,"backgroundVariation":1,"score":20}]}"#
+        let selection = try JSONDecoder().decode(StackReferenceSelection.self, from: Data(valid.utf8))
+        XCTAssertNoThrow(try selection.validate(paths: ["/one.fits"]))
+        XCTAssertThrowsError(try selection.validate(paths: ["/other.fits"]))
+        XCTAssertThrowsError(try selection.validate(paths: []))
+        let invalid = valid.replacingOccurrences(of: "\"score\":20", with: "\"score\":0")
+        XCTAssertThrowsError(try JSONDecoder().decode(StackReferenceSelection.self,
+            from: Data(invalid.utf8)).validate(paths: ["/one.fits"]))
+    }
+
     func testDefaultOptionsMatchSharedCABIShape() throws {
         let object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: ImageStackOptions().jsonData) as? [String: Any]
@@ -243,8 +312,8 @@ final class ImageStackOptionsTests: XCTestCase {
 
     func testRemovingTransientsProgressUsesItsOwnFraction() {
         let step = LiveStackReintegrationProgress(pass: 1, index: 2, count: 40)
-        XCTAssertEqual(step.message, "Removing transients: pass 2 of 2, frame 3 of 40")
-        XCTAssertEqual(step.fractionCompleted, 42.0 / 80.0, accuracy: 1e-12)
+        XCTAssertEqual(step.message, "Removing transients: pass 2 of 3, frame 3 of 40")
+        XCTAssertEqual(step.fractionCompleted, 42.0 / 120.0, accuracy: 1e-12)
         let progress = ImageStackProgress(
             phase: .removingTransients,
             message: step.message,
@@ -253,7 +322,7 @@ final class ImageStackOptionsTests: XCTestCase {
             acceptedFrames: 40,
             rejectedFrames: 0,
             phaseFraction: step.fractionCompleted)
-        XCTAssertEqual(progress.fractionCompleted ?? -1, 42.0 / 80.0, accuracy: 1e-12)
+        XCTAssertEqual(progress.fractionCompleted ?? -1, 42.0 / 120.0, accuracy: 1e-12)
     }
 }
 

@@ -33,6 +33,7 @@ final class LiveStackWindowModel: ObservableObject {
     @Published var watchFolder: URL?
     @Published var includeSubdirectories = false
     @Published var resumeExisting = true
+    @Published var choosesReferenceAutomatically = false
     @Published var options = ImageStackOptions()
     @Published var calibrationMode = LiveStackCalibrationMode.none
     @Published var manualCalibration = ImageStackCalibration()
@@ -158,6 +159,11 @@ final class LiveStackWindowModel: ObservableObject {
 
     private func startLiveStack() async throws {
         guard let watchFolder else { return }
+        let options = options
+        let choosesReferenceAutomatically = choosesReferenceAutomatically
+        let includeSubdirectories = includeSubdirectories
+        let resumeExisting = resumeExisting
+        let calibrationMode = calibrationMode
         var calibration = ImageStackCalibration()
         initialReferencePath = nil
 
@@ -179,6 +185,7 @@ final class LiveStackWindowModel: ObservableObject {
         configuration.resumeExisting = resumeExisting
         configuration.applyCalibrationOnResume = calibrationMode != .none
         configuration.initialReferencePath = initialReferencePath
+        configuration.choosesReferenceAutomatically = choosesReferenceAutomatically
         configuration.options = options
         configuration.calibration = calibration
 
@@ -226,7 +233,7 @@ final class LiveStackWindowModel: ObservableObject {
             reference: reference,
             sourcePaths: [calibrationLibrary.path],
             cacheDirectory: CalibrationCachePaths.forLibrary(calibrationLibrary.path))
-        let prepared = try await service.prepare(request) { update in
+        let prepared = try await service.prepare(request) { [weak self] update in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.calibrationSummary = update.message
@@ -620,12 +627,16 @@ private struct LiveStackConfigurationView: View {
                 }
 
                 Section("Stacking") {
+                    Toggle("Choose reference automatically", isOn: $model.choosesReferenceAutomatically)
+                    Text("For a new stack, score stable matching lights already in the folder. A saved session keeps its reference; an empty folder waits for its first stable light.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    StackProcessingOptionsView(options: $model.options)
                     Picker("Normalization", selection: $model.options.normalization) {
                         ForEach(StackNormalizationMode.allCases) { mode in
                             Text(mode.title).tag(mode)
                         }
                     }
-                    if model.options.normalization == .local {
+                    if model.options.usesLocalTiles {
                         Picker("Tile size", selection: $model.options.localTileSize) {
                             ForEach([64, 128, 256, 512], id: \.self) { size in
                                 Text("\(size) px").tag(size)
@@ -660,7 +671,7 @@ private struct LiveStackConfigurationView: View {
                     Toggle(
                         "Remove transients after stacking",
                         isOn: $model.options.removesTransients)
-                    Text("When you finish, reads every accepted frame twice more "
+                    Text("When you finish, runs three passes over accepted frames "
                         + "to reject satellite trails that live rejection kept "
                         + "in the first frames.")
                         .font(.caption)
@@ -758,6 +769,7 @@ private struct LiveStackConfigurationView: View {
                 }
             }
             .formStyle(.grouped)
+            .disabled(model.isBusy)
         }
     }
 

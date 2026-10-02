@@ -7,7 +7,7 @@ FITS or XISF data, inspect headers, plate-solve a frame, and see the stars and d
 objects in it. Everything runs locally, and Seiza never solves an image until
 you ask it to.
 
-[**Download Seiza for Mac 0.7.4**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.7.4-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
+[**Download Seiza for Mac 0.7.5**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.7.5-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
 **Also from Seiza:** [Core, CLI, and libraries](https://github.com/theatrus/seiza) ·
 [Seiza for Windows](https://github.com/theatrus/seiza-win) ·
@@ -41,7 +41,8 @@ Electron, web view, or local server.
 | --- | --- |
 | FITS, XISF, and raster viewing | Opens FITS, XISF, JPEG, PNG, and TIFF files in native Mac windows. Drop a new file onto any viewer to replace its image. |
 | Fast folder review | Browses mixed-format local or network folders without blocking the app, with arrow keys, a thumbnail drawer, a local cache, and nearby-image preloading. |
-| Directory stacking | Aligns and combines selected FITS or XISF frames from an open folder. It recognizes common filename filters such as L/R/G/B, Ha, OIII, S/SII, and H-beta, while keeping custom filter names unchanged. Save one stack per detected filter or turn grouping off for one output. Choose references, normalization, sample rejection, registration limits, and calibration: pick existing masters, or point Seiza at raw bias, dark, dark-flat, and flat frames and let the shared core match camera metadata, prove one safe set against every light in each group, and build masters in dependency order into a reusable cache. Follow progress, cancel between frames, and open the saved 32-bit floating-point FITS results. Measurements at doubling depths show the achieved noise reduction against the square-root ideal. By default Seiza then reads every accepted frame twice more to reject satellite and aircraft trails that live rejection kept in the first frames; turn off "Remove transients after stacking" to skip this. |
+| Directory stacking | Combines selected FITS or XISF frames into 32-bit floating-point FITS outputs, with optional filename-filter grouping. Choose a reference or let Seiza score the candidates. Set normalization, rejection, registration, frame weighting, interpolation, Bayer processing, and calibration. Use existing masters or build and cache matched masters from raw calibration frames. Track progress and SNR, cancel, and open the saved results. Three-pass transient removal rejects trails left by the live pass. |
+| Stacking controls | Similarity, affine, or quadratic registration; global, local, or local-background normalization; equal or bounded inverse-noise-variance weights; bilinear or Lanczos-3 interpolation; VNG, MHC, or bilinear demosaicing; Bayer drizzle; and optional hot/dead pixel suppression. Directory and live stacking share the controls. New modes are opt-in; core defaults stay unchanged. |
 | Live folder stacking | Watches a capture folder while an imaging session runs. Seiza waits until each FITS or XISF file stops changing, checks that it is a raw, compatible light frame, and registers it into a filter-locked stack. The live window shows a bounded autostretched preview, accepted and rejected counts, calibration epochs, checkpoint health, and an SNR depth chart. Save a non-destructive FITS snapshot at any time or finish the accumulator into the final 32-bit floating-point stack, which by default makes the same transient-removing pass over the frames. Sessions checkpoint the exact native state: pause, close, or crash, then reopen the window and resume the same accumulator, with the previous complete generation as a fallback after an interrupted write. |
 | Astronomy rendering | Displays mono, planar RGB, and Bayer/OSC data through the full-precision Seiza core. Filtered reductions limit noise aliasing in the viewer and previews, while full-resolution images keep crisp source pixels at 1:1 and higher zoom. |
 | Live stretch stacks | Adds, removes, reorders, and edits automatic or manual stages. Pick GHS symmetry points from the image, choose linked, per-channel, or luminance-preserving color, copy settings between images, and undo or redo each change. |
@@ -61,7 +62,7 @@ Electron, web view, or local server.
 
 ## Download
 
-[**Download Seiza for Mac 0.7.4**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.7.4-universal.dmg), open it, and drag Seiza to Applications.
+[**Download Seiza for Mac 0.7.5**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.7.5-universal.dmg), open it, and drag Seiza to Applications.
 
 Or install with [Homebrew](https://brew.sh) from the
 [theatrus/homebrew-seiza tap](https://github.com/theatrus/homebrew-seiza):
