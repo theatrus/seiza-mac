@@ -40,7 +40,7 @@ independent distance reference; the app also saves optional `tourGlide`, `tourTi
 an itinerary, not a full project: it does not embed images, bookmarks, labels,
 scene overrides, or export preferences.
 
-Since 0.8.0, `main` uses published `seiza-cabi` and `seiza` **0.26.0** and
+After the 0.8.0 release, `main` uses published `seiza-cabi` and `seiza` **0.26.0** and
 `seiza-parallax` **0.3.0**, which add [dust maps](#dust-maps); the bridge header
 is the 0.26.0 crate's.
 
@@ -144,7 +144,9 @@ opaque and black where the sky is clear, at any size with the image's shape. In
 
 The section says where the dust came from and how many stars the map brought in
 front. The map, like the other input files, lasts while the window is open; tour
-itineraries do not record it. Dust maps need dust dimming on.
+itineraries do not record it. Dust maps need dust dimming on. Export reports its
+activity and prevents overlapping writes, retaining the destination's security
+scope until the native write finishes.
 
 ## Scene reuse and ownership
 
@@ -165,8 +167,10 @@ separation, star detection, solving, and distance queries.
 Changing layers, source geometry/WCS, catalogues, distances, star placement,
 dust, or galaxy placement invalidates the scene. A dust map does not: choosing,
 reloading or resetting one calls `seiza_parallax_with_dust_map_json` on the
-latest camera's handle, which shares the scene's planes and stars and changes
-only the dust. The result becomes both the refit base and the preview, so later
+latest prepared handle, which shares the scene's planes and stars and changes
+only the dust. If camera edits are still pending, the new dust is refitted to
+the current draft before publication, including with automatic preview off.
+The result becomes both the refit base and the preview, so later
 refits and exports keep the map. The distance-reference point
 is independent of camera targets, so touring another object does not silently
 change the background depth.
