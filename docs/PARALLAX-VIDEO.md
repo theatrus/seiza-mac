@@ -1,17 +1,16 @@
 # Parallax video for Mac
 
-The implementation on `codex/parallax-video` now uses published `seiza-cabi`
-**0.25.0**, `seiza` **0.25.0**, and `seiza-download` **0.8.0**, following the merge
+Seiza for Mac **0.8.0** uses published `seiza-cabi`
+**0.25.1**, `seiza` **0.25.1**, and `seiza-download` **0.8.0**, following the merge
 of [seiza PR #240](https://github.com/theatrus/seiza/pull/240). The complete bridge
 header matches the C ABI crate. Cargo locks the registry checksums and builds
-use `--locked`; the release commit is `499cfd22709ca3a49929759ac4d4dfd4062c7764`.
+use `--locked`; the release commit is `9f17e90f84e6841e69f8f8e39e6bd9b7e1b47c00`.
 
-Published `seiza-parallax` **0.2.0** is temporarily patched with only `render.rs`
-and `scene.rs` from [PR #242](https://github.com/theatrus/seiza/pull/242), commit
-`da4e14abffdc336f7f1d21d8832342eb8c66f5f7`. Those two files match upstream
-byte-for-byte; its published manifest and released dependency versions remain
-unchanged. See [patch provenance and removal](../Rust/vendor/seiza-parallax/PATCH.md).
-Build metadata and About report the renderer fix separately from the release.
+Published `seiza-parallax` **0.2.1** includes the loop and halo fixes from
+[PR #242](https://github.com/theatrus/seiza/pull/242). Its renderer sources match
+the previously tested patch byte-for-byte. The local vendor copy, Cargo patch
+and temporary About metadata have been removed; all Seiza crates now resolve
+from crates.io with registry checksums.
 
 ## Workspace
 
@@ -153,8 +152,7 @@ The small Mac-only download/status adapter lives in
 `Rust/seiza-mac-core/src/catalogs.rs`; its declarations are outside the vendored
 upstream header. Direct `seiza`, `seiza-download`, and `seiza-cabi` dependencies
 use exact published versions from the same registry. The build checks their
-locked sources and verifies that the local renderer patch is selected whenever
-its provenance manifest is present.
+locked sources; About reports the published C ABI's version and source commit.
 
 Catalogue label metadata is loaded lazily by upstream. Keep catalogue/file
 security scopes alive with the scene and through every in-flight native call,
@@ -204,6 +202,12 @@ Quick Look and Finder thumbnails have no video UI. All three binaries link the
 same core, so the upstream Inter font's OFL notice is bundled in every target.
 
 ## Verification and remaining work
+
+The 0.8.0 release preparation adopts published C ABI/core 0.25.1 and parallax
+0.2.1. All 188 native tests, the three Rust wrapper tests, formatting, Clippy
+with warnings denied, and the unsigned universal Release build pass. The C ABI
+header and previously verified renderer sources are byte-for-byte matches.
+The temporary renderer vendor copy and patch-only build metadata are removed.
 
 The unsigned Debug app and both extensions build on Apple silicon; the unsigned
 universal Release build also passes. The full XCTest suite passed **188 tests**,
@@ -340,8 +344,7 @@ source refresh, numbered route overlays/drag reordering, richer catalogue target
 selection, and recombination inspection of imported layers. HDR, 10-bit, ProRes,
 and audio are outside this initial export path.
 
-PR #240 is merged and its final changes are integrated. For future updates,
-review the release and PR #242, remove the temporary renderer patch once a
-published version includes it, and update dependencies, lockfile and header
+PRs #240 and #242 are merged and their changes ship in the published crates.
+For future updates, review the release and update dependencies, lockfile and header
 together. Map any new scene/video/stop fields to the inspectors and rerun the
 native and Rust checks, including renderer regressions and representative exports.

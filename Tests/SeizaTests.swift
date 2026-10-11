@@ -34,15 +34,7 @@ final class SeizaBuildInfoTests: XCTestCase {
             XCTAssertTrue(checksum.allSatisfy(\.isHexDigit))
             XCTAssertTrue(lock.contains("checksum = \"\(checksum)\""))
         }
-        var expected = "Seiza Core \(SeizaCore.version)\nCommit \(commit)"
-        let patchURL = repositoryRoot.appendingPathComponent("Rust/vendor/seiza-parallax/PATCH.toml")
-        if FileManager.default.fileExists(atPath: patchURL.path) {
-            let metadata = try String(contentsOf: patchURL, encoding: .utf8)
-            let patch = SeizaCore.parallaxPatchCommit
-            XCTAssertEqual(patch.count, 40)
-            XCTAssertTrue(metadata.contains("fix_commit = \"\(patch)\""))
-            expected += "\nParallax fix \(patch)"
-        } else { XCTAssertTrue(SeizaCore.parallaxPatchCommit.isEmpty) }
+        let expected = "Seiza Core \(SeizaCore.version)\nCommit \(commit)"
         XCTAssertEqual(AboutDetails.seizaCoreDescription, expected)
     }
 }

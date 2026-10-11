@@ -13,15 +13,6 @@ static SEIZA_CABI_PACKAGE_CHECKSUM: &[u8] =
 static SEIZA_CORE_GIT_COMMIT: &[u8] = concat!(env!("SEIZA_CORE_GIT_COMMIT"), "\0").as_bytes();
 static SEIZA_CABI_PACKAGE_SOURCE: &[u8] =
     concat!(env!("SEIZA_CABI_PACKAGE_SOURCE"), "\0").as_bytes();
-static SEIZA_PARALLAX_PATCH_COMMIT: &[u8] =
-    concat!(env!("SEIZA_PARALLAX_PATCH_COMMIT"), "\0").as_bytes();
-
-/// Returns the upstream renderer fix applied to the published crate, or empty.
-#[unsafe(no_mangle)]
-pub extern "C" fn seiza_mac_parallax_patch_commit() -> *const c_char {
-    SEIZA_PARALLAX_PATCH_COMMIT.as_ptr().cast()
-}
-
 /// Returns the exact upstream Git commit of the locked crate.
 #[unsafe(no_mangle)]
 pub extern "C" fn seiza_mac_core_git_commit() -> *const c_char {

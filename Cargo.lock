@@ -263,7 +263,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
 dependencies = [
- "thiserror 2.0.19",
+ "thiserror",
 ]
 
 [[package]]
@@ -1075,20 +1075,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mp4"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9ef834d5ed55e494a2ae350220314dc4aacd1c43a9498b00e320e0ea352a5c3"
-dependencies = [
- "byteorder",
- "bytes",
- "num-rational",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "multiversion"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1135,15 +1121,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nasm-rs"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "706bf8a5e8c8ddb99128c3291d31bd21f4bcde17f0f4c20ec678d85c74faa149"
-dependencies = [
- "log",
-]
-
-[[package]]
 name = "num-bigint"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1180,7 +1157,6 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
- "serde",
 ]
 
 [[package]]
@@ -1204,27 +1180,6 @@ name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
-
-[[package]]
-name = "openh264"
-version = "0.9.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcc9071a0b5f9c501ddd01066c2600d922cc799dc450a52975222bcda7755a08"
-dependencies = [
- "openh264-sys2",
- "wide",
-]
-
-[[package]]
-name = "openh264-sys2"
-version = "0.9.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ada29a4cadc13d4d326737af87c13e224210d7d99fe47594e9f3f9b0102fd70"
-dependencies = [
- "cc",
- "nasm-rs",
- "walkdir",
-]
 
 [[package]]
 name = "option-ext"
@@ -1338,7 +1293,7 @@ dependencies = [
  "rustc-hash",
  "rustls",
  "socket2",
- "thiserror 2.0.19",
+ "thiserror",
  "tokio",
  "tracing",
  "web-time",
@@ -1360,7 +1315,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "slab",
- "thiserror 2.0.19",
+ "thiserror",
  "tinyvec",
  "tracing",
  "web-time",
@@ -1455,7 +1410,7 @@ checksum = "a4e608c6638b9c18977b00b475ac1f28d14e84b27d8d42f70e0bf1e3dec127ac"
 dependencies = [
  "getrandom 0.2.17",
  "libredox",
- "thiserror 2.0.19",
+ "thiserror",
 ]
 
 [[package]]
@@ -1598,15 +1553,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "same-file"
-version = "1.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
-dependencies = [
- "winapi-util",
-]
-
-[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1614,9 +1560,9 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "seiza"
-version = "0.25.0"
+version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a18eb57e4b0a249a623f1830b3200cbe514532198702ea3ffa1e89321e33b9d4"
+checksum = "a00c3fbbdc2782d520d0c36d6b2284e0ab77c11fe2098104de1fb8cd93152bea"
 dependencies = [
  "chrono",
  "directories",
@@ -1633,7 +1579,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "thiserror 2.0.19",
+ "thiserror",
 ]
 
 [[package]]
@@ -1646,14 +1592,14 @@ dependencies = [
  "rayon",
  "seiza-stats",
  "serde",
- "thiserror 2.0.19",
+ "thiserror",
 ]
 
 [[package]]
 name = "seiza-cabi"
-version = "0.25.0"
+version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac489c505f037886ff485c1590b2ad5f2bb42acc83be8eea3017a2f5c17657ea"
+checksum = "b70f7e2e23872ea6d42986af7ddb5bb48ebafdbdb12a327f9cf2df90437b3b93"
 dependencies = [
  "cbindgen",
  "image",
@@ -1682,7 +1628,7 @@ dependencies = [
  "seiza-imgproc",
  "seiza-stats",
  "serde",
- "thiserror 2.0.19",
+ "thiserror",
 ]
 
 [[package]]
@@ -1694,7 +1640,7 @@ dependencies = [
  "multiversion",
  "rayon",
  "serde",
- "thiserror 2.0.19",
+ "thiserror",
 ]
 
 [[package]]
@@ -1711,7 +1657,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "thiserror 2.0.19",
+ "thiserror",
  "tokio",
  "tokio-util",
 ]
@@ -1750,7 +1696,7 @@ dependencies = [
 
 [[package]]
 name = "seiza-mac-core"
-version = "0.7.5"
+version = "0.8.0"
 dependencies = [
  "seiza",
  "seiza-cabi",
@@ -1762,20 +1708,19 @@ dependencies = [
 
 [[package]]
 name = "seiza-parallax"
-version = "0.2.0"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdff63ad33db1f355dfa616d4b682f328a73a1c0005beb2e6b9cbaaeb1610d38"
 dependencies = [
  "ab_glyph",
  "image",
- "mp4",
  "multiversion",
- "openh264",
  "rayon",
  "seiza",
  "seiza-draw",
  "seiza-sources",
  "seiza-stars",
- "tempfile",
- "thiserror 2.0.19",
+ "thiserror",
  "tokio",
 ]
 
@@ -1789,7 +1734,7 @@ dependencies = [
  "futures-util",
  "reqwest",
  "tar",
- "thiserror 2.0.19",
+ "thiserror",
  "tokio",
 ]
 
@@ -1814,7 +1759,7 @@ dependencies = [
  "sha2",
  "statrs",
  "tempfile",
- "thiserror 2.0.19",
+ "thiserror",
  "zstd 0.14.2",
 ]
 
@@ -1844,7 +1789,7 @@ dependencies = [
  "rayon",
  "seiza-stats",
  "serde",
- "thiserror 2.0.19",
+ "thiserror",
 ]
 
 [[package]]
@@ -1861,7 +1806,7 @@ dependencies = [
  "sha2",
  "sha3",
  "tempfile",
- "thiserror 2.0.19",
+ "thiserror",
  "zstd 0.14.2",
 ]
 
@@ -2045,7 +1990,7 @@ dependencies = [
  "nalgebra",
  "num-traits",
  "rand",
- "thiserror 2.0.19",
+ "thiserror",
 ]
 
 [[package]]
@@ -2128,31 +2073,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "1.0.69"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
-dependencies = [
- "thiserror-impl 1.0.69",
-]
-
-[[package]]
-name = "thiserror"
 version = "2.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09a43598840e33d5b0331f38c5e30d13bb11c11210a4b58f0d9b18a5a5eefcd9"
 dependencies = [
- "thiserror-impl 2.0.19",
-]
-
-[[package]]
-name = "thiserror-impl"
-version = "1.0.69"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
+ "thiserror-impl",
 ]
 
 [[package]]
@@ -2423,16 +2348,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
-name = "walkdir"
-version = "2.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
-dependencies = [
- "same-file",
- "winapi-util",
-]
-
-[[package]]
 name = "want"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2575,15 +2490,6 @@ name = "winapi-i686-pc-windows-gnu"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
-
-[[package]]
-name = "winapi-util"
-version = "0.1.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
-dependencies = [
- "windows-sys 0.61.2",
-]
 
 [[package]]
 name = "winapi-x86_64-pc-windows-gnu"

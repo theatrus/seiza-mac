@@ -62,29 +62,6 @@ fn main() {
     println!("cargo:rustc-env=SEIZA_CABI_PACKAGE_CHECKSUM={checksum}");
     println!("cargo:rustc-env=SEIZA_CORE_GIT_COMMIT={commit}");
     println!("cargo:rustc-env=SEIZA_CABI_PACKAGE_SOURCE={source}");
-
-    let patch_path = repository_root.join("Rust/vendor/seiza-parallax/PATCH.toml");
-    println!("cargo:rerun-if-changed={}", patch_path.display());
-    let patch_commit = if patch_path.is_file() {
-        let patch = fs::read_to_string(&patch_path).expect("read parallax patch provenance");
-        let commit =
-            package_field(&patch, "fix_commit").expect("patch must identify its upstream fix");
-        assert!(commit.len() == 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit()));
-        let renderer = package_entry(&lock, "seiza-parallax").expect("parallax must be locked");
-        assert_eq!(
-            package_field(renderer, "source"),
-            None,
-            "renderer patch must be selected"
-        );
-        assert_eq!(
-            package_field(renderer, "version"),
-            package_field(&patch, "base_version")
-        );
-        commit.to_owned()
-    } else {
-        String::new()
-    };
-    println!("cargo:rustc-env=SEIZA_PARALLAX_PATCH_COMMIT={patch_commit}");
 }
 
 fn cargo_registry_vcs_path(package_name: &str, version: &str) -> Option<PathBuf> {

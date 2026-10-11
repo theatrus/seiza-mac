@@ -1264,11 +1264,6 @@ enum SeizaCore {
         return String(cString: pointer)
     }
 
-    static var parallaxPatchCommit: String {
-        guard let pointer = seiza_mac_parallax_patch_commit() else { return "" }
-        return String(cString: pointer)
-    }
-
     static var packageVersion: String {
         guard let pointer = seiza_mac_core_package_version() else { return "unknown" }
         return String(cString: pointer)

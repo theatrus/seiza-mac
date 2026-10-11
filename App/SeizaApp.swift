@@ -699,8 +699,6 @@ private struct ImageCollectionLoadingView: View {
 
 enum AboutDetails {
     static var seizaCoreDescription: String {
-        let core = "Seiza Core \(SeizaCore.version)\nCommit \(SeizaCore.gitCommit)"
-        let patch = SeizaCore.parallaxPatchCommit
-        return patch.isEmpty ? core : core + "\nParallax fix \(patch)"
+        "Seiza Core \(SeizaCore.version)\nCommit \(SeizaCore.gitCommit)"
     }
 }

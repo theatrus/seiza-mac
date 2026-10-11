@@ -4,7 +4,6 @@ const char *seiza_mac_core_git_commit(void);
 const char *seiza_mac_core_package_version(void);
 const char *seiza_mac_core_package_checksum(void);
 const char *seiza_mac_core_package_source(void);
-const char *seiza_mac_parallax_patch_commit(void);
 
 // Mac adapters; keep the vendored upstream header unchanged.
 char *seiza_mac_distance_catalog_status_json(const char *directory, char **error_out);
