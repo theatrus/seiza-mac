@@ -14,6 +14,38 @@ stellar-distance lookup sends sky coordinates to astronomical catalogues.
 [Seiza for Windows](https://github.com/theatrus/seiza-win) ·
 [FITS and XISF for Photoshop](https://github.com/theatrus/xisf-photoshop)
 
+## Fly through your astrophoto
+
+Turn a finished image into a **parallax video**: nearby stars move past distant
+ones as the camera travels toward a nebula or across the field. Seiza combines
+your starless and stars layers with catalog distances to give the scene depth.
+Generate a tour of the objects in your image, or choose the stops yourself.
+
+Watch examples made with Seiza's parallax engine. Click either preview to play
+the video in your browser:
+
+| [Watch the seiza.fyi demo](https://seiza.fyi/media/parallax-tour.mp4) | [Watch the Iris Nebula tour](https://theatr.us/gallery/_video/astrobin/iris-nebula/288w86) |
+| --- | --- |
+| [![Preview of the parallax video featured on seiza.fyi](https://seiza.fyi/media/parallax-tour.jpg)](https://seiza.fyi/media/parallax-tour.mp4) | [![Preview of the Iris Nebula parallax tour on theatr.us](https://theatr.us/gallery/_image/astrobin/iris-nebula/288w86/medium)](https://theatr.us/gallery/_video/astrobin/iris-nebula/288w86) |
+
+Examples from [seiza.fyi](https://seiza.fyi/#parallax-video) and
+[Yann Ramin's Iris Nebula gallery on theatr.us](https://theatr.us/gallery/astrobin/iris-nebula).
+Browse more astrophotography in the [Astrobin gallery](https://theatr.us/gallery/astrobin).
+
+### Edit the journey in a native Mac workspace
+
+Choose **File → Parallax Video…** to open the video workspace. Each stop has its
+own destination, travel time, hold, zoom, pan, roll, spin, and forward push.
+Add fading titles, keep the camera gliding through holds, and make the tour loop.
+Scrub the preview while you edit; camera changes reuse the prepared scene.
+
+![Seiza's parallax workspace showing an Iris Nebula preview, editable tour stops, and controls for dolly, pan, roll, a full spin, and forward push](docs/images/seiza-parallax-tour.jpg)
+
+Export a silent MP4 in **H.264 or HEVC** with the Mac's native video encoder.
+Choose 720p through 4K presets, portrait or landscape, or custom dimensions.
+Save and load tour itineraries as JSON to revisit the route later.
+[Make your first tour](#make-a-parallax-tour).
+
 ## See what is in the frame
 
 Press Solve when you want sky context. Seiza draws catalog-colored object
@@ -138,18 +170,31 @@ version and source commit.
 
 ## Make a parallax tour
 
-To try parallax video, open an image and choose **File → Parallax Video…** (or
-the film toolbar button). Import matching, stretched starless and unscreened
-stars PNG/TIFF layers in Source and confirm alignment, or select your installed,
-licensed StarXTerminator CLI. Camera offers fly-ins and generated tours, with
-editable stops, travel turns, held spins, push, pan, glide, fading titles, looping,
-and timing. Prepare the scene once; camera edits automatically refit the preview.
-Tours can be saved and loaded as JSON itineraries. Source images and the overall
-zoom are not saved in the itinerary. Labels and Output expose annotations, credits, sizing and
-native H.264/HEVC MP4 encoding. Plate solving and generated tours need installed
-catalogues; offline fields without distance data can use a manual background
-distance. Full video-project recovery remains planned. See the
+1. **Open your finished image** and choose **File → Parallax Video…** or the
+   film toolbar button. In **Source**, import matching, stretched starless and
+   unscreened stars PNG/TIFF layers and confirm their alignment. An installed,
+   licensed StarXTerminator CLI is also supported.
+2. **Give the scene depth.** Download solving catalogues and **Offline parallax**
+   data in Settings. The Source inspector also offers the offline distance
+   download. Online distance lookup is optional; fields without background
+   distance data can use a manual distance.
+3. **Plan the camera move.** Choose Fly In or generate a tour in **Camera**.
+   Review the candidate, click **Apply Tour**, then edit the stops, motion, titles,
+   and looping. Click **Prepare Preview** to build the scene; subsequent camera
+   edits update the preview without repeating star detection or distance lookup.
+4. **Export the video.** Add annotations and credits in **Labels**. In **Output**,
+   choose dimensions, frame rate, H.264 or HEVC, and quality, then click
+   **Export Video…**. Rendering and encoding run locally.
+
+![Seiza's Output inspector beside the Iris Nebula tour, with resolution presets, orientation, frame rate, codec, quality, and MP4 export controls](docs/images/seiza-parallax-output.jpg)
+
+Use **Save…** and **Load…** in the Tour Stops strip to exchange JSON itineraries.
+An itinerary saves the route and tour motion options; it does not include source
+images, overall zoom, scene settings, labels, or export preferences. Full
+video-project recovery remains planned. See the
 [implementation scope and remaining work](docs/PARALLAX-VIDEO.md).
+
+## App icons
 
 The app and astronomy document icons are generated from the checked-in colorful
 Seiza website mark. Regenerate them on macOS with:
