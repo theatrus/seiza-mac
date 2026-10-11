@@ -28,7 +28,12 @@ Switching to Fly In retains the tour draft.
 Generation returns a candidate, which can be applied or discarded. It needs
 matching WCS and object catalogues, but can run before separating stars or
 fetching their distances. Without WCS, the app solves first, respecting the
-configured scale bounds. Generation options affect only the next candidate.
+configured scale bounds. The composite source is tried first. If its solve fails,
+an imported stars layer is retried only after the user confirms its alignment.
+Preview and export use the same fallback, and the activity log records the retry
+and outcome. Existing WCS is reused without solving again. Automatic separation
+has no imported stars file to retry and retains upstream's original-image solve.
+Generation options affect only the next candidate.
 
 Tour JSON can be loaded and saved. It retains every stop field and the scene's
 independent distance reference; the app also saves optional `tourGlide`, `tourTitles`, and `tourLoop`. Older JSON remains readable. It is
@@ -204,15 +209,22 @@ same core, so the upstream Inter font's OFL notice is bundled in every target.
 ## Verification and remaining work
 
 The 0.8.0 release preparation adopts published C ABI/core 0.25.1 and parallax
-0.2.1. All 188 native tests, the three Rust wrapper tests, formatting, Clippy
+0.2.1. All 192 native tests, the three Rust wrapper tests, formatting, Clippy
 with warnings denied, and the unsigned universal Release build pass. The C ABI
 header and previously verified renderer sources are byte-for-byte matches.
 The temporary renderer vendor copy and patch-only build metadata are removed.
 
 The unsigned Debug app and both extensions build on Apple silicon; the unsigned
-universal Release build also passes. The full XCTest suite passed **188 tests**,
-including sixteen parallax tests. Rust formatting,
+universal Release build also passes. The full XCTest suite passed **192 tests**,
+including twenty parallax tests. Rust formatting,
 Clippy with warnings denied, and wrapper tests pass.
+
+Composite-first solving is covered by success, fallback, missing/unaligned
+layers, duplicate inputs, existing-WCS reuse, dual failure and cancellation
+tests. A native preparation test renders with the recovered WCS without
+reopening the failed composite. A local Iris QA run forced only the composite
+attempt to fail, then used the real 0.25.1 solver on `iris-sxt-stars.tif`:
+it recovered centre coordinates (315.136628, 67.777619) and generated five stops.
 
 Coverage includes tour JSON round trips, unwrapped travel turns versus held
 spin/push/glide, title and loop persistence, native loop duration/closure, title

@@ -6,6 +6,108 @@ import XCTest
 @testable import Seiza
 
 final class ParallaxTests: XCTestCase {
+    func testCompositeSolveWinsAndExistingWCSIsReused() throws {
+        let (files, original) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        let expected = try XCTUnwrap(original.inputs.wcs)
+        var request = original
+        request.inputs.wcs = nil
+        request.scene.minimumScaleArcsecPerPixel = 0.7
+        request.scene.maximumScaleArcsecPerPixel = 2.5
+        var paths: [String] = []
+        var messages: [String] = []
+        let resolved = try ParallaxCore.resolvingWCS(request, cancellation: ParallaxCancellation(), events: {
+            if let message = $0.message { messages.append(message) }
+        }) { url, catalog, minimum, maximum in
+            paths.append(url.path)
+            XCTAssertEqual(catalog?.path, request.inputs.catalogDirectory)
+            XCTAssertEqual(minimum, 0.7); XCTAssertEqual(maximum, 2.5)
+            return expected
+        }
+        XCTAssertEqual(paths, [request.inputs.image])
+        XCTAssertFalse(messages.contains { $0.contains("Retrying") })
+        XCTAssertNil(request.inputs.wcs, "Resolving must not mutate the caller's request")
+        let reused = try ParallaxCore.resolvingWCS(resolved, cancellation: ParallaxCancellation(), events: { _ in
+            XCTFail("Existing WCS must not start a solve")
+        }) { _, _, _, _ in
+            XCTFail("Existing WCS must not be solved again"); return expected
+        }
+        XCTAssertEqual(reused.inputs.wcs?.crval, expected.crval)
+    }
+
+    func testStarsFallbackPreservesInputsAndPreparesWithRecoveredWCS() throws {
+        let (files, original) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        let expected = try XCTUnwrap(original.inputs.wcs)
+        var request = original
+        request.inputs.image = files.directory.appendingPathComponent("unreadable-source.png").path
+        request.inputs.wcs = nil
+        var paths: [String] = []
+        var messages: [String] = []
+        let resolved = try ParallaxCore.resolvingWCS(request, cancellation: ParallaxCancellation(), events: {
+            if let message = $0.message { messages.append(message) }
+        }) { url, _, _, _ in
+            paths.append(url.path)
+            if url.path == request.inputs.image { throw SeizaCoreError.message("no source match") }
+            return expected
+        }
+        XCTAssertEqual(paths, [request.inputs.image, try XCTUnwrap(request.inputs.stars)])
+        XCTAssertEqual(resolved.inputs.image, request.inputs.image)
+        XCTAssertEqual(resolved.inputs.starless, request.inputs.starless)
+        XCTAssertEqual(resolved.inputs.stars, request.inputs.stars)
+        XCTAssertTrue(messages.contains { $0.contains("no source match") && $0.contains("Retrying") })
+        XCTAssertTrue(messages.contains { $0.contains("recovered from the stars layer") })
+        // The native preparation must honor the recovered WCS and render the
+        // separated pair without reopening or re-solving the failed composite.
+        let video = try ParallaxCore.prepare(resolved, cancellation: ParallaxCancellation(), events: { _ in })
+        XCTAssertEqual(video.summary.wcs.crval, expected.crval)
+        XCTAssertEqual(try video.frame(0).width, 66)
+    }
+
+    func testFailedSolveDoesNotRetryUnavailableUnalignedOrIdenticalStars() throws {
+        let (files, original) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        for scenario in ["unavailable", "unaligned", "identical"] {
+            var request = original
+            request.inputs.wcs = nil
+            if scenario == "unavailable" { request.inputs.stars = nil }
+            if scenario == "identical" { request.inputs.stars = request.inputs.image }
+            var calls = 0
+            XCTAssertThrowsError(try ParallaxCore.resolvingWCS(request, allowStarsFallback: scenario != "unaligned",
+                cancellation: ParallaxCancellation(), events: { _ in }, solve: { _, _, _, _ in
+                    calls += 1; throw SeizaCoreError.message("no match")
+                })) { XCTAssertEqual($0.localizedDescription, "no match") }
+            XCTAssertEqual(calls, 1, scenario)
+        }
+        var request = original
+        request.inputs.wcs = nil
+        var calls = 0
+        XCTAssertThrowsError(try ParallaxCore.resolvingWCS(request, cancellation: ParallaxCancellation(), events: { _ in }, solve: { _, _, _, _ in
+            calls += 1; throw SeizaCoreError.message(calls == 1 ? "source failure" : "stars failure")
+        })) {
+            XCTAssertTrue($0.localizedDescription.contains("Source: source failure"))
+            XCTAssertTrue($0.localizedDescription.contains("Stars: stars failure"))
+        }
+        XCTAssertEqual(calls, 2)
+    }
+
+    func testSolveCancellationDoesNotRetryOrPublishLateWCS() throws {
+        let (files, original) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        var request = original
+        request.inputs.wcs = nil
+        for returnsLateWCS in [false, true] {
+            let cancellation = ParallaxCancellation()
+            var calls = 0
+            XCTAssertThrowsError(try ParallaxCore.resolvingWCS(request, cancellation: cancellation, events: { _ in }, solve: { _, _, _, _ in
+                calls += 1; cancellation.cancel()
+                if returnsLateWCS { return original.inputs.wcs! }
+                throw SeizaCoreError.message("interrupted")
+            })) { XCTAssertTrue($0 is CancellationError) }
+            XCTAssertEqual(calls, 1)
+        }
+    }
+
     func testOnlineActivityReportsWaitsCacheAwareCountsAndCancellation() {
         let start = Date(timeIntervalSince1970: 1000)
         var activity = ParallaxActivity(message: "Loading images…", now: start)

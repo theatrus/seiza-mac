@@ -355,19 +355,15 @@ final class ParallaxSession: ObservableObject {
             request.video.tour = []
             let files = files!
             let access = resources()
+            let allowStarsFallback = layersAligned
             let (signal, generation) = begin(hasWCS ? "Planning tour…" : "Solving image and planning tour…")
             let events = eventHandler(generation)
             task = Task {
                 do {
                     let result = try await Task.detached(priority: .userInitiated) { () -> (ParallaxTourPlan, WCSResult?) in
                         try withExtendedLifetime((files, access)) {
-                            var request = request
-                            if request.inputs.wcs == nil {
-                                request.inputs.wcs = try SeizaCore.solve(url: files.image,
-                                    catalogDirectory: request.inputs.catalogDirectory.map { URL(fileURLWithPath: $0) },
-                                    minimumScale: request.scene.minimumScaleArcsecPerPixel,
-                                    maximumScale: request.scene.maximumScaleArcsecPerPixel).wcs
-                            }
+                            let request = try ParallaxCore.resolvingWCS(request, allowStarsFallback: allowStarsFallback,
+                                cancellation: signal, events: events)
                             try signal.check()
                             return (try ParallaxCore.plan(request, cancellation: signal, events: events), request.inputs.wcs)
                         }
