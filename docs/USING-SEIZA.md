@@ -258,7 +258,7 @@ choose the standard package, and use **Download and Install Catalogs**. Setup
 reports manifest, download, verification, installation, and completion
 progress. Settings also reports the status and path of the star catalog, blind
 index, deep-sky objects, transients, and minor bodies. See
-[Catalogs and solving](../README.md#catalogs-and-solving) for the data layout
+[Catalogs and distance data](../README.md#catalogs-and-distance-data) for the data layout
 and command-line equivalents.
 
 ## Choose the sky context you need
