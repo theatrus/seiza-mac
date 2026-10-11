@@ -14,7 +14,7 @@ from crates.io with registry checksums.
 
 ## Published dependency update
 
-The next Mac release uses published core/C ABI **0.27.0**, stacking **0.29.0**,
+Seiza for Mac **0.8.1** uses published core/C ABI **0.27.0**, stacking **0.29.0**,
 and parallax **0.4.0**, with the matching C ABI header and registry checksums.
 The release provenance above describes the shipped 0.8.0 artifacts. Shared
 stacking controls are covered in [STACKING.md](STACKING.md); the dust-map

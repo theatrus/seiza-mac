@@ -226,11 +226,11 @@ jobs:
             '' \
             "### New in ${version}" \
             '' \
-            '- Create parallax videos in a native workspace with generated and editable tours, preview playback, undo/redo and JSON itineraries.' \
-            '- Edit dolly, pan, zoom, roll, held spins, push, travel/hold timing, titles and seamless looping. Camera edits reuse the prepared scene.' \
-            '- Export silent H.264 or HEVC MP4 using AVFoundation/VideoToolbox, with safe cancellation and atomic destination replacement.' \
-            '- Download verified offline stellar and object distances from Settings or the video workspace. Optional online lookup shows stages and elapsed time.' \
-            '- Uses published Seiza/C ABI 0.25.1 and parallax 0.2.1, including continuous loop joins and bright-star halo fixes.' \
+            '- Align directory and live stacks to one shared FITS/XISF image while keeping brightness and noise normalization specific to each channel.' \
+            '- Choose channel references automatically; shared-grid alignment tries up to five ranked lights and reports skipped candidates.' \
+            '- Resume saved shared-grid stacks with their reference metadata, and protect lights, calibration masters and alignment images from output overwrites.' \
+            '- Export, choose, reload or reset parallax dust maps in the video workspace. Camera edits are preserved when changing maps, with progress during map export.' \
+            '- Uses published Seiza/C ABI 0.27.0, stacking 0.29.0 and parallax 0.4.0.' \
             '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
             "- [Download the zipped application](${release_base}/Seiza-${version}-universal.zip)" \
@@ -254,6 +254,8 @@ jobs:
             "![Seiza folder browser and live stretch editor](${screenshot_base}/seiza-directory-stretch.png)" \
             '' \
             "![Seiza plate-solved FITS view](${screenshot_base}/seiza-solved-overlays.png)" \
+            '' \
+            "![Seiza parallax tour editor](${screenshot_base}/seiza-parallax-tour.jpg)" \
             > release-notes.md
 
           appcast_directory="$RUNNER_TEMP/sparkle-appcast"
