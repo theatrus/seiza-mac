@@ -7,15 +7,14 @@ import XCTest
 @testable import Seiza
 
 final class SeizaBuildInfoTests: XCTestCase {
-    func testAboutDetailsReportTheLockedRegistryPackage() throws {
+    func testAboutDetailsReportTheLockedPackage() throws {
         let commit = SeizaCore.gitCommit
         let packageVersion = SeizaCore.packageVersion
         let checksum = SeizaCore.packageChecksum
         XCTAssertNotEqual(SeizaCore.version, "unknown")
         XCTAssertEqual(commit.count, 40)
         XCTAssertTrue(commit.allSatisfy(\.isHexDigit))
-        XCTAssertEqual(checksum.count, 64)
-        XCTAssertTrue(checksum.allSatisfy(\.isHexDigit))
+        let source = SeizaCore.packageSource
 
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -26,12 +25,25 @@ final class SeizaBuildInfoTests: XCTestCase {
         )
         XCTAssertTrue(lock.contains("name = \"seiza-cabi\""))
         XCTAssertTrue(lock.contains("version = \"\(packageVersion)\""))
-        XCTAssertTrue(lock.contains("checksum = \"\(checksum)\""))
-        XCTAssertFalse(lock.contains("git+https://github.com/theatrus/seiza"))
-        XCTAssertEqual(
-            AboutDetails.seizaCoreDescription,
-            "Seiza Core \(SeizaCore.version)\nCommit \(commit)"
-        )
+        XCTAssertTrue(lock.contains("source = \"\(source)\""))
+        if source.hasPrefix("git+") {
+            XCTAssertTrue(checksum.isEmpty)
+            XCTAssertTrue(source.hasSuffix("rev=\(commit)#\(commit)"))
+        } else {
+            XCTAssertEqual(checksum.count, 64)
+            XCTAssertTrue(checksum.allSatisfy(\.isHexDigit))
+            XCTAssertTrue(lock.contains("checksum = \"\(checksum)\""))
+        }
+        var expected = "Seiza Core \(SeizaCore.version)\nCommit \(commit)"
+        let patchURL = repositoryRoot.appendingPathComponent("Rust/vendor/seiza-parallax/PATCH.toml")
+        if FileManager.default.fileExists(atPath: patchURL.path) {
+            let metadata = try String(contentsOf: patchURL, encoding: .utf8)
+            let patch = SeizaCore.parallaxPatchCommit
+            XCTAssertEqual(patch.count, 40)
+            XCTAssertTrue(metadata.contains("fix_commit = \"\(patch)\""))
+            expected += "\nParallax fix \(patch)"
+        } else { XCTAssertTrue(SeizaCore.parallaxPatchCommit.isEmpty) }
+        XCTAssertEqual(AboutDetails.seizaCoreDescription, expected)
     }
 }
 
@@ -2160,11 +2172,37 @@ final class CatalogSetupPayloadTests: XCTestCase {
     }
 
     func testCatalogSetupPresetABIValuesStayStable() {
-        XCTAssertEqual(CatalogSetupPreset.allCases, [.standardBlind, .deepestBlind, .all])
+        XCTAssertEqual(CatalogSetupPreset.allCases, [.standardBlind, .deepestBlind, .all, .parallaxDistances])
         XCTAssertEqual(CatalogSetupPreset.standardBlind.rawValue, 0)
         XCTAssertEqual(CatalogSetupPreset.deepestBlind.rawValue, 1)
         XCTAssertEqual(CatalogSetupPreset.all.rawValue, 2)
+        XCTAssertEqual(CatalogSetupPreset.parallaxDistances.rawValue, 100)
         XCTAssertTrue(CatalogSetupPreset.standardBlind.detail.contains("Recommended"))
+    }
+
+    func testDistanceCoverageRequiresAUsableDatabaseWithSufficientDepth() throws {
+        let data = Data(#"{"directory":"/tmp/catalogs","stars":{"available":true,"maxMagnitude":17.0,"starCount":12500000},"objects":{"available":true}}"#.utf8)
+        let status = try JSONDecoder().decode(DistanceCatalogStatus.self, from: data)
+        XCTAssertTrue(status.ready)
+        XCTAssertTrue(status.covers(magnitude: 17))
+        XCTAssertFalse(status.covers(magnitude: 17.1))
+        XCTAssertEqual(status.stars.starCount, 12_500_000)
+    }
+
+    func testNativeDistanceStatusDistinguishesMissingAndCorruptFiles() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let missing = try SeizaCore.distanceCatalogStatus(catalogDirectory: directory)
+        XCTAssertFalse(missing.ready)
+        XCTAssertFalse(missing.covers(magnitude: 16))
+        XCTAssertNil(missing.stars.error)
+        try Data("invalid database".utf8).write(to: directory.appendingPathComponent("star-distances.bin"))
+        let corrupt = try SeizaCore.distanceCatalogStatus(catalogDirectory: directory)
+        XCTAssertFalse(corrupt.stars.available)
+        XCTAssertNotNil(corrupt.stars.error)
+        XCTAssertNil(corrupt.objects.error)
+        XCTAssertEqual(corrupt.directory, directory.path)
     }
 }
 

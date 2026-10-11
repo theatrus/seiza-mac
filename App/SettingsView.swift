@@ -6,6 +6,9 @@ final class CatalogSetupController: ObservableObject {
     static let shared = CatalogSetupController()
 
     @Published private(set) var status: CatalogStatus?
+    @Published private(set) var distanceStatus: DistanceCatalogStatus?
+    @Published private(set) var activePreset: CatalogSetupPreset?
+    @Published private(set) var installVersion = 0
     @Published private(set) var progress: CatalogSetupProgress?
     @Published private(set) var isRunning = false
     @Published private(set) var isRefreshing = false
@@ -27,13 +30,14 @@ final class CatalogSetupController: ObservableObject {
             defer {
                 if accessing { catalogURL?.stopAccessingSecurityScopedResource() }
             }
-            let result = Result { try SeizaCore.catalogStatus(catalogDirectory: catalogURL) }
+            let result = Result { try (SeizaCore.catalogStatus(catalogDirectory: catalogURL), SeizaCore.distanceCatalogStatus(catalogDirectory: catalogURL)) }
             DispatchQueue.main.async {
                 guard let self, self.statusGeneration == generation else { return }
                 self.isRefreshing = false
                 switch result {
                 case .success(let status):
-                    self.status = status
+                    self.status = status.0
+                    self.distanceStatus = status.1
                     self.errorMessage = nil
                 case .failure(let error):
                     self.errorMessage = error.localizedDescription
@@ -52,6 +56,7 @@ final class CatalogSetupController: ObservableObject {
         }
 
         isRunning = true
+        activePreset = preset
         errorMessage = nil
         progress = nil
         DispatchQueue.global(qos: .utility).async { [weak self] in
@@ -75,8 +80,10 @@ final class CatalogSetupController: ObservableObject {
                 self.isRunning = false
                 switch result {
                 case .success:
+                    self.installVersion += 1
                     self.refreshStatus()
                 case .failure(let error):
+                    if self.progress?.phase == .manifest { self.progress = nil }
                     self.errorMessage = error.localizedDescription
                 }
             }
@@ -257,13 +264,17 @@ struct SettingsView: View {
                     }
                 }
 
-                if let progress = setup.progress {
-                    progressView(progress)
+                if setup.activePreset != .parallaxDistances, let progress = setup.progress {
+                    CatalogDownloadProgressView(progress: progress, isRunning: setup.isRunning)
                 }
 
                 Text("Downloads are SHA-256 verified and safe to retry. Seiza keeps immutable verified catalog files in its cache and installs them with hard links when possible, avoiding a second copy and hash pass. Cross-filesystem installs fall back to a verified copy.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Offline parallax") {
+                DistanceCatalogDownloadView(setup: setup, showsError: false)
             }
 
             if let message = selectionError ?? setup.errorMessage {
@@ -302,14 +313,36 @@ struct SettingsView: View {
         .foregroundStyle(ready ? .green : .orange)
     }
 
-    @ViewBuilder
-    private func progressView(_ progress: CatalogSetupProgress) -> some View {
+    private func chooseCatalogDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose Catalog Directory"
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                try CatalogAccess.save(url)
+                catalogDirectory = url.path
+                selectionError = nil
+                setup.clearError()
+                setup.refreshStatus()
+            } catch {
+                selectionError = error.localizedDescription
+            }
+        }
+    }
+}
+
+struct CatalogDownloadProgressView: View {
+    let progress: CatalogSetupProgress
+    let isRunning: Bool
+    var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 if progress.phase == .complete {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
-                } else if setup.isRunning {
+                } else if isRunning {
                     ProgressView()
                         .controlSize(.small)
                 }
@@ -336,7 +369,7 @@ struct SettingsView: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            } else if setup.isRunning {
+            } else if isRunning {
                 ProgressView()
             }
 
@@ -366,21 +399,48 @@ struct SettingsView: View {
         )
     }
 
-    private func chooseCatalogDirectory() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Choose Catalog Directory"
-        if panel.runModal() == .OK, let url = panel.url {
-            do {
-                try CatalogAccess.save(url)
-                catalogDirectory = url.path
-                selectionError = nil
-                setup.clearError()
-                setup.refreshStatus()
-            } catch {
-                selectionError = error.localizedDescription
+}
+
+struct DistanceCatalogDownloadView: View {
+    @ObservedObject var setup: CatalogSetupController
+    var magnitude: Double? = nil
+    var showsError = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Offline distances").fontWeight(.medium)
+            if let status = setup.distanceStatus {
+                Label(status.stars.available ? "Stellar distances installed" : "Stellar distances not installed",
+                      systemImage: status.stars.available ? "checkmark.circle.fill" : "arrow.down.circle")
+                if let limit = status.stars.maxMagnitude, let count = status.stars.starCount {
+                    Text("\(count.formatted()) stars · Gaia through magnitude \(limit, specifier: "%.1f")")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Label(status.objects.available ? "Object distances installed" : "Object distances not installed",
+                      systemImage: status.objects.available ? "checkmark.circle.fill" : "arrow.down.circle")
+                ForEach([status.stars.error, status.objects.error].compactMap { $0 }, id: \.self) { error in
+                    Text("Database needs repair: \(error)").font(.caption).foregroundStyle(.orange)
+                }
+                if let magnitude, status.stars.available, !status.covers(magnitude: magnitude) {
+                    Text("This database is shallower than the selected Gaia limit. Lower the limit or enable online lookup for deeper distances.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            } else {
+                ProgressView("Checking installed distances…").controlSize(.small)
+            }
+            Button(setup.distanceStatus?.ready == true ? "Verify or Update Offline Distances" : "Download Offline Distances") {
+                setup.install(.parallaxDistances)
+            }.disabled(setup.isRunning || setup.isRefreshing)
+            Text("Downloads stellar distances, object distances and the object catalogue from the Seiza mirror. Existing verified files are reused. Re-prepare the scene after installation to use them.")
+                .font(.caption).foregroundStyle(.secondary)
+            if setup.activePreset == .parallaxDistances, let progress = setup.progress {
+                CatalogDownloadProgressView(progress: progress, isRunning: setup.isRunning)
+                if setup.isRunning {
+                    Text("Download continues if this window is closed.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if showsError, let error = setup.errorMessage {
+                Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
             }
         }
     }

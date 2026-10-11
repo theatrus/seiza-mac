@@ -1,3 +1,13 @@
 [workspace]
 resolver = "3"
-members = ["Rust/seiza-mac-core"]
+members = ["Rust/seiza-mac-core", "Rust/vendor/seiza-parallax"]
+default-members = ["Rust/seiza-mac-core"]
+
+[patch.crates-io]
+# Published 0.2.0 with the renderer-only fixes from upstream PR #242.
+seiza-parallax = { path = "Rust/vendor/seiza-parallax" }
+
+[profile.release]
+# macOS 27's loader rejects stripped host proc-macro dylibs with a misaligned
+# LINKEDIT string pool. Xcode still strips the final application as configured.
+strip = "none"

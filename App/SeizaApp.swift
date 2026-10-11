@@ -59,6 +59,9 @@ struct SeizaApp: App {
                     appDelegate.exportDocument(nil)
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
+                Button("Parallax Video…") {
+                    appDelegate.createParallaxVideo(nil)
+                }
             }
             CommandGroup(after: .pasteboard) {
                 Button("Copy Image") {
@@ -155,11 +158,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     @objc func exportDocument(_ sender: Any?) {
+        if let video = ParallaxWindowController.activeSession { video.exportVideo(); return }
         guard let session = activeDocumentSession else {
             NSSound.beep()
             return
         }
         session.exportCoordinator.requestExport()
+    }
+
+    @objc func createParallaxVideo(_ sender: Any?) {
+        guard let session = activeDocumentSession else { NSSound.beep(); return }
+        session.exportCoordinator.requestParallax()
     }
 
     @objc func copyImage(_ sender: Any?) {
@@ -179,6 +188,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     @objc func undoImageEdit(_ sender: Any?) {
+        if let video = ParallaxWindowController.activeSession { video.undo(); return }
         guard let session = activeDocumentSession, session.editCoordinator.canUndo else {
             NSSound.beep()
             return
@@ -187,6 +197,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     @objc func redoImageEdit(_ sender: Any?) {
+        if let video = ParallaxWindowController.activeSession { video.redo(); return }
         guard let session = activeDocumentSession, session.editCoordinator.canRedo else {
             NSSound.beep()
             return
@@ -197,8 +208,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
         case #selector(undoImageEdit(_:)):
+            if let video = ParallaxWindowController.activeSession { return video.canUndo && !video.isBusy }
             return activeDocumentSession?.editCoordinator.canUndo == true
         case #selector(redoImageEdit(_:)):
+            if let video = ParallaxWindowController.activeSession { return video.canRedo && !video.isBusy }
             return activeDocumentSession?.editCoordinator.canRedo == true
         default:
             return true
@@ -608,19 +621,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     private func routeEditCommands(in editMenu: NSMenu) {
-        if let undoItem = editMenu.item(withTitle: "Undo Stretch") {
+        let video = ParallaxWindowController.activeSession
+        if let undoItem = editMenu.items.first(where: { $0.title == "Undo Stretch" || $0.title == "Undo Video Edit" }) {
+            undoItem.title = video == nil ? "Undo Stretch" : "Undo Video Edit"
             undoItem.target = self
             undoItem.action = #selector(undoImageEdit(_:))
             undoItem.keyEquivalent = "z"
             undoItem.keyEquivalentModifierMask = [.command]
-            undoItem.isEnabled = activeDocumentSession?.editCoordinator.canUndo == true
+            undoItem.isEnabled = video.map { $0.canUndo && !$0.isBusy } ?? (activeDocumentSession?.editCoordinator.canUndo == true)
         }
-        if let redoItem = editMenu.item(withTitle: "Redo Stretch") {
+        if let redoItem = editMenu.items.first(where: { $0.title == "Redo Stretch" || $0.title == "Redo Video Edit" }) {
+            redoItem.title = video == nil ? "Redo Stretch" : "Redo Video Edit"
             redoItem.target = self
             redoItem.action = #selector(redoImageEdit(_:))
             redoItem.keyEquivalent = "z"
             redoItem.keyEquivalentModifierMask = [.command, .shift]
-            redoItem.isEnabled = activeDocumentSession?.editCoordinator.canRedo == true
+            redoItem.isEnabled = video.map { $0.canRedo && !$0.isBusy } ?? (activeDocumentSession?.editCoordinator.canRedo == true)
         }
     }
 
@@ -683,6 +699,8 @@ private struct ImageCollectionLoadingView: View {
 
 enum AboutDetails {
     static var seizaCoreDescription: String {
-        "Seiza Core \(SeizaCore.version)\nCommit \(SeizaCore.gitCommit)"
+        let core = "Seiza Core \(SeizaCore.version)\nCommit \(SeizaCore.gitCommit)"
+        let patch = SeizaCore.parallaxPatchCommit
+        return patch.isEmpty ? core : core + "\nParallax fix \(patch)"
     }
 }

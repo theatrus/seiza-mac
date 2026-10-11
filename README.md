@@ -127,6 +127,25 @@ DerivedData/Build/Products/Debug/Seiza.app
 
 Open `Seiza.xcodeproj` to run and sign it with a local development team.
 
+This branch uses published `seiza-cabi` 0.25.0, `seiza` 0.25.0 and
+`seiza-download` 0.8.0. The renderer has a temporary, documented
+[upstream patch](Rust/vendor/seiza-parallax/PATCH.md) for loop motion and
+bright-star halos. Library and bridge header must be updated together. The
+About panel reports both the release commit and the renderer fix.
+
+To try parallax video, open an image and choose **File → Parallax Video…** (or
+the film toolbar button). Import matching, stretched starless and unscreened
+stars PNG/TIFF layers in Source and confirm alignment, or select your installed,
+licensed StarXTerminator CLI. Camera offers fly-ins and generated tours, with
+editable stops, travel turns, held spins, push, pan, glide, fading titles, looping,
+and timing. Prepare
+the scene once; camera edits automatically refit the preview. Tours can be saved
+and loaded as JSON. Labels and Output expose annotations, credits, sizing and
+native H.264/HEVC MP4 encoding. Plate solving and generated tours need installed
+catalogues; offline fields without distance data can use a manual background
+distance. Full video-project recovery remains planned. See the
+[implementation scope and remaining work](docs/PARALLAX-VIDEO.md).
+
 The app and astronomy document icons are generated from the checked-in colorful
 Seiza website mark. Regenerate them on macOS with:
 

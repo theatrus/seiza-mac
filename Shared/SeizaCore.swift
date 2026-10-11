@@ -26,6 +26,8 @@ enum CatalogSetupPreset: UInt32, CaseIterable, Identifiable {
     case standardBlind = 0
     case deepestBlind = 1
     case all = 2
+    // App-owned selection, dispatched to the Mac adapter, never upstream's enum.
+    case parallaxDistances = 100
 
     var id: Self { self }
 
@@ -34,6 +36,7 @@ enum CatalogSetupPreset: UInt32, CaseIterable, Identifiable {
         case .standardBlind: "Standard blind solving"
         case .deepestBlind: "Deepest blind solving"
         case .all: "Everything"
+        case .parallaxDistances: "Offline parallax distances"
         }
     }
 
@@ -45,7 +48,27 @@ enum CatalogSetupPreset: UInt32, CaseIterable, Identifiable {
             "For the faintest crowded fields. Replaces the standard star catalog with the optional G≤20 catalog (about 9 GB larger)."
         case .all:
             "Every published solver and overlay catalog, including both standard and G≤20 data. Intended for development and offline use."
+        case .parallaxDistances:
+            "Stellar distances, object distances, and the object catalogue for offline parallax and tours. Reuses existing downloads. Plate solving needs a standard or deepest solving package separately."
         }
+    }
+}
+
+struct DistanceCatalogComponent: Decodable, Equatable {
+    let available: Bool
+    let path: String?
+    let error: String?
+    let maxMagnitude: Double?
+    let starCount: UInt64?
+}
+
+struct DistanceCatalogStatus: Decodable, Equatable {
+    let directory: String
+    let stars: DistanceCatalogComponent
+    let objects: DistanceCatalogComponent
+    var ready: Bool { stars.available && objects.available }
+    func covers(magnitude: Double) -> Bool {
+        stars.available && stars.maxMagnitude.map { $0 >= magnitude } == true
     }
 }
 
@@ -1170,14 +1193,14 @@ struct SolveObjectContour: Decodable {
     let points: [[Double]]
 }
 
-struct WCSResult: Decodable {
+struct WCSResult: Codable {
     let crval: [Double]
     let crpix: [Double]
     let cd: [[Double]]
     let sip: SIPResult?
 }
 
-struct SIPResult: Decodable {
+struct SIPResult: Codable {
     let order: Int
     let a: [Double]
     let b: [Double]
@@ -1241,6 +1264,11 @@ enum SeizaCore {
         return String(cString: pointer)
     }
 
+    static var parallaxPatchCommit: String {
+        guard let pointer = seiza_mac_parallax_patch_commit() else { return "" }
+        return String(cString: pointer)
+    }
+
     static var packageVersion: String {
         guard let pointer = seiza_mac_core_package_version() else { return "unknown" }
         return String(cString: pointer)
@@ -1248,6 +1276,11 @@ enum SeizaCore {
 
     static var packageChecksum: String {
         guard let pointer = seiza_mac_core_package_checksum() else { return "unknown" }
+        return String(cString: pointer)
+    }
+
+    static var packageSource: String {
+        guard let pointer = seiza_mac_core_package_source() else { return "unknown" }
         return String(cString: pointer)
     }
 
@@ -1274,6 +1307,14 @@ enum SeizaCore {
         let sink = Unmanaged.passRetained(CatalogSetupProgressSink(handler: onProgress))
         defer { sink.release() }
         var errorPointer: UnsafeMutablePointer<CChar>?
+        if preset == .parallaxDistances {
+            let install: (UnsafePointer<CChar>?) -> Bool = { path in
+                seiza_mac_catalog_setup_parallax(path, catalogSetupProgressCallback, sink.toOpaque(), &errorPointer)
+            }
+            let succeeded = catalogDirectory.map { $0.path.withCString(install) } ?? install(nil)
+            guard succeeded else { throw cabiError(&errorPointer) }
+            return
+        }
         let succeeded: Bool = if let catalogDirectory {
             catalogDirectory.path.withCString { path in
                 seiza_catalog_setup(
@@ -1294,6 +1335,17 @@ enum SeizaCore {
             )
         }
         guard succeeded else { throw cabiError(&errorPointer) }
+    }
+
+    static func distanceCatalogStatus(catalogDirectory: URL?) throws -> DistanceCatalogStatus {
+        var errorPointer: UnsafeMutablePointer<CChar>?
+        let read: (UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? = { path in
+            seiza_mac_distance_catalog_status_json(path, &errorPointer)
+        }
+        let result = catalogDirectory.map { $0.path.withCString(read) } ?? read(nil)
+        guard let result else { throw cabiError(&errorPointer) }
+        defer { seiza_string_free(result) }
+        return try JSONDecoder().decode(DistanceCatalogStatus.self, from: Data(String(cString: result).utf8))
     }
 
     static func render(

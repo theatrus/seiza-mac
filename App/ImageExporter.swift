@@ -55,6 +55,9 @@ enum ImageExportBitDepth: Int, CaseIterable, Identifiable {
 final class ImageExportCoordinator: ObservableObject {
     @Published private(set) var requestNumber = 0
     @Published private(set) var copyRequestNumber = 0
+    @Published private(set) var parallaxRequestNumber = 0
+
+    func requestParallax() { parallaxRequestNumber &+= 1 }
 
     func requestExport() {
         requestNumber &+= 1
