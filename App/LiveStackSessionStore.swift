@@ -53,6 +53,7 @@ struct LiveStackPersistedState: Codable, Equatable, Sendable {
     var exportedPaths: [String] = []
     var frames: [LiveStackPersistedFrame] = []
     var snrSamples: [LiveStackPersistedSnrSample] = []
+    var referenceImagePath: String? = nil
 
     var isValid: Bool {
         schemaVersion == 1

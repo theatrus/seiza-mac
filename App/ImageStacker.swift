@@ -367,6 +367,10 @@ struct StackReferenceSelection: Decodable, Sendable {
     let referenceIndex: Int
     let referencePath: String
     let scores: [Score?]
+    /// Optional for decoding older saved/test responses; the pinned core supplies it.
+    let ranking: [Int]?
+
+    var candidateIndices: [Int] { Array((ranking ?? [referenceIndex]).prefix(5)) }
 
     func validate(paths: [String]) throws {
         guard schemaVersion == 1, scores.count == paths.count,
@@ -378,6 +382,133 @@ struct StackReferenceSelection: Decodable, Sendable {
                     && $0.backgroundVariation >= 0 && $0.score.isFinite && $0.score > 0
             })
         else { throw ImageStackError.core("Seiza returned an invalid reference selection.") }
+        if let ranking {
+            let scored = Set(scores.indices.filter { scores[$0] != nil })
+            guard ranking.first == referenceIndex, Set(ranking) == scored,
+                ranking.count == scored.count else {
+                throw ImageStackError.core("Seiza returned an invalid reference ranking.")
+            }
+        }
+    }
+}
+
+/// Validated result of trying ranked channel lights against one alignment image.
+struct StackChannelReferenceSelection: Decodable, Sendable {
+    struct Skipped: Decodable, Sendable {
+        let index: Int
+        let path: String
+        let reason: String
+    }
+    let schemaVersion: Int
+    let channelReferenceIndex: Int
+    let channelReferencePath: String
+    let skipped: [Skipped]
+
+    func validate(paths: [String]) throws {
+        guard schemaVersion == 1, paths.indices.contains(channelReferenceIndex),
+            paths[channelReferenceIndex] == channelReferencePath,
+            skipped.map(\.index) == Array(0..<channelReferenceIndex),
+            skipped.allSatisfy({ paths[$0.index] == $0.path && !$0.reason.isEmpty })
+        else { throw ImageStackError.core("Seiza returned an invalid channel reference selection.") }
+    }
+
+    var summary: String {
+        var text = "Channel reference: \(URL(fileURLWithPath: channelReferencePath).lastPathComponent)."
+        for item in skipped {
+            text += " Skipped \(URL(fileURLWithPath: item.path).lastPathComponent): \(item.reason)"
+        }
+        return text
+    }
+}
+
+/// Both drivers share ownership and response validation at the C boundary.
+/// The caller owns the returned handle. An external alignment image opens an
+/// empty accumulator; its selected channel light must be pushed first.
+enum StackNativeOpener {
+    static func open(
+        candidates: [String], referenceImagePath: String?,
+        optionsJSON: String, calibration: ImageStackCalibration
+    ) throws -> (handle: OpaquePointer, selection: StackChannelReferenceSelection?) {
+        guard let first = candidates.first else {
+            throw ImageStackError.invalidRequest("Choose a channel reference light.")
+        }
+        let pathsJSON = String(decoding: try JSONEncoder().encode(candidates), as: UTF8.self)
+        var error: UnsafeMutablePointer<CChar>?
+        var selectionJSON: UnsafeMutablePointer<CChar>?
+        defer {
+            if let error { seiza_string_free(error) }
+            if let selectionJSON { seiza_string_free(selectionJSON) }
+        }
+        let handle = withOptionalCString(calibration.bias?.path) { bias in
+            withOptionalCString(calibration.dark?.path) { dark in
+                withOptionalCString(calibration.flat?.path) { flat in
+                    optionsJSON.withCString { options in
+                        let exposure = calibration.overridesDarkExposure ? calibration.darkExposureSeconds : 0
+                        if let referenceImagePath {
+                            return referenceImagePath.withCString { image in
+                                pathsJSON.withCString { paths in
+                                    seiza_live_stacker_open_fits_with_reference_image_candidates(
+                                        image, paths, bias, dark, flat, exposure, options, &selectionJSON, &error)
+                                }
+                            }
+                        }
+                        return first.withCString {
+                            seiza_live_stacker_open_fits($0, bias, dark, flat, exposure, options, &error)
+                        }
+                    }
+                }
+            }
+        }
+        guard let handle else {
+            throw ImageStackError.core(CalibrationService.takeOwnedError(
+                &error, fallback: "The reference could not be opened."))
+        }
+        do {
+            var selection: StackChannelReferenceSelection?
+            if referenceImagePath != nil {
+                guard let selectionJSON else {
+                    throw ImageStackError.core("The channel reference selection is missing.")
+                }
+                selection = try JSONDecoder().decode(StackChannelReferenceSelection.self,
+                    from: Data(bytes: selectionJSON, count: strlen(selectionJSON)))
+                try selection?.validate(paths: candidates)
+            }
+            let expectedCount: UInt = referenceImagePath == nil ? 1 : 0
+            guard seiza_live_stacker_accepted_frames(handle) == expectedCount else {
+                throw ImageStackError.core("The reference opened with unexpected frame counts.")
+            }
+            return (handle, selection)
+        } catch {
+            seiza_live_stacker_free(handle)
+            throw error
+        }
+    }
+}
+
+enum StackInputProtection {
+    static func referenceIdentity(_ path: String?) -> String? {
+        path.map { URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath().path }
+    }
+
+    /// Include symlinks and hard links: writing through an atomic staging file
+    /// must not bypass native source protection for the final destination.
+    static func sameFile(_ a: URL, _ b: URL) -> Bool {
+        if LiveStackPath.equals(a.resolvingSymlinksInPath().path, b.resolvingSymlinksInPath().path) {
+            return true
+        }
+        let keys: Set<URLResourceKey> = [.fileResourceIdentifierKey]
+        if let left = try? a.resourceValues(forKeys: keys).fileResourceIdentifier as? NSObject,
+            let right = try? b.resourceValues(forKeys: keys).fileResourceIdentifier as? NSObject {
+            return left.isEqual(right)
+        }
+        return false
+    }
+
+    static func validate(output: URL, sources: [URL]) throws {
+        guard !sources.contains(where: { sameFile(output, $0) }) else {
+            throw ImageStackError.invalidRequest(
+                "Choose an output file that is not a light, calibration master, or alignment image.")
+        }
     }
 }
 
@@ -440,19 +571,29 @@ struct ImageStackRequest: Sendable {
     let outputAccessURL: URL?
     let options: ImageStackOptions
     let calibration: ImageStackCalibration
+    let referenceImage: URL?
+    let choosesReferenceAutomatically: Bool
+
+    var protectedSources: [URL] {
+        inputs + [calibration.bias, calibration.dark, calibration.flat, referenceImage].compactMap { $0 }
+    }
 
     init(
         inputs: [URL],
         output: URL,
         outputAccessURL: URL? = nil,
         options: ImageStackOptions,
-        calibration: ImageStackCalibration
+        calibration: ImageStackCalibration,
+        referenceImage: URL? = nil,
+        choosesReferenceAutomatically: Bool = false
     ) {
         self.inputs = inputs
         self.output = output
         self.outputAccessURL = outputAccessURL
         self.options = options
         self.calibration = calibration
+        self.referenceImage = referenceImage
+        self.choosesReferenceAutomatically = choosesReferenceAutomatically
     }
 }
 
@@ -553,6 +694,7 @@ struct ImageStackResult: Sendable {
     /// Set when transient removal was requested but did not run, saying
     /// why; the stack was written from the live result instead.
     var transientNote: String? = nil
+    var referenceNote: String? = nil
 }
 
 struct ImageStackBatchResult: Sendable {
@@ -632,19 +774,7 @@ enum ImageStackEngine {
             ?? request.calibration.validationMessage(for: request.inputs) {
             throw ImageStackError.invalidRequest(message)
         }
-        let inputPaths = Set(
-            (request.inputs + [
-                request.calibration.bias,
-                request.calibration.dark,
-                request.calibration.flat,
-            ].compactMap { $0 })
-                .map { $0.standardizedFileURL.path }
-        )
-        guard !inputPaths.contains(request.output.standardizedFileURL.path) else {
-            throw ImageStackError.invalidRequest(
-                "Choose an output file that is not one of the input or calibration files."
-            )
-        }
+        try StackInputProtection.validate(output: request.output, sources: request.protectedSources)
 
         let accessURLs = Set(
             request.inputs + [
@@ -653,6 +783,7 @@ enum ImageStackEngine {
                 request.calibration.flat,
                 request.output,
                 request.outputAccessURL,
+                request.referenceImage,
             ].compactMap { $0 }
         )
         let accessedURLs = accessURLs.filter { $0.startAccessingSecurityScopedResource() }
@@ -670,37 +801,36 @@ enum ImageStackEngine {
 
         let optionsJSON = String(decoding: try request.options.jsonData, as: UTF8.self)
         var errorPointer: UnsafeMutablePointer<CChar>?
-        var liveStacker: OpaquePointer? = withOptionalCString(request.calibration.bias?.path) { bias in
-            withOptionalCString(request.calibration.dark?.path) { dark in
-                withOptionalCString(request.calibration.flat?.path) { flat in
-                    request.inputs[0].path.withCString { reference in
-                        optionsJSON.withCString { options in
-                            seiza_live_stacker_open_fits(
-                                reference,
-                                bias,
-                                dark,
-                                flat,
-                                request.calibration.overridesDarkExposure
-                                    ? request.calibration.darkExposureSeconds
-                                    : 0,
-                                options,
-                                &errorPointer
-                            )
-                        }
-                    }
-                }
-            }
+        var candidates = [request.inputs[0]]
+        if request.choosesReferenceAutomatically {
+            progress(ImageStackProgress(phase: .preparing,
+                message: "Scoring \(request.inputs.count) channel reference candidates…",
+                completedFrames: 0, totalFrames: request.inputs.count, acceptedFrames: 0, rejectedFrames: 0))
+            let ranked = try StackReferenceSelector.choose(request.inputs)
+            if cancellation.isCancelled { throw CancellationError() }
+            candidates = ranked.candidateIndices.map { request.inputs[$0] }
         }
-        guard liveStacker != nil else {
-            throw ImageStackError.core(CalibrationService.takeOwnedError(
-                &errorPointer, fallback: "Seiza returned an invalid stacking response."))
-        }
+        progress(ImageStackProgress(phase: .preparing,
+            message: request.referenceImage == nil ? "Opening channel reference…"
+                : "Aligning channel reference to shared image (up to \(candidates.count) candidates)…",
+            completedFrames: 0, totalFrames: request.inputs.count, acceptedFrames: 0, rejectedFrames: 0))
+        let opened = try StackNativeOpener.open(candidates: candidates.map(\.path),
+            referenceImagePath: request.referenceImage?.path, optionsJSON: optionsJSON,
+            calibration: request.calibration)
+        var liveStacker: OpaquePointer? = opened.handle
         defer {
             if let liveStacker {
                 seiza_live_stacker_free(liveStacker)
             }
         }
 
+        if cancellation.isCancelled { throw CancellationError() }
+        let chosen = URL(fileURLWithPath: opened.selection?.channelReferencePath ?? candidates[0].path)
+        let orderedInputs = [chosen] + request.inputs.filter { $0.path != chosen.path }
+        let initialCount = request.referenceImage == nil ? 1 : 0
+        let referenceNote = opened.selection.map { selection in
+            "Alignment image: \(request.referenceImage!.lastPathComponent). " + selection.summary
+        }
         var dispositions: [ImageStackDisposition] = []
         var unreadableFrames = 0
         let snrDepths = StackSnrMeasurementSchedule.depths(
@@ -717,14 +847,14 @@ enum ImageStackEngine {
             includeCurrentDepth: false)
         progress(ImageStackProgress(
             phase: .stacking,
-            message: request.inputs[0].lastPathComponent,
-            completedFrames: 1,
+            message: referenceNote ?? chosen.lastPathComponent,
+            completedFrames: initialCount,
             totalFrames: request.inputs.count,
-            acceptedFrames: 1,
+            acceptedFrames: initialCount,
             rejectedFrames: 0
         ))
 
-        for (offset, url) in request.inputs.dropFirst().enumerated() {
+        for (offset, url) in orderedInputs.dropFirst(initialCount).enumerated() {
             if cancellation.isCancelled { throw CancellationError() }
             errorPointer = nil
             let responsePointer = url.path.withCString { path in
@@ -751,6 +881,10 @@ enum ImageStackEngine {
             let accepted = Int(seiza_live_stacker_accepted_frames(liveStacker))
             let rejected = Int(seiza_live_stacker_rejected_frames(liveStacker))
                 + unreadableFrames
+            if initialCount == 0, offset == 0, accepted != 1 {
+                throw ImageStackError.core(dispositions.last?.reason
+                    ?? "The selected channel reference could not be integrated.")
+            }
             tryMeasureSnr(
                 liveStacker,
                 scheduledDepths: snrDepths,
@@ -761,7 +895,7 @@ enum ImageStackEngine {
             progress(ImageStackProgress(
                 phase: .stacking,
                 message: url.lastPathComponent,
-                completedFrames: offset + 2,
+                completedFrames: offset + initialCount + 1,
                 totalFrames: request.inputs.count,
                 acceptedFrames: accepted,
                 rejectedFrames: rejected
@@ -868,7 +1002,8 @@ enum ImageStackEngine {
             dispositions: dispositions,
             snrAnalysis: StackSnrAnalyzer.analyze(snrSamples),
             snrWarning: snrWarning,
-            transientNote: transientNote
+            transientNote: transientNote,
+            referenceNote: referenceNote
         )
     }
 
@@ -931,6 +1066,12 @@ enum ImageStackBatchEngine {
     ) throws -> ImageStackBatchResult {
         guard !request.jobs.isEmpty else {
             throw ImageStackError.invalidRequest("Choose at least one stack group.")
+        }
+        let sources = request.jobs.flatMap { $0.request.protectedSources }
+        var outputs: [URL] = []
+        for job in request.jobs {
+            try StackInputProtection.validate(output: job.request.output, sources: sources + outputs)
+            outputs.append(job.request.output)
         }
         let totalFrames = request.jobs.reduce(0) { $0 + $1.request.inputs.count }
         var completedFrames = 0
@@ -1088,6 +1229,8 @@ struct ImageStackWorkflowView: View {
     @StateObject private var coordinator = ImageStackCoordinator()
     @State private var selectedURLs: Set<URL>
     @State private var referenceURLs: [String: URL] = [:]
+    @State private var automaticReferenceGroups: Set<String> = []
+    @State private var referenceImage: URL?
     @State private var options = ImageStackOptions()
     @State private var calibration = ImageStackCalibration()
     @State private var calibrationSource = StackCalibrationSource.masters
@@ -1214,24 +1357,49 @@ struct ImageStackWorkflowView: View {
 
                     ForEach(stackGroups) { group in
                         Picker(
-                            stackGroups.count == 1 ? "Reference" : "\(group.title) reference",
+                            stackGroups.count == 1 ? "Channel reference" : "\(group.title) channel reference",
                             selection: referenceBinding(for: group)
                         ) {
                             ForEach(group.inputs, id: \.self) { url in
                                 Text(url.lastPathComponent).tag(url)
                             }
                         }
-                        .disabled(group.inputs.isEmpty)
-                        Button("Choose \(group.title) reference automatically…") {
-                            chooseReference(for: group)
-                        }
-                        .disabled(group.inputs.isEmpty)
+                        .disabled(group.inputs.isEmpty || automaticReferenceGroups.contains(group.id))
+                        Toggle("Choose \(group.title) channel reference automatically", isOn: Binding(
+                            get: { automaticReferenceGroups.contains(group.id) },
+                            set: { enabled in
+                                if enabled { automaticReferenceGroups.insert(group.id) }
+                                else { automaticReferenceGroups.remove(group.id) }
+                            }))
                     }
 
+                    Text("Automatic selection scores the selected lights when stacking starts. With a shared alignment image, it tries up to five ranked lights until one aligns.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Text(groupSummary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text("Each reference sets its filter stack's bounds and alignment coordinates.")
+                    LabeledContent("Shared alignment image") {
+                        HStack {
+                            Button(referenceImage?.lastPathComponent ?? "Choose…") {
+                                isChoosingFile = true
+                                Task { @MainActor in
+                                    if let selected = await StackFilePanels.chooseCalibration(
+                                        directory: urls.first?.deletingLastPathComponent(),
+                                        message: "Choose a FITS or XISF image to set the common alignment grid.") {
+                                        referenceImage = selected
+                                    }
+                                    isChoosingFile = false
+                                }
+                            }
+                            .lineLimit(1)
+                            if referenceImage != nil {
+                                Button("Clear") { referenceImage = nil }
+                            }
+                        }
+                    }
+                    Text(referenceImage == nil
+                        ? "Each channel reference sets its stack's grid and normalization. Choose a shared alignment image to put every filter on the same grid."
+                        : "The alignment image supplies bounds and coordinates; each channel light supplies its own brightness and noise scale. The alignment image contributes no pixels unless it is also selected as a light. Use matching mono or color data at the same image scale.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -1524,25 +1692,6 @@ struct ImageStackWorkflowView: View {
         return [reference] + group.inputs.filter { $0 != reference }
     }
 
-    private func chooseReference(for group: ImageStackGroup) {
-        isPreparingCalibration = true
-        preparationMessage = "Scoring \(group.inputs.count) reference candidates…"
-        preparationNotice = nil
-        preparationTask = Task { @MainActor in
-            defer { isPreparingCalibration = false }
-            do {
-                let choice = try await runBlocking { try StackReferenceSelector.choose(group.inputs) }
-                try Task.checkCancellation()
-                referenceURLs[group.id] = group.inputs[choice.referenceIndex]
-                preparationNotice = "Selected \(group.inputs[choice.referenceIndex].lastPathComponent) as the reference."
-            } catch is CancellationError {
-                preparationNotice = "Reference selection was cancelled."
-            } catch {
-                preparationNotice = error.localizedDescription
-            }
-        }
-    }
-
     @ViewBuilder
     private func calibrationRow(_ title: String, selection: Binding<URL?>) -> some View {
         LabeledContent(title) {
@@ -1668,7 +1817,9 @@ struct ImageStackWorkflowView: View {
                     calibration: calibrationsByGroup[group.id]
                         ?? (calibrationSource == .automatic
                             ? ImageStackCalibration()
-                            : calibration)
+                            : calibration),
+                    referenceImage: referenceImage,
+                    choosesReferenceAutomatically: automaticReferenceGroups.contains(group.id)
                 )
             )
         }
@@ -1872,14 +2023,14 @@ private enum StackFilePanels {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    static func chooseCalibration(directory: URL?) async -> URL? {
+    static func chooseCalibration(directory: URL?, message: String = "Choose an integrated calibration master.") async -> URL? {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.fits, .xisf]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
         panel.directoryURL = directory
-        panel.message = "Choose an integrated calibration master."
+        panel.message = message
         return await withCheckedContinuation { continuation in
             panel.begin { response in
                 continuation.resume(returning: response == .OK ? panel.url : nil)

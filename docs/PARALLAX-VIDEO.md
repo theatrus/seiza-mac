@@ -12,6 +12,14 @@ the previously tested patch byte-for-byte. The local vendor copy, Cargo patch
 and temporary About metadata have been removed; all Seiza crates now resolve
 from crates.io with registry checksums.
 
+## Published dependency update
+
+The next Mac release uses published core/C ABI **0.27.0**, stacking **0.29.0**,
+and parallax **0.4.0**, with the matching C ABI header and registry checksums.
+The release provenance above describes the shipped 0.8.0 artifacts. Shared
+stacking controls are covered in [STACKING.md](STACKING.md); the dust-map
+workspace is included and tested alongside the stacking changes.
+
 ## Workspace
 
 **File → Parallax Video…** and the viewer's film button open an independent,
@@ -40,9 +48,8 @@ independent distance reference; the app also saves optional `tourGlide`, `tourTi
 an itinerary, not a full project: it does not embed images, bookmarks, labels,
 scene overrides, or export preferences.
 
-After the 0.8.0 release, `main` uses published `seiza-cabi` and `seiza` **0.26.0** and
-`seiza-parallax` **0.3.0**, which add [dust maps](#dust-maps); the bridge header
-is the 0.26.0 crate's.
+The current workspace includes [dust maps](#dust-maps), introduced in Seiza
+0.26.0 and retained in the published 0.27.0 C ABI.
 
 ## Current upstream feature coverage
 
@@ -189,8 +196,9 @@ catalogues remain a separate package.
 The small Mac-only download/status adapter lives in
 `Rust/seiza-mac-core/src/catalogs.rs`; its declarations are outside the vendored
 upstream header. Direct `seiza`, `seiza-download`, and `seiza-cabi` dependencies
-use exact published versions from the same registry. The build checks their
-locked sources; About reports the published C ABI's version and source commit.
+use the same exact Git revision in development (registry versions in released
+0.8.0). The build checks their locked sources; About reports the C ABI's
+version and source commit.
 
 Catalogue label metadata is loaded lazily by upstream. Keep catalogue/file
 security scopes alive with the scene and through every in-flight native call,
