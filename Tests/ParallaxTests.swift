@@ -403,10 +403,54 @@ final class ParallaxTests: XCTestCase {
                     "overlay", "overlayDensity", "labels", "labelColor", "watermark"] {
             XCTAssertNotNil(object[key], key)
         }
-        for key in ["image", "wcs", "distanceFocus", "distanceParsecs", "smallStars", "online", "catalogDirectory", "autoTour"] {
+        for key in ["image", "wcs", "distanceFocus", "distanceParsecs", "smallStars", "online", "catalogDirectory", "autoTour", "dustMap"] {
             XCTAssertNil(object[key], key)
         }
         XCTAssertEqual(object["watermark"] as? Bool, false)
+    }
+
+    func testDustMapsSwapReadBackAndWriteWithoutPreparingAgain() throws {
+        let (files, request) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        let original = try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in })
+        XCTAssertNotEqual(original.summary.dustGiven, true)
+        // One star is too few to count dust from.
+        XCTAssertNil(try original.dustMap(width: 4, height: 3))
+        XCTAssertNil(try original.dustMap(width: 4, height: 3, counted: true))
+        XCTAssertFalse(try original.writeDustMap(to: files.directory.appendingPathComponent("none.png")))
+
+        // Opaque everywhere, at half the image's size.
+        let painted = files.directory.appendingPathComponent("painted.png")
+        let white = Data(repeating: 255, count: 48 * 32 * 4)
+        try ImageFileWriter.write(XCTUnwrap(SeizaCore.makeRGBA8Image(data: white, width: 48, height: 32)), to: painted, format: .png)
+        let opaque = try ParallaxCore.withDustMap(original, path: painted.path, cancellation: ParallaxCancellation(), events: { _ in })
+        XCTAssertEqual(opaque.summary.dustGiven, true)
+        XCTAssertEqual(opaque.summary.detectedStars, original.summary.detectedStars)
+        for value in try XCTUnwrap(opaque.dustMap(width: 4, height: 3)) { XCTAssertEqual(value, 1, accuracy: 1e-4) }
+
+        // Written out and read back, as after editing it in another program.
+        let written = files.directory.appendingPathComponent("dust.xisf")
+        XCTAssertTrue(try opaque.writeDustMap(to: written))
+        let again = try ParallaxCore.withDustMap(original, path: written.path, cancellation: ParallaxCancellation(), events: { _ in })
+        XCTAssertEqual(again.summary.dustGiven, true)
+        for value in try XCTUnwrap(again.dustMap(width: 8, height: 6)) { XCTAssertEqual(value, 1, accuracy: 1e-4) }
+        XCTAssertEqual(try again.frame(0).width, 66)
+
+        // Back to the counted dust, of which there is none here.
+        let counted = try ParallaxCore.withDustMap(opaque, path: nil, cancellation: ParallaxCancellation(), events: { _ in })
+        XCTAssertNotEqual(counted.summary.dustGiven, true)
+        XCTAssertNil(try counted.dustMap(width: 4, height: 3))
+        XCTAssertThrowsError(try ParallaxCore.withDustMap(original, path: files.directory.appendingPathComponent("missing.png").path,
+            cancellation: ParallaxCancellation(), events: { _ in }))
+    }
+
+    func testDustMapPathIsOmittedUntilChosen() throws {
+        let none = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(ParallaxInputs(image: "/source.png"))) as? [String: Any])
+        XCTAssertNil(none["dustMap"])
+        let chosen = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(
+            ParallaxInputs(image: "/source.png", dustMap: "/dust.xisf"))) as? [String: Any])
+        XCTAssertEqual(chosen["dustMap"] as? String, "/dust.xisf")
+        XCTAssertEqual(try ParallaxCore.json(ParallaxDustMapPath(path: nil)), "{}")
     }
 
     func testReconfigurationSharesSceneWithoutFilesAndPreservesOldFrames() async throws {

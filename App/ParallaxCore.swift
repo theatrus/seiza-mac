@@ -247,7 +247,14 @@ struct ParallaxInputs: Encodable {
     var starDistances: String?
     var rcAstroExecutable: String?
     var rcAstroHost: String?
+    /// A dust map, white where opaque, in place of the dust counted from the
+    /// stars. A scene field: reconfiguration refuses it.
+    var dustMap: String?
 }
+
+/// `{"path": ...}` for a dust map file, or `{}` for the counted dust.
+struct ParallaxDustMapPath: Encodable { var path: String? }
+struct ParallaxDustMapWrite: Encodable { var path: String; var counted: Bool }
 
 struct ParallaxRequest: Encodable {
     var inputs: ParallaxInputs
@@ -303,6 +310,10 @@ struct ParallaxSummary: Decodable {
     let backgroundFocus: [Double]
     let fit: ParallaxFit
     let wcs: WCSResult
+    /// Whether a given map, rather than the star counts, made the dust, and
+    /// how many stars its opaque places brought in front of the nebula.
+    let dustGiven: Bool?
+    let starsInFrontOfDust: Int?
 }
 
 struct ParallaxEvent: Decodable {
@@ -518,6 +529,26 @@ enum ParallaxCore {
         try cancellation.check()
         return result
     }
+
+    /// The same scene and camera with the dust map at `path` (white opaque;
+    /// PNG, JPEG, TIFF, FITS or XISF), or the counted dust again when `path`
+    /// is nil. Only the dust changes; the scene is not prepared again.
+    static func withDustMap(_ video: ParallaxVideo, path: String?, cancellation: ParallaxCancellation,
+                            events: @escaping (ParallaxEvent) -> Void) throws -> ParallaxVideo {
+        try cancellation.check()
+        let context = ParallaxEventContext(events)
+        var failure: UnsafeMutablePointer<CChar>?
+        let pointer = try withExtendedLifetime((video, context)) {
+            try json(ParallaxDustMapPath(path: path)).withCString {
+                seiza_parallax_with_dust_map_json(video.pointer, $0, cancellation.pointer,
+                    parallaxEventCallback, Unmanaged.passUnretained(context).toOpaque(), &failure)
+            }
+        }
+        guard let pointer else { let failure = error(failure); try cancellation.check(); throw failure }
+        let result = try ParallaxVideo(pointer: pointer)
+        try cancellation.check()
+        return result
+    }
 }
 
 // Upstream explicitly permits concurrent random-access renders. No mutation or
@@ -569,6 +600,34 @@ final class ParallaxVideo: @unchecked Sendable {
         guard let base = CVPixelBufferGetBaseAddress(buffer) else { throw SeizaCoreError.invalidCABIResponse }
         try render(index, format: UInt32(SEIZA_PIXEL_FORMAT_BGRA8), base: base,
                    length: CVPixelBufferGetDataSize(buffer), stride: CVPixelBufferGetBytesPerRow(buffer))
+    }
+
+    /// The dust as a `width` × `height` map over the whole image, row by row,
+    /// 0 clear to 1 opaque: the dust in use, or the dust counted from the
+    /// stars even while a given map takes its place. Nil when there is none.
+    func dustMap(width: Int, height: Int, counted: Bool = false) throws -> [Float]? {
+        guard width > 0, height > 0 else { throw SeizaCoreError.message("The dust map needs a width and height.") }
+        var opacity = [Float](repeating: 0, count: width * height)
+        var failure: UnsafeMutablePointer<CChar>?
+        let which = UInt32(counted ? SEIZA_DUST_MAP_COUNTED : SEIZA_DUST_MAP_IN_USE)
+        let result = opacity.withUnsafeMutableBufferPointer { buffer in
+            seiza_parallax_dust_map(pointer, which, UInt32(width), UInt32(height), buffer.baseAddress, buffer.count, &failure)
+        }
+        if result < 0 { throw ParallaxCore.error(failure) }
+        if let failure { seiza_string_free(failure) }
+        return result == 1 ? opacity : nil
+    }
+
+    /// Write the dust to `url`, white opaque, in the format its extension
+    /// names: 16-bit PNG or TIFF, or 32-bit float FITS or XISF, the size of
+    /// the image. False when there is no such dust to write.
+    func writeDustMap(to url: URL, counted: Bool = false) throws -> Bool {
+        var failure: UnsafeMutablePointer<CChar>?
+        let request = try ParallaxCore.json(ParallaxDustMapWrite(path: url.path, counted: counted))
+        let result = request.withCString { seiza_parallax_write_dust_map_json(pointer, $0, &failure) }
+        if result < 0 { throw ParallaxCore.error(failure) }
+        if let failure { seiza_string_free(failure) }
+        return result == 1
     }
 
     private func render(_ index: Int, format: UInt32, base: UnsafeMutableRawPointer,
