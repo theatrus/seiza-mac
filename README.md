@@ -170,10 +170,9 @@ lists, builds a universal Release application, and verifies an unsigned
 development DMG. Pull-request jobs have read-only repository access and never
 receive signing secrets.
 
-A push to the official `main` branch runs the same checks, then an isolated job
-enters the protected `signing` environment. It Developer ID signs and notarizes
-the validated app and DMG and uploads `Seiza-latest-main` as a 30-day Actions
-artifact. Versioned downloads continue to come from tagged GitHub Releases.
+A push to the official `main` branch runs the same unsigned checks. Only final
+release tags enter the protected signing environment and produce signed,
+notarized downloads through GitHub Releases.
 
 ```sh
 cargo test --workspace --locked

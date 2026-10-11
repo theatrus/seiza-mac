@@ -56,7 +56,7 @@ Sparkle adds nested code that must be signed before the outer app. The shared
 4. the Quick Look preview and thumbnail extensions; and
 5. `Seiza.app`.
 
-The release, latest-main, and reviewed-PR signing jobs all use this script.
+The tagged-release signing job uses this script. PR and main CI stay unsigned.
 Unsigned artifacts may contain only Sparkle's known internal symlinks.
 
 The private EdDSA key exists in the maintainer's login Keychain and in the

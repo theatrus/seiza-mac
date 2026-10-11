@@ -101,6 +101,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             ONLY_ACTIVE_ARCH=NO \
             'ARCHS=arm64 x86_64'
+          scripts/validate-unsigned-app.sh DerivedData/Build/Products/Release/Seiza.app
 
       - name: Import Developer ID certificate
         env:

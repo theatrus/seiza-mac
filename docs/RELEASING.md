@@ -12,18 +12,11 @@ Xcode `MARKETING_VERSION`. The release job only runs in
 `theatrus/seiza-mac` for a trusted tag push and enters the protected GitHub
 `signing` environment before it can read credentials.
 
-Normal CI runs for every pull request and push to `main`. Its validation job is
-unsigned, has read-only repository access, and never receives signing secrets.
-After validation passes on an official `main` push, a separate job enters the
-protected `signing` environment and uploads a signed, notarized
-`Seiza-latest-main` DMG artifact. The signing job is skipped for every pull
-request, including pull requests from forks.
-
-An optional signed PR build only starts when the repository owner explicitly
-dispatches the reviewed-PR workflow. It validates that the current head commit
-is the exact commit the owner approved before it checks out or executes PR code.
-For owner-authored PRs, the owner's manual dispatch is the explicit authorization
-because GitHub does not allow authors to approve their own pull requests.
+Normal CI runs for every pull request and push to `main`. It validates metadata,
+tests Rust and Swift, builds the universal app and both Quick Look extensions,
+and verifies an unsigned development DMG. These jobs have read-only repository
+access and never enter the signing environment. Only the final release tag is
+signed and notarized; PR and main builds do not require signed artifacts.
 
 ## Apple credentials
 
@@ -73,8 +66,7 @@ App ID/capability and Developer ID provisioning profile at that time.
 ## GitHub environment and secrets
 
 In GitHub, open **Settings → Environments**, create an environment named
-`signing`, and select **Selected branches and tags**. Allow the `main` branch
-for the latest-main and owner-dispatched reviewed PR builds, and allow the
+`signing`, and select **Selected branches and tags**. Allow only the
 `v*.*.*` tag pattern for releases. A required reviewer is recommended as an
 additional gate. Add these seven **environment secrets** to that environment, not
 to a checked-in file:
@@ -147,43 +139,12 @@ The workflow then:
 8. sign the final ZIP and generate `appcast.xml` with Sparkle; and
 9. create checksums only after stapling, then publish the exact verified files.
 
-## Latest main build
+## Unsigned CI builds
 
 The `CI` workflow runs the complete unsigned validation suite for pull requests
-and `main`. Only a successful push to `main` in `theatrus/seiza-mac` can upload
-the validated unsigned application for the protected signing job. That job
-checks out trusted signing inputs at the same commit, validates the application
-and Quick Look bundle identifiers and universal binaries, signs and notarizes
-the app and DMG, and uploads `Seiza-latest-main` with its SHA-256 checksum for
-30 days. It does not create or replace a GitHub Release.
-
-If the `signing` environment requires reviewers, approve that deployment to
-finish the latest-main artifact. A newer `main` push cancels the older in-flight
-CI run so the workflow concentrates signing capacity on the newest commit.
-
-## Reviewed pull-request builds
-
-For a contributor PR, review the current head commit and submit an **Approve**
-review as `@theatrus`. Then open **Actions → Reviewed PR DMG → Run workflow**
-on `main` and enter the PR number. For an owner-authored PR, use the same manual
-dispatch after reviewing the diff.
-
-The authorization job refuses to continue unless:
-
-- the dispatcher is the repository owner;
-- the workflow itself is running from `main`;
-- the pull request is open and targets `main`;
-- the requested commit is still the current PR head; and
-- for a non-owner author, the owner's latest review on that exact commit is
-  `APPROVED`.
-
-An unsigned macOS job tests and builds the exact reviewed SHA without secrets.
-A separate job enters the protected `signing` environment, treats that app as
-data, rejects symlinks or unexpected bundle identifiers, signs both Quick Look
-extensions before their containing app using trusted inputs from `main`,
-notarizes and staples a DMG, and uploads it as a 14-day Actions artifact. A new
-push changes the head SHA, so the previous approval cannot authorize the new
-code; review and dispatch again.
+and `main`. Review and merge the exact PR head after its checks pass, then wait
+for unsigned CI on the merged `main` commit before tagging. A newer `main` push
+cancels the older in-flight CI run. There is no separate PR or main signing job.
 
 ## Publishing
 

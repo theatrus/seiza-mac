@@ -73,21 +73,20 @@ xcodebuild build \
 Commit, push, and open a pull request. Review its complete delta before any
 signed workflow receives approval.
 
-## 3. Build the exact reviewed PR head
+## 3. Validate the exact reviewed PR head
 
-Owner-dispatch the reviewed-PR workflow from trusted `main`:
+Wait for the pull request's unsigned CI checks to pass on the reviewed head:
 
 ```sh
 pr_number=3
-gh workflow run reviewed-pr.yml --ref main -f "pr_number=${pr_number}"
-gh run list --workflow reviewed-pr.yml --limit 3
+gh pr checks "${pr_number}"
 ```
 
-Approve the protected `signing` deployment only after confirming the workflow
-resolved the current reviewed head. Wait for the unsigned tests, universal
-build, nested Sparkle and Quick Look signing, notarization, stapling,
-Gatekeeper checks, and artifact upload to pass. Download that artifact and
-independently check its checksum and notarization before merging.
+CI tests the source, builds and validates the universal application and both
+Quick Look extensions, and verifies an unsigned development DMG. Review the
+complete delta and confirm all checks apply to the current head before merging.
+Only the final release tag is signed and notarized; no signed PR artifact is
+required.
 
 ## 4. Merge the exact green head
 
@@ -104,11 +103,9 @@ git switch main
 git pull --ff-only origin main
 ```
 
-Wait for the resulting `main` CI validation and `Sign latest main DMG` job to
-pass. Download the `Seiza-latest-main` artifact, verify its checksum, and confirm
-the merge contains the reviewed change range and that the Xcode marketing
-version exactly matches the planned tag. This main artifact is an integration
-build; the annotated tag still creates the permanent versioned release.
+Wait for unsigned CI on the resulting `main` commit to pass. Confirm the merge
+contains the reviewed change range and that the Xcode marketing version exactly
+matches the planned tag. The annotated tag starts signing and publication.
 
 ## 5. Create and push the release tag
 
