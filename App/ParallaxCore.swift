@@ -417,6 +417,47 @@ enum ParallaxCore {
         String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
     }
 
+    // Keep the composite as the first choice. A confirmed, aligned stars layer
+    // can recover a failed solve without changing the scene's source geometry.
+    static func resolvingWCS(_ request: ParallaxRequest, allowStarsFallback: Bool = true,
+                            cancellation: ParallaxCancellation, events: (ParallaxEvent) -> Void,
+                            solve: (URL, URL?, Double, Double) throws -> WCSResult = { image, catalog, minimum, maximum in
+                                try SeizaCore.solve(url: image, catalogDirectory: catalog,
+                                    minimumScale: minimum, maximumScale: maximum).wcs
+                            }) throws -> ParallaxRequest {
+        try cancellation.check()
+        guard request.inputs.wcs == nil else { return request }
+        let catalog = request.inputs.catalogDirectory.map { URL(fileURLWithPath: $0) }
+        func attempt(_ path: String) throws -> WCSResult {
+            try cancellation.check()
+            let wcs = try solve(URL(fileURLWithPath: path), catalog,
+                request.scene.minimumScaleArcsecPerPixel, request.scene.maximumScaleArcsecPerPixel)
+            try cancellation.check()
+            return wcs
+        }
+        var resolved = request
+        events(ParallaxEvent(kind: "note", message: "Plate-solving the source image…", fraction: nil))
+        do {
+            resolved.inputs.wcs = try attempt(request.inputs.image)
+        } catch {
+            try cancellation.check()
+            if error is CancellationError { throw error }
+            guard allowStarsFallback, let stars = request.inputs.stars, stars != request.inputs.image else { throw error }
+            let sourceError = error.localizedDescription
+            events(ParallaxEvent(kind: "warning",
+                message: "Source image solve failed: \(sourceError). Retrying with the aligned stars layer…", fraction: nil))
+            do {
+                resolved.inputs.wcs = try attempt(stars)
+            } catch {
+                try cancellation.check()
+                if error is CancellationError { throw error }
+                throw SeizaCoreError.message("Could not solve either image. Source: \(sourceError). Stars: \(error.localizedDescription)")
+            }
+            events(ParallaxEvent(kind: "note", message: "Sky coordinates recovered from the stars layer.", fraction: nil))
+        }
+        return resolved
+    }
+
     static func plan(_ request: ParallaxRequest, cancellation: ParallaxCancellation,
                      events: @escaping (ParallaxEvent) -> Void) throws -> ParallaxTourPlan {
         try cancellation.check()
@@ -442,6 +483,10 @@ enum ParallaxCore {
     static func prepare(_ request: ParallaxRequest, cancellation: ParallaxCancellation,
                         events: @escaping (ParallaxEvent) -> Void) throws -> ParallaxVideo {
         try cancellation.check()
+        // Imported pairs have already been confirmed aligned by the workspace.
+        // Automatic separation keeps the upstream solve/separation path.
+        let request = request.inputs.stars == nil ? request :
+            try resolvingWCS(request, cancellation: cancellation, events: events)
         let context = ParallaxEventContext(events)
         var failure: UnsafeMutablePointer<CChar>?
         let pointer = try withExtendedLifetime(context) {

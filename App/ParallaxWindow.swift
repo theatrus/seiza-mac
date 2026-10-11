@@ -214,7 +214,7 @@ struct ParallaxWorkspace: View {
     @ViewBuilder private var sourceInspector: some View {
         Section("Source snapshot") {
             Text("\(session.width) × \(session.height) pixels")
-            Text(session.hasWCS ? "Sky coordinates available" : "The image will be plate solved when preparing or generating a tour.")
+            Text(session.hasWCS ? "Sky coordinates available" : "The source will be plate solved when preparing or generating a tour. If it fails, an aligned stars layer is tried when available.")
                 .font(.caption).foregroundStyle(.secondary)
             Text("Uses the current image adjustments. Imported layers must use the same stretch and alignment.")
                 .font(.caption).foregroundStyle(.secondary)
