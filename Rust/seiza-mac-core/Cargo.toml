@@ -1,6 +1,6 @@
 [package]
 name = "seiza-mac-core"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2024"
 rust-version = "1.89"
 license = "Apache-2.0"
@@ -10,8 +10,8 @@ publish = false
 crate-type = ["staticlib"]
 
 [dependencies]
-seiza-cabi = "=0.26.0"
-seiza = "=0.26.0"
+seiza-cabi = "=0.27.0"
+seiza = "=0.27.0"
 seiza-download = "=0.8.0"
 serde_json = "1"
 tokio = { version = "1", features = ["rt"] }

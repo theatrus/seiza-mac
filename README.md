@@ -8,7 +8,7 @@ objects in it. Turn a finished image into a camera tour with depth, motion, and
 titles. Image processing and video encoding run locally; optional online
 stellar-distance lookup sends sky coordinates to astronomical catalogues.
 
-[**Download Seiza for Mac 0.8.0**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.0-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
+[**Download Seiza for Mac 0.8.1**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.1-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
 **Also from Seiza:** [Core, CLI, and libraries](https://github.com/theatrus/seiza) ·
 [Seiza for Windows](https://github.com/theatrus/seiza-win) ·
@@ -124,8 +124,10 @@ strength, noise, and ringing.
 ### Stack selected frames
 
 Combine selected FITS or XISF lights into 32-bit floating-point FITS outputs,
-with optional grouping by filename filter. Choose a reference for each group
-or let Seiza score the candidates. Calibrate with existing masters or build and
+with optional grouping by filename filter. Choose a channel reference for each group
+or let Seiza rank candidates and retry alignment. An optional **Shared alignment
+image** puts every filter on the same output grid while preserving each
+channel’s own normalization. Calibrate with existing masters or build and
 cache matched masters from raw calibration frames. Track progress and SNR,
 cancel a run, and open the saved results.
 
@@ -157,7 +159,9 @@ Advanced modes are opt-in; core defaults stay unchanged. Transient removal runs
 by default when finishing a stack.
 
 [Stack a directory](docs/USING-SEIZA.md#stack-a-directory) or
-[set up live folder stacking](docs/USING-SEIZA.md#stack-a-folder-live).
+[set up live folder stacking](docs/USING-SEIZA.md#stack-a-folder-live). See the
+[shared-reference guide](docs/STACKING.md) for alignment-image selection and
+checkpoint behavior.
 
 ## Plate solving and sky overlays
 
@@ -254,7 +258,7 @@ and refits the whole frame as its window changes size.
 
 ## Download
 
-[**Download Seiza for Mac 0.8.0**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.0-universal.dmg), open it, and drag Seiza to Applications.
+[**Download Seiza for Mac 0.8.1**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.1-universal.dmg), open it, and drag Seiza to Applications.
 
 Or install with [Homebrew](https://brew.sh) from the
 [theatrus/homebrew-seiza tap](https://github.com/theatrus/homebrew-seiza):
@@ -328,8 +332,8 @@ DerivedData/Build/Products/Debug/Seiza.app
 
 Open `Seiza.xcodeproj` to run and sign it with a local development team.
 
-The app uses published `seiza-cabi` 0.26.0, `seiza` 0.26.0,
-`seiza-parallax` 0.3.0 and `seiza-download` 0.8.0, with dust-map support and
+The app uses published `seiza-cabi` 0.27.0, `seiza` 0.27.0,
+`seiza-parallax` 0.4.0, `seiza-stacking` 0.29.0 and `seiza-download` 0.8.0, with dust-map support and
 image reading and writing through `seiza-image-io`. Library and bridge header
 must be updated together. About reports the linked release version and source
 commit.

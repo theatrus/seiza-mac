@@ -95,6 +95,216 @@ enum SyntheticFrame {
 
 // MARK: - SNR analysis
 
+private struct SharedReferenceFixture {
+    let root: URL
+    let common: URL
+    let good: URL
+    let second: URL
+    let turned: URL
+    var options: ImageStackOptions {
+        var options = ImageStackOptions()
+        options.normalization = .none
+        options.rejection = .none
+        return options
+    }
+    init() throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let values = SyntheticFrame.noisyStarField(width: 160, height: 160)
+        common = try SyntheticFrame.write(width: 176, height: 176,
+            values: SyntheticFrame.noisyStarField(width: 176, height: 176).map { $0 * 2 },
+            cards: ["SEIZAMST= 'LIGHT'"], directory: root, name: "common.fits")
+        good = try SyntheticFrame.write(width: 160, height: 160, values: values,
+            cards: SyntheticFrame.lightCards(), directory: root, name: "a-good.fits")
+        second = try SyntheticFrame.write(width: 160, height: 160, values: values,
+            cards: SyntheticFrame.lightCards(), directory: root, name: "b-good.fits")
+        turned = try SyntheticFrame.write(width: 160, height: 160,
+            values: (0..<values.count).map { values[(159 - $0 % 160) * 160 + $0 / 160] },
+            cards: SyntheticFrame.lightCards(), directory: root, name: "c-turned.fits")
+    }
+    func remove() { try? FileManager.default.removeItem(at: root) }
+}
+
+final class SharedStackReferenceTests: XCTestCase {
+    func testRankingsMustContainEachScoredInputExactlyOnceAndWinnerFirst() throws {
+        let score: [String: Any] = ["stars": 12, "medianStarArea": 2,
+            "background": 10, "backgroundVariation": 1, "score": 20]
+        func selection(_ ranking: [Int]) throws -> StackReferenceSelection {
+            try JSONDecoder().decode(StackReferenceSelection.self, from: JSONSerialization.data(withJSONObject: [
+                "schemaVersion": 1, "referenceIndex": 1, "referencePath": "/b",
+                "scores": [score, score, NSNull()], "ranking": ranking]))
+        }
+        XCTAssertNoThrow(try selection([1, 0]).validate(paths: ["/a", "/b", "/c"]))
+        for invalid in [[1, 1], [1], [0, 1], [1, 2], [1, 0, 7]] {
+            XCTAssertThrowsError(try selection(invalid).validate(paths: ["/a", "/b", "/c"]))
+        }
+    }
+
+    func testNativeFallbackStartsEmptyAndPersistsSeparateReferences() async throws {
+        let f = try SharedReferenceFixture()
+        defer { f.remove() }
+        let session = try LiveStackNativeSession.open(referencePath: f.turned.path,
+            optionsJSON: String(decoding: try f.options.jsonData, as: UTF8.self),
+            calibration: .init(), referenceImagePath: f.common.path,
+            candidatePaths: [f.turned.path, f.good.path])
+        XCTAssertEqual(session.channelReferencePath, f.good.path)
+        XCTAssertEqual(session.referenceSelection?.skipped.map(\.path), [f.turned.path])
+        var state = try await session.state()
+        XCTAssertTrue(state.isValidFromCore)
+        XCTAssertEqual(state.acceptedFrames, 0)
+        XCTAssertEqual(state.referenceIntegrated, false)
+        // Rust canonical paths and Foundation URLs spell macOS's /var alias
+        // differently; compare both through the same identity conversion.
+        XCTAssertEqual(StackInputProtection.referenceIdentity(state.referenceImagePath),
+            StackInputProtection.referenceIdentity(f.common.path))
+        XCTAssertEqual(state.width, 176)
+        XCTAssertFalse(state.inputPaths.contains(f.common.path))
+        for url in [f.good, f.second] {
+            let pushed = try await session.push(path: url.path)
+            XCTAssertEqual(pushed.disposition?.accepted, true, pushed.disposition?.reason ?? "")
+        }
+        state = try await session.saveContext(to: f.root.appendingPathComponent("stack.context").path)
+        XCTAssertEqual(state.acceptedFrames, 2)
+        await session.close()
+        let resumed = try LiveStackNativeSession.resume(contextPath: f.root.appendingPathComponent("stack.context").path)
+        let restored = try await resumed.state()
+        XCTAssertTrue(state.describesSameCheckpoint(restored))
+        let export = try await resumed.exportSnapshot()
+        XCTAssertThrowsError(try export.writeFITS(to: f.common.path))
+        let alias = f.root.appendingPathComponent("alias.fits")
+        try FileManager.default.linkItem(at: f.common, to: alias)
+        XCTAssertThrowsError(try export.writeFITS(to: alias.path))
+        export.free()
+        let replay = try await resumed.reintegrate(lowSigma: 0, highSigma: 0)
+        XCTAssertEqual(replay.acceptedFrames, 2)
+        XCTAssertThrowsError(try replay.writeFITS(to: f.common.path))
+        replay.free()
+        let finished = try await resumed.finish()
+        XCTAssertThrowsError(try finished.writeFITS(to: f.common.path))
+        let output = f.root.appendingPathComponent("finished.fits")
+        try finished.writeFITS(to: output.path)
+        finished.free()
+        XCTAssertEqual(try CalibrationService.probe(path: output.path).signature.width, 176)
+    }
+
+    func testReadFailureDoesNotFallBackToAnotherChannelLight() throws {
+        let f = try SharedReferenceFixture()
+        defer { f.remove() }
+        XCTAssertThrowsError(try LiveStackNativeSession.open(referencePath: "/missing.fits",
+            optionsJSON: String(decoding: try f.options.jsonData, as: UTF8.self),
+            calibration: .init(), referenceImagePath: f.common.path,
+            candidatePaths: ["/missing.fits", f.good.path]))
+    }
+
+    func testManualReferenceDoesNotSilentlyFallBackAndCancellationDoesNotWrite() throws {
+        let f = try SharedReferenceFixture()
+        defer { f.remove() }
+        let output = f.root.appendingPathComponent("manual.fits")
+        let request = ImageStackRequest(inputs: [f.turned, f.good, f.second], output: output,
+            options: f.options, calibration: .init(), referenceImage: f.common)
+        XCTAssertThrowsError(try ImageStackEngine.stack(request: request, cancellation: .init()) { _ in })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: output.path))
+        let cancellation = ImageStackCancellation()
+        cancellation.cancel()
+        XCTAssertThrowsError(try ImageStackEngine.stack(request: request, cancellation: cancellation) { _ in }) {
+            XCTAssertTrue($0 is CancellationError)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: output.path))
+    }
+
+    func testDirectorySharedGridCountsOnlyLightsAndProtectsAllBatchSources() throws {
+        let f = try SharedReferenceFixture()
+        defer { f.remove() }
+        let original = try Data(contentsOf: f.common)
+        let output = f.root.appendingPathComponent("output.fits")
+        let result = try ImageStackEngine.stack(request: .init(inputs: [f.good, f.second],
+            output: output, options: f.options, calibration: .init(), referenceImage: f.common,
+            choosesReferenceAutomatically: true), cancellation: .init()) { _ in }
+        XCTAssertEqual(result.acceptedFrames, 2)
+        XCTAssertEqual(result.rejectedFrames, 0)
+        XCTAssertEqual(result.dispositions.count, 2)
+        XCTAssertTrue(result.referenceNote?.contains("common.fits") == true)
+        XCTAssertEqual(try CalibrationService.probe(path: output.path).signature.width, 176)
+        XCTAssertEqual(try Data(contentsOf: f.common), original)
+        // The first output cannot overwrite a later group's alignment image.
+        let first = ImageStackJob(group: .init(id: "Ha", filter: nil, inputs: [f.good, f.second]),
+            request: .init(inputs: [f.good, f.second], output: f.common,
+                options: f.options, calibration: .init()))
+        let second = ImageStackJob(group: .init(id: "OIII", filter: nil, inputs: [f.good, f.second]),
+            request: .init(inputs: [f.good, f.second], output: output,
+                options: f.options, calibration: .init(), referenceImage: f.common))
+        XCTAssertThrowsError(try ImageStackBatchEngine.stack(request: .init(jobs: [first, second]),
+            cancellation: .init()) { _ in })
+        XCTAssertEqual(try Data(contentsOf: f.common), original)
+    }
+
+    func testSharedImageCanBeExplicitlySelectedAsALight() throws {
+        let f = try SharedReferenceFixture()
+        defer { f.remove() }
+        let result = try ImageStackEngine.stack(request: .init(inputs: [f.good, f.second],
+            output: f.root.appendingPathComponent("same-reference.fits"), options: f.options,
+            calibration: .init(), referenceImage: f.good), cancellation: .init()) { _ in }
+        XCTAssertEqual(result.acceptedFrames, 2)
+        XCTAssertEqual(result.dispositions.count, 2)
+    }
+
+    func testLiveFallbackUsesChosenChannelAndRestoresSharedGrid() async throws {
+        let f = try SharedReferenceFixture()
+        defer { f.remove() }
+        var config = LiveStackRunConfiguration(watchFolder: f.root.path,
+            sessionRootDirectory: f.root.appendingPathComponent("sessions"))
+        config.referenceImagePath = f.common.path
+        config.choosesReferenceAutomatically = true
+        config.options = f.options
+        config.monitorStabilityDuration = 0.01
+        config.monitorScanInterval = 3600
+        let run = try LiveStackCoordinator(configuration: config) { urls in
+            XCTAssertFalse(urls.contains(f.common))
+            let index = try XCTUnwrap(urls.firstIndex(of: f.turned))
+            let scores = urls.map { _ in ["stars": 12, "medianStarArea": 2,
+                "background": 10, "backgroundVariation": 1, "score": 20] }
+            let ranking = [index] + urls.indices.filter { $0 != index }
+            return try JSONDecoder().decode(StackReferenceSelection.self, from: JSONSerialization.data(withJSONObject: [
+                "schemaVersion": 1, "referenceIndex": index, "referencePath": f.turned.path,
+                "scores": scores, "ranking": ranking]))
+        }
+        try await run.start()
+        let initial = await run.currentSnapshot()
+        XCTAssertEqual(initial.acceptedFrames, 1)
+        XCTAssertEqual(initial.channelReferencePath, f.good.path)
+        XCTAssertEqual(initial.referenceImagePath, StackInputProtection.referenceIdentity(f.common.path))
+        XCTAssertTrue(initial.attention.contains { $0.message.contains("c-turned.fits") })
+        try await run.pauseAndSave()
+        await run.dispose()
+        config.referenceImagePath = nil // A reopened window has no picker selection yet.
+        let restored = try LiveStackCoordinator(configuration: config) { _ in
+            XCTFail("A resumed stack must retain its channel reference")
+            throw CancellationError()
+        }
+        try await restored.start()
+        let snapshot = await restored.currentSnapshot()
+        XCTAssertEqual(snapshot.acceptedFrames, 1)
+        XCTAssertEqual(snapshot.channelReferencePath, f.good.path)
+        XCTAssertEqual(snapshot.referenceImagePath, StackInputProtection.referenceIdentity(f.common.path))
+        do {
+            _ = try await restored.saveSnapshot(to: f.common.path)
+            XCTFail("Must protect shared alignment image")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("alignment image")) }
+        await restored.dispose()
+
+        config.referenceImagePath = f.good.path
+        config.initialReferencePath = f.second.path
+        config.choosesReferenceAutomatically = false
+        let different = try LiveStackCoordinator(configuration: config)
+        try await different.start()
+        let fresh = await different.currentSnapshot()
+        XCTAssertEqual(fresh.channelReferencePath, f.second.path)
+        XCTAssertEqual(fresh.referenceImagePath, StackInputProtection.referenceIdentity(f.good.path))
+        XCTAssertTrue(fresh.attention.contains { $0.message.contains("did not match this run") })
+        await different.dispose()
+    }
+}
+
 final class StackSnrAnalysisTests: XCTestCase {
     func testAnalyzerRatesEveryDepthAgainstTheDeepestSignal() {
         let analysis = StackSnrAnalyzer.analyze([
@@ -997,6 +1207,26 @@ final class LiveStackNativeStateDecodingTests: XCTestCase {
             from: stateJSON(",\"reintegrationUnavailable\":\"Frames were supplied as pixels.\""))
         XCTAssertTrue(old.describesSameCheckpoint(current))
         XCTAssertTrue(current.describesSameCheckpoint(old))
+    }
+
+    func testEmptyStateRequiresAnExternalReferenceAndReferenceRolesMatchOnRestore() throws {
+        let old = try JSONDecoder().decode(LiveStackNativeState.self, from: stateJSON())
+        var shared = old
+        shared.acceptedFrames = 0
+        XCTAssertFalse(shared.isValidFromCore)
+        shared.referenceIntegrated = false
+        XCTAssertFalse(shared.isValidFromCore)
+        shared.referenceImagePath = "/shared.fits"
+        XCTAssertTrue(shared.isValidFromCore)
+        var other = shared
+        other.referenceImagePath = "/another.fits"
+        XCTAssertFalse(shared.describesSameCheckpoint(other))
+        other = shared
+        other.referenceIntegrated = true
+        XCTAssertFalse(other.isValidFromCore)
+        XCTAssertFalse(shared.describesSameCheckpoint(other))
+        shared.acceptedFrames = old.acceptedFrames
+        XCTAssertFalse(old.describesSameCheckpoint(shared))
     }
 }
 

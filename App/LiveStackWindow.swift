@@ -34,6 +34,7 @@ final class LiveStackWindowModel: ObservableObject {
     @Published var includeSubdirectories = false
     @Published var resumeExisting = true
     @Published var choosesReferenceAutomatically = false
+    @Published var referenceImage: URL?
     @Published var options = ImageStackOptions()
     @Published var calibrationMode = LiveStackCalibrationMode.none
     @Published var manualCalibration = ImageStackCalibration()
@@ -95,6 +96,15 @@ final class LiveStackWindowModel: ObservableObject {
     var canStart: Bool { !isBusy && validationMessage == nil }
 
     // MARK: Configuration actions
+
+    func chooseReferenceImage() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.fits, .xisf]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Choose the alignment image for this filter's stack."
+        if panel.runModal() == .OK { referenceImage = panel.url }
+    }
 
     func chooseWatchFolder() {
         let panel = NSOpenPanel()
@@ -185,6 +195,7 @@ final class LiveStackWindowModel: ObservableObject {
         configuration.resumeExisting = resumeExisting
         configuration.applyCalibrationOnResume = calibrationMode != .none
         configuration.initialReferencePath = initialReferencePath
+        configuration.referenceImagePath = referenceImage?.path
         configuration.choosesReferenceAutomatically = choosesReferenceAutomatically
         configuration.options = options
         configuration.calibration = calibration
@@ -216,10 +227,11 @@ final class LiveStackWindowModel: ObservableObject {
 
         let includeSubdirectories = includeSubdirectories
         let watchPath = watchFolder.path
+        let excludedPaths = [referenceImage?.path].compactMap { $0 }
         let reference = try await runBlocking {
             try Self.findReferenceLight(
                 inFolder: watchPath,
-                includeSubdirectories: includeSubdirectories)
+                includeSubdirectories: includeSubdirectories, excludedPaths: excludedPaths)
         }
         guard let reference else {
             throw LiveStackRunError.invalidConfiguration(
@@ -262,7 +274,8 @@ final class LiveStackWindowModel: ObservableObject {
 
     nonisolated static func findReferenceLight(
         inFolder folder: String,
-        includeSubdirectories: Bool
+        includeSubdirectories: Bool,
+        excludedPaths: [String] = []
     ) throws -> CalibrationFrameProbe? {
         var files: [(path: String, modified: Date)] = []
         let root = URL(fileURLWithPath: folder)
@@ -297,6 +310,7 @@ final class LiveStackWindowModel: ObservableObject {
                 : $0.modified < $1.modified
         }
         for file in files {
+            if excludedPaths.contains(where: { LiveStackPath.equals($0, file.path) }) { continue }
             guard let probe = try? CalibrationService.probe(path: file.path) else {
                 continue
             }
@@ -627,8 +641,19 @@ private struct LiveStackConfigurationView: View {
                 }
 
                 Section("Stacking") {
-                    Toggle("Choose reference automatically", isOn: $model.choosesReferenceAutomatically)
+                    Toggle("Choose channel reference automatically", isOn: $model.choosesReferenceAutomatically)
                     Text("For a new stack, score stable matching lights already in the folder. A saved session keeps its reference; an empty folder waits for its first stable light.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    LabeledContent("Shared alignment image") {
+                        HStack {
+                            Button(model.referenceImage?.lastPathComponent ?? "Choose…") { model.chooseReferenceImage() }
+                                .lineLimit(1)
+                            if model.referenceImage != nil {
+                                Button("Clear") { model.referenceImage = nil }
+                            }
+                        }
+                    }
+                    Text("Optional: use the same image for each filter to share its alignment grid. It is excluded from watched lights; brightness and noise normalization use a light from this filter. When resuming, no selection keeps the saved alignment image. Match mono/color data and image scale. Automatic selection tries up to five ranked lights if alignment fails.")
                         .font(.caption).foregroundStyle(.secondary)
                     StackProcessingOptionsView(options: $model.options)
                     Picker("Normalization", selection: $model.options.normalization) {
@@ -882,6 +907,14 @@ private struct LiveStackRunningView: View {
             Group {
                 Text(filterText)
                 Text(calibrationText)
+                if let path = model.snapshot.referenceImagePath {
+                    Text("Alignment: \(URL(fileURLWithPath: path).lastPathComponent)")
+                        .help(path)
+                }
+                if let path = model.snapshot.channelReferencePath {
+                    Text("Channel reference: \(URL(fileURLWithPath: path).lastPathComponent)")
+                        .help(path)
+                }
                 TimelineView(.periodic(from: .now, by: 30)) { _ in
                     Text(checkpointText)
                 }

@@ -37,16 +37,25 @@ struct LiveStackNativeState: Codable, Equatable, Sendable {
     var inputMode: String
     var inputPaths: [String]
     var referenceFrame: ReferenceFrame? = nil
+    var referenceIntegrated: Bool? = nil
+    var referenceImagePath: String? = nil
     /// Why the stack cannot be integrated again from its source files, or
     /// nil when it can. Older cores and manifests omit the field.
     var reintegrationUnavailable: String? = nil
+
+    var protectedSources: [URL] {
+        (inputPaths + [referenceImagePath].compactMap { $0 }).map { URL(fileURLWithPath: $0) }
+    }
 
     var isValidFromCore: Bool {
         schemaVersion == 1
             && !coreVersion.trimmingCharacters(in: .whitespaces).isEmpty
             && width > 0 && height > 0
             && (channels == 1 || channels == 3)
-            && acceptedFrames > 0
+            && (acceptedFrames > 0 || (acceptedFrames == 0
+                && referenceIntegrated == false && referenceImagePath?.isEmpty == false))
+            && (referenceImagePath.map { !$0.trimmingCharacters(in: .whitespaces).isEmpty
+                && referenceIntegrated == false } ?? (referenceIntegrated != false))
             && rejectedFrames >= 0
             && configurationFingerprint.count == 64
             && configurationFingerprint.allSatisfy { character in
@@ -76,6 +85,10 @@ struct LiveStackNativeState: Codable, Equatable, Sendable {
         if let referenceFrame, referenceFrame != actual.referenceFrame {
             return false
         }
+        if StackInputProtection.referenceIdentity(referenceImagePath) != StackInputProtection.referenceIdentity(actual.referenceImagePath) {
+            return false
+        }
+        if let referenceIntegrated, referenceIntegrated != actual.referenceIntegrated { return false }
         for (expected, present) in zip(inputPaths, actual.inputPaths)
         where !LiveStackPath.equals(expected, present) {
             return false
@@ -114,14 +127,17 @@ struct LiveStackPreview: Sendable {
 final class LiveStackExportSnapshot: @unchecked Sendable {
     private var pointer: OpaquePointer?
     let acceptedFrames: Int
+    private let protectedSources: [URL]
 
-    fileprivate init(pointer: OpaquePointer, acceptedFrames: Int) {
+    fileprivate init(pointer: OpaquePointer, acceptedFrames: Int, protectedSources: [URL]) {
         self.pointer = pointer
         self.acceptedFrames = acceptedFrames
+        self.protectedSources = protectedSources
     }
 
     func writeFITS(to path: String) throws {
         guard let pointer else { throw LiveStackSessionError.closed }
+        try StackInputProtection.validate(output: URL(fileURLWithPath: path), sources: protectedSources)
         try LiveStackAtomicFITS.write(to: path) { stagingPath, errorPointer in
             stagingPath.withCString { staging in
                 seiza_stack_export_snapshot_write_fits(pointer, staging, &errorPointer)
@@ -145,8 +161,11 @@ final class LiveStackExportSnapshot: @unchecked Sendable {
 final class LiveStackFinishedSnapshot: @unchecked Sendable {
     private var pointer: OpaquePointer?
 
-    fileprivate init(pointer: OpaquePointer) {
+    private let protectedSources: [URL]
+
+    fileprivate init(pointer: OpaquePointer, protectedSources: [URL]) {
         self.pointer = pointer
+        self.protectedSources = protectedSources
     }
 
     var acceptedFrames: Int {
@@ -159,6 +178,7 @@ final class LiveStackFinishedSnapshot: @unchecked Sendable {
 
     func writeFITS(to path: String) throws {
         guard let pointer else { throw LiveStackSessionError.closed }
+        try StackInputProtection.validate(output: URL(fileURLWithPath: path), sources: protectedSources)
         try LiveStackAtomicFITS.write(to: path) { stagingPath, errorPointer in
             stagingPath.withCString { staging in
                 seiza_stack_snapshot_write_fits(pointer, staging, &errorPointer)
@@ -241,7 +261,8 @@ enum LiveStackReintegration {
         cancel: CalibrationCancelSignal?,
         progress: (LiveStackReintegrationProgress) -> Void
     ) throws -> LiveStackFinishedSnapshot {
-        try withoutActuallyEscaping(progress) { handler in
+        let protectedSources = try LiveStackNativeSession.decodeState(handle).protectedSources
+        return try withoutActuallyEscaping(progress) { handler in
             let sink = Unmanaged.passRetained(ReintegrateProgressSink(handler: handler))
             defer { sink.release() }
             var errorPointer: UnsafeMutablePointer<CChar>?
@@ -259,7 +280,7 @@ enum LiveStackReintegration {
                         "The Seiza core could not remove transients from the stack."))
             }
             CalibrationService.discardError(&errorPointer)
-            return LiveStackFinishedSnapshot(pointer: snapshot)
+            return LiveStackFinishedSnapshot(pointer: snapshot, protectedSources: protectedSources)
         }
     }
 }
@@ -338,43 +359,30 @@ actor LiveStackNativeSession {
     private var stacker: OpaquePointer?
     private var finalized = false
 
-    private init(stacker: OpaquePointer) {
+    nonisolated let channelReferencePath: String?
+    nonisolated let referenceSelection: StackChannelReferenceSelection?
+
+    private init(stacker: OpaquePointer, channelReferencePath: String? = nil,
+                 referenceSelection: StackChannelReferenceSelection? = nil) {
         self.stacker = stacker
+        self.channelReferencePath = channelReferencePath
+        self.referenceSelection = referenceSelection
     }
 
     /// Opens a new stacker on a reference light, with optional masters.
     static func open(
         referencePath: String,
         optionsJSON: String,
-        calibration: ImageStackCalibration
+        calibration: ImageStackCalibration,
+        referenceImagePath: String? = nil,
+        candidatePaths: [String] = []
     ) throws -> LiveStackNativeSession {
-        var errorPointer: UnsafeMutablePointer<CChar>?
-        let handle = withOptionalCString(calibration.bias?.path) { bias in
-            withOptionalCString(calibration.dark?.path) { dark in
-                withOptionalCString(calibration.flat?.path) { flat in
-                    referencePath.withCString { reference in
-                        optionsJSON.withCString { options in
-                            seiza_live_stacker_open_fits(
-                                reference,
-                                bias,
-                                dark,
-                                flat,
-                                calibration.overridesDarkExposure
-                                    ? calibration.darkExposureSeconds
-                                    : 0,
-                                options,
-                                &errorPointer)
-                        }
-                    }
-                }
-            }
-        }
-        guard let handle else {
-            throw LiveStackSessionError.core(
-                CalibrationService.takeOwnedError(&errorPointer, fallback:
-                    "The Seiza core could not open the reference image."))
-        }
-        return LiveStackNativeSession(stacker: handle)
+        let opened = try StackNativeOpener.open(
+            candidates: candidatePaths.isEmpty ? [referencePath] : candidatePaths,
+            referenceImagePath: referenceImagePath, optionsJSON: optionsJSON, calibration: calibration)
+        return LiveStackNativeSession(stacker: opened.handle,
+            channelReferencePath: opened.selection?.channelReferencePath ?? referencePath,
+            referenceSelection: opened.selection)
     }
 
     /// Reopens a saved checkpoint context. The restored stacker retains its
@@ -524,6 +532,7 @@ actor LiveStackNativeSession {
     func exportSnapshot() throws -> LiveStackExportSnapshot {
         let handle = try requireHandle()
         let accepted = Int(seiza_live_stacker_accepted_frames(handle))
+        let protectedSources = try readState(handle).protectedSources
         var errorPointer: UnsafeMutablePointer<CChar>?
         let snapshot = seiza_live_stacker_export_snapshot(handle, &errorPointer)
         guard let snapshot else {
@@ -532,7 +541,7 @@ actor LiveStackNativeSession {
                     "The Seiza core could not snapshot the live stack."))
         }
         CalibrationService.discardError(&errorPointer)
-        return LiveStackExportSnapshot(pointer: snapshot, acceptedFrames: accepted)
+        return LiveStackExportSnapshot(pointer: snapshot, acceptedFrames: accepted, protectedSources: protectedSources)
     }
 
     /// Measures the accumulator's noise at the current depth. Nil means no
@@ -582,7 +591,8 @@ actor LiveStackNativeSession {
     /// Consumes the stacker and returns the finished snapshot. After this
     /// call the session cannot push or checkpoint again.
     func finish() throws -> LiveStackFinishedSnapshot {
-        _ = try requireHandle()
+        let handle = try requireHandle()
+        let protectedSources = try readState(handle).protectedSources
         var errorPointer: UnsafeMutablePointer<CChar>?
         finalized = true
         let snapshot = seiza_live_stacker_finish(&stacker, &errorPointer)
@@ -593,7 +603,7 @@ actor LiveStackNativeSession {
                     "The Seiza core could not finish the live stack."))
         }
         CalibrationService.discardError(&errorPointer)
-        return LiveStackFinishedSnapshot(pointer: snapshot)
+        return LiveStackFinishedSnapshot(pointer: snapshot, protectedSources: protectedSources)
     }
 
     func close() {

@@ -11,6 +11,7 @@ struct LiveStackRunConfiguration: Sendable {
     var resumeExisting = true
     var applyCalibrationOnResume = false
     var initialReferencePath: String? = nil
+    var referenceImagePath: String? = nil
     var choosesReferenceAutomatically = false
     var options = ImageStackOptions()
     var calibration = ImageStackCalibration()
@@ -73,6 +74,7 @@ struct LiveStackRunConfiguration: Sendable {
                 excluded.append(LiveStackPath.normalize(url.path))
             }
         }
+        if let referenceImagePath { excluded.append(LiveStackPath.normalize(referenceImagePath)) }
         return excluded
     }
 }
@@ -161,6 +163,8 @@ struct LiveStackRunSnapshot: Sendable {
     var ignoredFrames = 0
     var unreadableFrames = 0
     var filter: LiveStackFilterIdentity? = nil
+    var referenceImagePath: String? = nil
+    var channelReferencePath: String? = nil
     var calibrationHistory: [LiveStackCalibrationEpoch] = []
     var checkpointGeneration: Int64? = nil
     var lastCheckpointAtUTC: Date? = nil
@@ -289,6 +293,7 @@ actor LiveStackCoordinator {
     private var unreadableFrames = 0
     private var lockedFilter: LiveStackFilterIdentity?
     private var referenceSignature: CalibrationFrameSignature?
+    private var activeReferenceImagePath: String?
     private var restoredReferenceUnavailable = false
     private var calibration: ImageStackCalibration
     private var outputPath: String?
@@ -332,7 +337,9 @@ actor LiveStackCoordinator {
         normalized.watchFolder = LiveStackPath.normalize(configuration.watchFolder)
         normalized.initialReferencePath = configuration.initialReferencePath
             .map { LiveStackPath.normalize($0) }
+        normalized.referenceImagePath = StackInputProtection.referenceIdentity(configuration.referenceImagePath)
         self.configuration = normalized
+        self.activeReferenceImagePath = normalized.referenceImagePath
         self.referenceSelector = referenceSelector
         self.calibration = normalized.calibration
         self.store = try LiveStackSessionStore(
@@ -383,6 +390,8 @@ actor LiveStackCoordinator {
         snapshot.ignoredFrames = ignoredFrames
         snapshot.unreadableFrames = unreadableFrames
         snapshot.filter = lockedFilter
+        snapshot.referenceImagePath = activeReferenceImagePath
+        snapshot.channelReferencePath = frames.first { $0.disposition == .accepted }?.path
         snapshot.calibrationHistory = calibrationHistory
         snapshot.checkpointGeneration = lastCheckpointGeneration
         snapshot.lastCheckpointAtUTC = lastCheckpointAtUTC
@@ -605,8 +614,13 @@ actor LiveStackCoordinator {
                 continue
             }
             session = restoredSession
-            try await restoreState(
-                from: candidate.manifest, nativeState: nativeState)
+            do {
+                try await restoreState(from: candidate.manifest, nativeState: nativeState)
+            } catch {
+                await restoredSession.close()
+                session = nil
+                throw error
+            }
             if candidate.usedPreviousGeneration {
                 addAttention(
                     "The current checkpoint was invalid; resumed the previous "
@@ -639,6 +653,8 @@ actor LiveStackCoordinator {
             && LiveStackPath.equals(state.watchFolder, configuration.watchFolder)
             && state.includesSubdirectories == configuration.includeSubdirectories
             && state.stackOptionsJSON == (try? optionsJSON()) ?? ""
+            && (configuration.referenceImagePath == nil
+                || StackInputProtection.referenceIdentity(state.referenceImagePath) == configuration.referenceImagePath)
     }
 
     private func optionsJSON() throws -> String {
@@ -650,6 +666,12 @@ actor LiveStackCoordinator {
         nativeState: LiveStackNativeState
     ) async throws {
         let persisted = manifest.state
+        guard StackInputProtection.referenceIdentity(persisted.referenceImagePath)
+                == StackInputProtection.referenceIdentity(nativeState.referenceImagePath) else {
+            throw LiveStackRunError.invalidOperation("The checkpoint alignment image does not match its native context.")
+        }
+        activeReferenceImagePath = StackInputProtection.referenceIdentity(nativeState.referenceImagePath)
+        if let activeReferenceImagePath { monitor.reservePath(activeReferenceImagePath) }
         sessionId = persisted.sessionId
         createdAtUTC = persisted.createdAtUTC
         outputPath = persisted.outputPath.isEmpty ? nil : persisted.outputPath
@@ -835,12 +857,14 @@ actor LiveStackCoordinator {
             try selected.validate(paths: urls.map(\.path))
             try Task.checkCancellation()
             let candidate = eligible[selected.referenceIndex]
-            try await openInitialReference(candidate.path, expected: candidate)
+            let ranked = config.referenceImagePath == nil ? []
+                : selected.candidateIndices.map { eligible[$0] }
+            try await openInitialReference(candidate.path, expected: candidate, candidates: ranked)
             return true
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            guard session == nil else { throw error }
+            guard session == nil, configuration.referenceImagePath == nil else { throw error }
             addAttention("Could not choose a reference; waiting for the first stable light. "
                 + error.localizedDescription)
             return false
@@ -848,7 +872,7 @@ actor LiveStackCoordinator {
     }
 
     private func openInitialReference(
-        _ referencePath: String, expected: StackFileCandidate? = nil
+        _ referencePath: String, expected: StackFileCandidate? = nil, candidates: [StackFileCandidate] = []
     ) async throws {
         let probe = try await runBlocking {
             if let expected, !StackFolderMonitor.isUnchanged(expected) {
@@ -866,11 +890,11 @@ actor LiveStackCoordinator {
                 "The initial reference cannot be calibrated; \(reason).")
         }
         try Task.checkCancellation()
-        try await openReference(probe: probe, reason: "Selected reference frame", expected: expected)
+        try await openReference(probe: probe, reason: "Selected channel reference", expected: expected, candidates: candidates)
         seedCalibrationPaths()
         try await forcedCheckpoint()
         setState(.waitingForLight,
-            "Calibration is ready; waiting for the first stable light frame.")
+            "Channel reference ready; watching for more lights.")
     }
 
     private func applyConfiguredCalibrationAfterRestore() async {
@@ -1032,7 +1056,8 @@ actor LiveStackCoordinator {
     }
 
     private func openReference(
-        probe: CalibrationFrameProbe, reason: String, expected: StackFileCandidate? = nil
+        probe: CalibrationFrameProbe, reason: String, expected: StackFileCandidate? = nil,
+        candidates: [StackFileCandidate] = []
     ) async throws {
         guard FileManager.default.fileExists(atPath: probe.path) else {
             throw LiveStackRunError.invalidOperation(
@@ -1040,29 +1065,52 @@ actor LiveStackCoordinator {
         }
         let optionsJSONString = try optionsJSON()
         let referencePath = probe.path
+        let referenceImagePath = activeReferenceImagePath
         let openCalibration = calibration
+        let checkedCandidates = candidates.isEmpty ? [expected].compactMap { $0 } : candidates
+        setState(.processing, referenceImagePath == nil
+            ? "Opening channel reference…"
+            : "Aligning channel reference to the shared image (up to \(max(1, candidates.count)) candidates)…")
         let opened = try await runBlocking {
-            if let expected, !StackFolderMonitor.isUnchanged(expected) {
-                throw LiveStackRunError.invalidOperation("The selected reference changed during scoring.")
+            guard checkedCandidates.allSatisfy(StackFolderMonitor.isUnchanged) else {
+                throw LiveStackRunError.invalidOperation("A channel reference changed during scoring.")
             }
             return try LiveStackNativeSession.open(
-                referencePath: referencePath,
-                optionsJSON: optionsJSONString,
-                calibration: openCalibration)
+                referencePath: referencePath, optionsJSON: optionsJSONString,
+                calibration: openCalibration, referenceImagePath: referenceImagePath,
+                candidatePaths: candidates.map(\.path))
         }
-        let counts = try await opened.counts()
-        if let expected, !StackFolderMonitor.isUnchanged(expected) {
+        let selectedProbe: CalibrationFrameProbe
+        do {
+            guard checkedCandidates.allSatisfy(StackFolderMonitor.isUnchanged) else {
+                throw LiveStackRunError.invalidOperation("A channel reference changed while opening.")
+            }
+            try Task.checkCancellation()
+            let chosenPath = opened.channelReferencePath ?? probe.path
+            selectedProbe = chosenPath == probe.path ? probe
+                : try await runBlocking { try CalibrationService.probe(path: chosenPath) }
+            if referenceImagePath != nil {
+                let pushed = try await opened.push(path: chosenPath)
+                guard pushed.disposition?.accepted == true else {
+                    throw LiveStackRunError.invalidOperation(pushed.nativeError
+                        ?? pushed.disposition?.reason ?? "The channel reference could not be integrated.")
+                }
+            }
+            guard checkedCandidates.allSatisfy(StackFolderMonitor.isUnchanged) else {
+                throw LiveStackRunError.invalidOperation("A channel reference changed while integrating.")
+            }
+            try Task.checkCancellation()
+            let counts = try await opened.counts()
+            guard counts.acceptedFrames == 1, counts.rejectedFrames == 0 else {
+                throw LiveStackRunError.invalidOperation("The native live stack did not retain exactly one channel light.")
+            }
+        } catch {
             await opened.close()
-            throw LiveStackRunError.invalidOperation("The selected reference changed while opening.")
+            throw error
         }
-        if Task.isCancelled {
-            await opened.close()
-            throw CancellationError()
-        }
-        guard counts.acceptedFrames == 1 else {
-            await opened.close()
-            throw LiveStackRunError.invalidOperation(
-                "The native live stack did not retain exactly one reference frame.")
+        let probe = selectedProbe
+        if let selection = opened.referenceSelection, !selection.skipped.isEmpty {
+            addAttention(selection.summary)
         }
         session = opened
         acceptedFrames = 1
@@ -1320,7 +1368,8 @@ actor LiveStackCoordinator {
             calibrationHistory: calibrationHistory,
             exportedPaths: exportedPaths,
             frames: frames,
-            snrSamples: snrSamples)
+            snrSamples: snrSamples,
+            referenceImagePath: activeReferenceImagePath)
     }
 
     /// The forced-checkpoint pattern every resumable-state mutation relies
@@ -1429,6 +1478,10 @@ actor LiveStackCoordinator {
 
     private func ensureSafeOutputPath(_ path: String) throws {
         let normalized = LiveStackPath.normalize(path)
+        if let image = activeReferenceImagePath {
+            try StackInputProtection.validate(output: URL(fileURLWithPath: path),
+                sources: [URL(fileURLWithPath: image)])
+        }
         for frame in frames where LiveStackPath.equals(frame.path, normalized) {
             throw LiveStackRunError.unsafeOutputPath(
                 "Choose an output file that is not one of the stacked frames.")
