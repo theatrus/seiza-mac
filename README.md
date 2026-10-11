@@ -14,7 +14,18 @@ stellar-distance lookup sends sky coordinates to astronomical catalogues.
 [Seiza for Windows](https://github.com/theatrus/seiza-win) ·
 [FITS and XISF for Photoshop](https://github.com/theatrus/xisf-photoshop)
 
-## Fly through your astrophoto
+## Features
+
+- **[Parallax videos and tours](#parallax-videos-and-tours)** — Turn an astrophoto into a fly-in or editable camera tour, then export H.264 or HEVC video.
+- **[Image viewing and folder review](#image-viewing-and-folder-review)** — Open FITS, XISF, and raster images; browse a whole night with cached thumbnails and fast previews.
+- **[Stretch and image processing](#stretch-and-image-processing)** — Build live stretch recipes, correct backgrounds, and apply light deconvolution.
+- **[Directory and live stacking](#directory-and-live-stacking)** — Align and combine selected frames or watch a capture folder, with calibration, rejection, and resumable sessions.
+- **[Plate solving and sky overlays](#plate-solving-and-sky-overlays)** — Solve locally, identify stars and deep-sky objects, and export WCS solutions.
+- **[Star and tilt measurement](#star-and-tilt-measurement)** — Measure stellar quality, sensor tilt, and field curvature directly from a linear image.
+- **[Catalogs and distance data](#catalogs-and-distance-data)** — Download and verify solver catalogs and offline parallax distances from Settings.
+- **[Image export and Finder integration](#image-export-and-finder-integration)** — Save full-size images with overlays and preview FITS/XISF files in Finder.
+
+## Parallax videos and tours
 
 Turn a finished image into a **parallax video**: nearby stars move past distant
 ones as the camera travels toward a nebula or across the field. Seiza combines
@@ -44,131 +55,8 @@ Scrub the preview while you edit; camera changes reuse the prepared scene.
 Export a silent MP4 in **H.264 or HEVC** with the Mac's native video encoder.
 Choose 720p through 4K presets, portrait or landscape, or custom dimensions.
 Save and load tour itineraries as JSON to revisit the route later.
-[Make your first tour](#make-a-parallax-tour).
 
-## See what is in the frame
-
-Press Solve when you want sky context. Seiza draws catalog-colored object
-outlines, names, stars, and a WCS grid over the image, while the inspector keeps
-the input and display histograms and solve quality visible.
-
-![Seiza displaying a solved narrowband FITS image with catalog outlines, named stars, a WCS grid, paired histograms, and solution quality](docs/images/seiza-solved-overlays.png)
-
-## Review a whole night without leaving the viewer
-
-Open a directory, move through hundreds of mixed FITS, XISF, and raster frames with
-the arrow keys, and use cached thumbnails to keep the sequence moving. Stretch
-controls stay live over the image and can detach into a persistent panel.
-
-![Seiza browsing a 299-frame FITS directory while editing a live stretch](docs/images/seiza-directory-stretch.png)
-
-[Read the practical guide to browsing, stretching, solving, overlays, and export.](docs/USING-SEIZA.md)
-
-Seiza is a real Mac app built with SwiftUI, AppKit, and the
-[Seiza](https://github.com/theatrus/seiza) Rust core. There is no Tauri,
-Electron, web view, or local server.
-
-## Features
-
-| Feature | What Seiza does |
-| --- | --- |
-| FITS, XISF, and raster viewing | Opens FITS, XISF, JPEG, PNG, and TIFF files in native Mac windows. Drop a new file onto any viewer to replace its image. |
-| Fast folder review | Browses mixed-format local or network folders without blocking the app, with arrow keys, a thumbnail drawer, a local cache, and nearby-image preloading. |
-| Directory stacking | Combines selected FITS or XISF frames into 32-bit floating-point FITS outputs, with optional filename-filter grouping. Choose a reference or let Seiza score the candidates. Set normalization, rejection, registration, frame weighting, interpolation, Bayer processing, and calibration. Use existing masters or build and cache matched masters from raw calibration frames. Track progress and SNR, cancel, and open the saved results. Three-pass transient removal rejects trails left by the live pass. |
-| Stacking controls | Similarity, affine, or quadratic registration; global, local, or local-background normalization; equal or bounded inverse-noise-variance weights; bilinear or Lanczos-3 interpolation; VNG, MHC, or bilinear demosaicing; Bayer drizzle; and optional hot/dead pixel suppression. Directory and live stacking share the controls. New modes are opt-in; core defaults stay unchanged. |
-| Live folder stacking | Watches a capture folder while an imaging session runs. Seiza waits until each FITS or XISF file stops changing, checks that it is a raw, compatible light frame, and registers it into a filter-locked stack. The live window shows a bounded autostretched preview, accepted and rejected counts, calibration epochs, checkpoint health, and an SNR depth chart. Save a non-destructive FITS snapshot at any time or finish the accumulator into the final 32-bit floating-point stack, which by default makes the same transient-removing pass over the frames. Sessions checkpoint the exact native state: pause, close, or crash, then reopen the window and resume the same accumulator, with the previous complete generation as a fallback after an interrupted write. |
-| Astronomy rendering | Displays mono, planar RGB, and Bayer/OSC data through the full-precision Seiza core. Filtered reductions limit noise aliasing in the viewer and previews, while full-resolution images keep crisp source pixels at 1:1 and higher zoom. |
-| Live stretch stacks | Adds, removes, reorders, and edits automatic or manual stages. Pick GHS symmetry points from the image, choose linked, per-channel, or luminance-preserving color, copy settings between images, and undo or redo each change. |
-| Responsive previews | Renders a quick zoom-aware preview off the main thread, cancels stale work, then replaces it with a source-resolution render. |
-| Background correction | Fits automatic, polynomial, or radial-basis gradient models to linear mono or color data. Choose additive subtraction or multiplicative illumination correction, tune the amount, and inspect each change through live preview. |
-| Light deconvolution | Applies optional damped Richardson-Lucy restoration with controls for stellar FWHM, strength, noise, and ringing. |
-| Image inspection | Fits, zooms, and pans around the pointer; shows source and display histograms; and lets you search or copy image headers. |
-| Local plate solving | Solves an image when requested by Solve or a video operation. It sends no image or catalog data off the Mac. |
-| Star and tilt measurement | Measures stars in the linear source image without a solve or catalog: HFR, FWHM, SNR, background, and PSF eccentricity per star, with a 3-by-3 sensor grid, corner tilt and field-curvature verdicts, and a triangle sector analysis. Overlays show measured stars, the tilt grid, and off-by-default parallelogram and triangle tilt diagrams in the viewport and composited exports. Verdicts are withheld until every required region holds at least three stars. |
-| Sky overlays | Toggles named and field stars, each deep-sky catalog, OpenNGC outlines, transients, comets, asteroids, detections, the coordinate grid, and field center. |
-| WCS export | Writes a solved image's linear or SIP solution as a standard header-only FITS `.wcs` sidecar. |
-| Catalog setup | Downloads, checks, installs, and repairs solver catalogs in Settings with clear progress and cache reuse. |
-| Image export and copy | Exports full-size PNG, JPEG, or TIFF files with optional overlays. PNG and TIFF support 16 bits per channel. Full-size clipboard copy keeps visible overlays. |
-| Parallax video | Creates fly-ins and editable multi-stop tours from aligned starless/stars layers, with dolly, pan, zoom, roll, held spins, push, titles and looping. Preview changes without rebuilding the scene, then export H.264 or HEVC MP4 using the Mac's native encoder. |
-| Stellar distances | Downloads offline star and object distances from Settings or the video workspace, with verification and progress. Optional online lookup reports its current stage and elapsed time. |
-| Finder previews | Shows stretched FITS and XISF thumbnails in Finder. Space-bar Quick Look keeps the full image centered and fitted as the preview changes size, without opening Seiza. |
-| Finder file support | Registers `.fits`, `.fit`, `.fts`, and `.xisf` files with a Seiza document icon. |
-| Signed in-app updates | Checks for releases on demand or on a user-controlled schedule, then verifies and installs them with Sparkle. |
-
-## Download
-
-[**Download Seiza for Mac 0.8.0**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.0-universal.dmg), open it, and drag Seiza to Applications.
-
-Or install with [Homebrew](https://brew.sh) from the
-[theatrus/homebrew-seiza tap](https://github.com/theatrus/homebrew-seiza):
-
-```sh
-brew install --cask theatrus/seiza/seiza-mac
-```
-
-Seiza requires macOS 15 or newer. The same download runs natively on Apple
-silicon and Intel Macs. Release builds are signed with Developer ID and
-notarized by Apple.
-
-## Open FITS and XISF in Photoshop
-
-The separate [FITS and XISF Photoshop plugins](https://github.com/theatrus/xisf-photoshop)
-let you open and save astronomy images directly in Photoshop using Seiza's codecs.
-Import as Float32 or rescaled 16-bit integer, optionally debayer Bayer mosaics to
-RGB, and save at the document's 16- or 32-bit depth by default.
-
-Download the **universal macOS plugin DMG** from the
-[latest release](https://github.com/theatrus/xisf-photoshop/releases/latest).
-Close Photoshop, open the DMG, and drag both `.plugin` bundles onto the
-**Photoshop Plug-ins** shortcut. Approve any administrator prompt, eject the
-DMG, and restart Photoshop. The shortcut targets Adobe's shared folder at
-`/Library/Application Support/Adobe/Plug-Ins/CC`. Remove older copies from
-Photoshop application or custom folders when switching to this location.
-If the shared folder is missing, see the
-[installation guide](https://github.com/theatrus/xisf-photoshop#macos-installation-dmg).
-A ZIP remains available as an alternative. The DMG and bundles support Apple
-silicon and Intel and are Developer ID signed, notarized, and stapled.
-Configure import defaults under
-**Photoshop → About Plug-In → FITS/XISF**.
-
-Starting with plugin 0.5.0, same-format saves retain source headers and metadata;
-switching formats copies compatible FITS keywords on a best-effort basis.
-Keep your original FITS/XISF files: 16-bit import rescales the image and loses
-absolute scale and precision. Re-solve astrometry after geometric edits, and use
-PSD/PSB to retain Photoshop layers. See the
-[metadata retention limits](https://github.com/theatrus/xisf-photoshop#metadata-retention).
-
-## Build
-
-Requirements: macOS 15 or newer, Xcode 26, Rust 1.89 or newer, and the Rust
-target matching the Mac being built.
-
-```sh
-cargo test --workspace
-xcodebuild \
-  -project Seiza.xcodeproj \
-  -scheme Seiza \
-  -configuration Debug \
-  -derivedDataPath DerivedData \
-  CODE_SIGNING_ALLOWED=NO \
-  build
-```
-
-The unsigned development app is written to:
-
-```text
-DerivedData/Build/Products/Debug/Seiza.app
-```
-
-Open `Seiza.xcodeproj` to run and sign it with a local development team.
-
-The app uses published `seiza-cabi` 0.25.1, `seiza` 0.25.1,
-`seiza-parallax` 0.2.1 and `seiza-download` 0.8.0. The renderer includes the
-upstream loop-motion and bright-star halo fixes without a local patch. Library
-and bridge header must be updated together. About reports the linked release
-version and source commit.
-
-## Make a parallax tour
+### Make a parallax tour
 
 1. **Open your finished image** and choose **File → Parallax Video…** or the
    film toolbar button. In **Source**, import matching, stretched starless and
@@ -194,48 +82,111 @@ images, overall zoom, scene settings, labels, or export preferences. Full
 video-project recovery remains planned. See the
 [implementation scope and remaining work](docs/PARALLAX-VIDEO.md).
 
-## App icons
+## Image viewing and folder review
 
-The app and astronomy document icons are generated from the checked-in colorful
-Seiza website mark. Regenerate them on macOS with:
+Open a FITS, XISF, JPEG, PNG, or TIFF image, or a directory of mixed formats.
+Drop a new file onto a viewer to replace its image. Move through hundreds of
+frames with the arrow keys and thumbnail drawer; local caching and nearby-image
+preloading keep review responsive, including on network folders.
 
-```sh
-swift scripts/generate-app-icons.swift
-swift scripts/generate-document-icon.swift
-```
+Seiza renders mono, planar RGB, and Bayer/OSC data through the full-precision
+core. A quick, zoom-aware preview appears first, followed by a source-resolution
+render. Filtered reductions limit aliasing while source pixels stay crisp at
+1:1 and higher zoom. Fit, zoom, and pan around the pointer, inspect the input
+and display histograms, and search or copy image headers.
 
-## Tests and continuous integration
+![Seiza browsing a 299-frame FITS directory while editing a live stretch](docs/images/seiza-directory-stretch.png)
 
-[![CI](https://github.com/theatrus/seiza-mac/actions/workflows/ci.yml/badge.svg)](https://github.com/theatrus/seiza-mac/actions/workflows/ci.yml)
+[Read the practical guide to browsing and inspecting images.](docs/USING-SEIZA.md#open-one-image-or-a-directory)
 
-The repository exercises the Rust rendering/C ABI with unit tests and the
-native application with XCTest. Every pull request checks Rust formatting and
-Clippy warnings, runs both test suites, validates all app and extension property
-lists, builds a universal Release application, and verifies an unsigned
-development DMG. Pull-request jobs have read-only repository access and never
-receive signing secrets.
+## Stretch and image processing
 
-A push to the official `main` branch runs the same unsigned checks. Only final
-release tags enter the protected signing environment and produce signed,
-notarized downloads through GitHub Releases.
+Add, remove, reorder, and edit automatic or manual stretch stages while viewing
+the result. Pick GHS symmetry points from the image, choose linked,
+per-channel, or luminance-preserving color, copy adjustments between images,
+and undo or redo each change. Stretch controls can detach into a persistent
+panel while you browse a directory.
 
-```sh
-cargo test --workspace --locked
-xcodebuild test \
-  -project Seiza.xcodeproj \
-  -scheme Seiza \
-  -destination 'platform=macOS' \
-  -derivedDataPath DerivedData \
-  CODE_SIGNING_ALLOWED=NO
-```
+Correct backgrounds with automatic, polynomial, or radial-basis gradient models
+on linear mono or color data. Choose additive subtraction or multiplicative
+illumination correction and inspect changes through the live preview. Optional
+damped Richardson–Lucy deconvolution provides controls for stellar FWHM,
+strength, noise, and ringing.
 
-Tags matching `vMAJOR.MINOR.PATCH` enter the protected `signing` environment,
-Developer ID sign and notarize the app and DMG, sign the update ZIP, and
-publish the appcast, universal DMG, and zipped app to GitHub Releases. See
-[RELEASE.md](RELEASE.md) for the complete release runbook and
-[docs/RELEASING.md](docs/RELEASING.md) for credential and environment setup.
+[Learn how to build a processing recipe.](docs/USING-SEIZA.md#build-an-astronomy-stretch)
 
-## Catalogs and solving
+## Directory and live stacking
+
+### Stack selected frames
+
+Combine selected FITS or XISF lights into 32-bit floating-point FITS outputs,
+with optional grouping by filename filter. Choose a reference for each group
+or let Seiza score the candidates. Calibrate with existing masters or build and
+cache matched masters from raw calibration frames. Track progress and SNR,
+cancel a run, and open the saved results.
+
+### Stack as exposures arrive
+
+Watch a capture folder during an imaging session. Seiza waits until each FITS
+or XISF file stops changing, checks that it is a raw, compatible light, and
+registers it into a stack locked to that filter. The live window shows an
+autostretched preview, accepted and rejected counts, calibration epochs,
+checkpoint health, and an SNR depth chart.
+
+Save a non-destructive FITS snapshot at any time or finish the accumulator into
+a final 32-bit floating-point stack. Sessions checkpoint the exact native state:
+pause, close, or recover after a crash and resume the same accumulator. A
+previous complete generation remains available after an interrupted write.
+
+### Tune alignment and integration
+
+Directory and live stacking share controls for:
+
+- Similarity, affine, or quadratic registration, with error, drift, and overlap limits.
+- Global, local, or local-background normalization, or no normalization.
+- Delta-sigma sample rejection, or no rejection, and three-pass transient removal for trails left by the live pass.
+- Equal or bounded inverse-noise-variance frame weights.
+- Bilinear or Lanczos-3 interpolation.
+- VNG, MHC, or bilinear demosaicing; Bayer drizzle; and optional hot/dead pixel suppression.
+
+Advanced modes are opt-in; core defaults stay unchanged. Transient removal runs
+by default when finishing a stack.
+
+[Stack a directory](docs/USING-SEIZA.md#stack-a-directory) or
+[set up live folder stacking](docs/USING-SEIZA.md#stack-a-folder-live).
+
+## Plate solving and sky overlays
+
+Press Solve when you want sky context. Seiza draws catalog-colored object
+outlines, names, stars, and a WCS grid over the image, while the inspector keeps
+the input and display histograms and solve quality visible.
+
+![Seiza displaying a solved narrowband FITS image with catalog outlines, named stars, a WCS grid, paired histograms, and solution quality](docs/images/seiza-solved-overlays.png)
+
+Plate solving runs locally when you press **Solve** or request a video operation
+that needs sky coordinates. It sends no image or catalog data off the Mac.
+Choose overlays for named and field stars, deep-sky catalogs, OpenNGC outlines,
+transients, comets, asteroids, detections, the coordinate grid, and field center.
+Export a solved image's linear or SIP solution as a standard header-only FITS
+`.wcs` sidecar.
+
+[Explore the solving and overlay controls.](docs/USING-SEIZA.md#solve-only-when-you-ask)
+
+## Star and tilt measurement
+
+Measure stars directly from a linear image without a solve or catalog. Seiza
+reports HFR, FWHM, SNR, background, and PSF eccentricity per star, with a 3-by-3
+sensor grid, corner tilt and field-curvature verdicts, and a triangle sector
+analysis. Verdicts are withheld until every required region contains at least
+three stars.
+
+Show measured stars and the tilt grid in the viewport or composited exports.
+Optional parallelogram and triangle tilt diagrams start off. These measurements
+help compare captures before deciding which frames to stack.
+
+[Read the star and sensor-tilt guide.](docs/USING-SEIZA.md#measure-stars-and-sensor-tilt)
+
+## Catalogs and distance data
 
 Previewing images does not require catalog data. Solving starts when you press
 Solve, or when preparing a video or generating a tour without sky coordinates.
@@ -271,23 +222,154 @@ If you created a catalog directory on the command line, choose that directory
 in Seiza's Settings. The sandbox permission is retained as a security-scoped
 bookmark. The main object catalog supplies named-star and deep-sky overlays,
 `transients.bin` supplies dated transient overlays, and `minor-bodies.bin`
-supplies comet and asteroid positions at the image acquisition time. Solving and catalogue loading begin only when requested by Solve or a video operation. If the required star catalog or blind
-index is missing, Solve explains the problem and links back to Catalog Settings.
-Satellite overlays are intentionally deferred.
+supplies comet and asteroid positions at the image acquisition time. Solving and
+catalogue loading begin only when requested by Solve or a video operation. If
+the required star catalog or blind index is missing, Solve explains the problem
+and links back to Catalog Settings.
+Satellite overlays are not yet available.
 
 For parallax video, Settings also offers **Offline parallax**. The same
 download is available in the video's Source inspector and installs stellar
 distances, object distances and the object catalogue. Solving catalogues are a
 separate package. Online distance lookup is optional and off by default.
 
-## Finder integration
+## Image export and Finder integration
 
-Seiza registers FITS and XISF files and two Quick Look extensions with macOS.
-Finder shows stretched image thumbnails in icon, list, column, and Gallery
-views. Select a `.fits`, `.fit`, `.fts`, or `.xisf` file and press Space for a
-larger preview without opening Seiza. Finder and Quick Look preserve the image
-aspect ratio; Quick Look redraws the whole frame to fit whenever its window
-changes size.
+Export full-size PNG, JPEG, or TIFF files, with optional sky or measurement
+overlays. PNG and TIFF support 16 bits per channel. Full-size clipboard copy
+also keeps visible overlays.
+
+Seiza registers `.fits`, `.fit`, `.fts`, and `.xisf` files with a document icon
+and two Quick Look extensions. Finder shows stretched thumbnails in icon,
+list, column, and Gallery views. Select a file and press Space for a larger
+preview without opening Seiza. Quick Look preserves the image's aspect ratio
+and refits the whole frame as its window changes size.
+
+[Export images](docs/USING-SEIZA.md#export-the-result) or
+[use Finder Quick Look](docs/USING-SEIZA.md#finder-quick-look).
+
+## Download
+
+[**Download Seiza for Mac 0.8.0**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.0-universal.dmg), open it, and drag Seiza to Applications.
+
+Or install with [Homebrew](https://brew.sh) from the
+[theatrus/homebrew-seiza tap](https://github.com/theatrus/homebrew-seiza):
+
+```sh
+brew install --cask theatrus/seiza/seiza-mac
+```
+
+Seiza requires macOS 15 or newer. The same download runs natively on Apple
+silicon and Intel Macs. Release builds are signed with Developer ID and
+notarized by Apple.
+
+Signed in-app updates use Sparkle to verify and install releases. Check on
+demand or enable a schedule you control.
+
+## Open FITS and XISF in Photoshop
+
+The separate [FITS and XISF Photoshop plugins](https://github.com/theatrus/xisf-photoshop)
+let you open and save astronomy images directly in Photoshop using Seiza's codecs.
+Import as Float32 or rescaled 16-bit integer, optionally debayer Bayer mosaics to
+RGB, and save at the document's 16- or 32-bit depth by default.
+
+Download the **universal macOS plugin DMG** from the
+[latest release](https://github.com/theatrus/xisf-photoshop/releases/latest).
+Close Photoshop, open the DMG, and drag both `.plugin` bundles onto the
+**Photoshop Plug-ins** shortcut. Approve any administrator prompt, eject the
+DMG, and restart Photoshop. The shortcut targets Adobe's shared folder at
+`/Library/Application Support/Adobe/Plug-Ins/CC`. Remove older copies from
+Photoshop application or custom folders when switching to this location.
+If the shared folder is missing, see the
+[installation guide](https://github.com/theatrus/xisf-photoshop#macos-installation-dmg).
+A ZIP remains available as an alternative. The DMG and bundles support Apple
+silicon and Intel and are Developer ID signed, notarized, and stapled.
+Configure import defaults under
+**Photoshop → About Plug-In → FITS/XISF**.
+
+Starting with plugin 0.5.0, same-format saves retain source headers and metadata;
+switching formats copies compatible FITS keywords on a best-effort basis.
+Keep your original FITS/XISF files: 16-bit import rescales the image and loses
+absolute scale and precision. Re-solve astrometry after geometric edits, and use
+PSD/PSB to retain Photoshop layers. See the
+[metadata retention limits](https://github.com/theatrus/xisf-photoshop#metadata-retention).
+
+## Development
+
+Seiza is built with SwiftUI, AppKit, and the
+[Seiza](https://github.com/theatrus/seiza) Rust core. Image processing and video
+encoding run natively on the Mac.
+
+### Build
+
+Requirements: macOS 15 or newer, Xcode 26, Rust 1.89 or newer, and the Rust
+target matching the Mac being built.
+
+```sh
+cargo test --workspace
+xcodebuild \
+  -project Seiza.xcodeproj \
+  -scheme Seiza \
+  -configuration Debug \
+  -derivedDataPath DerivedData \
+  CODE_SIGNING_ALLOWED=NO \
+  build
+```
+
+The unsigned development app is written to:
+
+```text
+DerivedData/Build/Products/Debug/Seiza.app
+```
+
+Open `Seiza.xcodeproj` to run and sign it with a local development team.
+
+The app uses published `seiza-cabi` 0.25.1, `seiza` 0.25.1,
+`seiza-parallax` 0.2.1 and `seiza-download` 0.8.0. The renderer includes the
+upstream loop-motion and bright-star halo fixes without a local patch. Library
+and bridge header must be updated together. About reports the linked release
+version and source commit.
+
+### App icons
+
+The app and astronomy document icons are generated from the checked-in colorful
+Seiza website mark. Regenerate them on macOS with:
+
+```sh
+swift scripts/generate-app-icons.swift
+swift scripts/generate-document-icon.swift
+```
+
+### Tests and continuous integration
+
+[![CI](https://github.com/theatrus/seiza-mac/actions/workflows/ci.yml/badge.svg)](https://github.com/theatrus/seiza-mac/actions/workflows/ci.yml)
+
+The repository exercises the Rust rendering/C ABI with unit tests and the
+native application with XCTest. Every pull request checks Rust formatting and
+Clippy warnings, runs both test suites, validates all app and extension property
+lists, builds a universal Release application, and verifies an unsigned
+development DMG. Pull-request jobs have read-only repository access and never
+receive signing secrets.
+
+A push to the official `main` branch runs the same unsigned checks. Only final
+release tags enter the protected signing environment and produce signed,
+notarized downloads through GitHub Releases.
+
+```sh
+cargo test --workspace --locked
+xcodebuild test \
+  -project Seiza.xcodeproj \
+  -scheme Seiza \
+  -destination 'platform=macOS' \
+  -derivedDataPath DerivedData \
+  CODE_SIGNING_ALLOWED=NO
+```
+
+Tags matching `vMAJOR.MINOR.PATCH` enter the protected `signing` environment,
+Developer ID sign and notarize the app and DMG, sign the update ZIP, and
+publish the appcast, universal DMG, and zipped app to GitHub Releases. See
+[RELEASE.md](RELEASE.md) for the complete release runbook and
+[docs/RELEASING.md](docs/RELEASING.md) for credential and environment setup.
 
 See the [usage guide](docs/USING-SEIZA.md),
 [architecture](docs/ARCHITECTURE.md), and [roadmap](docs/ROADMAP.md).
