@@ -16,25 +16,52 @@ fn main() {
         package_entry(&lock, "seiza-cabi").expect("Cargo.lock must contain the seiza-cabi package");
     let version = package_field(package, "version")
         .expect("the locked seiza-cabi package must have a version");
-    let _source = package_field(package, "source")
-        .filter(|source| *source == "registry+https://github.com/rust-lang/crates.io-index")
-        .expect("the locked seiza-cabi package must come from crates.io");
-    let checksum = package_field(package, "checksum")
-        .filter(|checksum| {
-            checksum.len() == 64 && checksum.bytes().all(|byte| byte.is_ascii_hexdigit())
-        })
-        .expect("the locked seiza-cabi package must have a SHA-256 checksum");
-    let vcs_path = cargo_registry_vcs_path("seiza-cabi", version)
-        .expect("the published seiza-cabi package must contain Cargo VCS metadata");
-    println!("cargo:rerun-if-changed={}", vcs_path.display());
-    let vcs = fs::read_to_string(&vcs_path)
-        .unwrap_or_else(|error| panic!("failed to read {}: {error}", vcs_path.display()));
-    let commit = package_vcs_commit(&vcs)
-        .expect("the published seiza-cabi package must contain a 40-character Git commit");
+    let source = package_field(package, "source").expect("seiza-cabi must have a locked source");
+    for name in ["seiza", "seiza-download"] {
+        let dependency =
+            package_entry(&lock, name).expect("Mac catalogue dependencies must be locked");
+        assert_eq!(
+            package_field(dependency, "source"),
+            Some(source),
+            "{name} must use the same upstream source as seiza-cabi"
+        );
+    }
+    let (commit, checksum) =
+        if let Some(git) = source.strip_prefix("git+https://github.com/theatrus/seiza?rev=") {
+            let (revision, commit) = git
+                .split_once('#')
+                .expect("Git source must contain its resolved commit");
+            assert!(
+                revision == commit
+                    && commit.len() == 40
+                    && commit.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                "seiza-cabi must be pinned to an exact Git SHA"
+            );
+            (commit.to_owned(), "")
+        } else {
+            assert_eq!(
+                source,
+                "registry+https://github.com/rust-lang/crates.io-index"
+            );
+            let checksum = package_field(package, "checksum")
+                .filter(|checksum| {
+                    checksum.len() == 64 && checksum.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
+                .expect("the locked seiza-cabi package must have a SHA-256 checksum");
+            let vcs_path = cargo_registry_vcs_path("seiza-cabi", version)
+                .expect("the published seiza-cabi package must contain Cargo VCS metadata");
+            println!("cargo:rerun-if-changed={}", vcs_path.display());
+            let vcs = fs::read_to_string(&vcs_path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", vcs_path.display()));
+            let commit = package_vcs_commit(&vcs)
+                .expect("the published seiza-cabi package must contain a 40-character Git commit");
+            (commit.to_owned(), checksum)
+        };
 
     println!("cargo:rustc-env=SEIZA_CABI_PACKAGE_VERSION={version}");
     println!("cargo:rustc-env=SEIZA_CABI_PACKAGE_CHECKSUM={checksum}");
     println!("cargo:rustc-env=SEIZA_CORE_GIT_COMMIT={commit}");
+    println!("cargo:rustc-env=SEIZA_CABI_PACKAGE_SOURCE={source}");
 }
 
 fn cargo_registry_vcs_path(package_name: &str, version: &str) -> Option<PathBuf> {

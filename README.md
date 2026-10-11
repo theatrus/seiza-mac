@@ -1,13 +1,14 @@
 # Seiza for Mac
 
-**A fast, native FITS and XISF viewer and plate solver for the Mac.**
+**A native Mac workspace for astronomy images, stacking, and parallax video.**
 
 Open one image or a whole night of captures. Step through them instantly. Stretch
 FITS or XISF data, inspect headers, plate-solve a frame, and see the stars and deep-sky
-objects in it. Everything runs locally, and Seiza never solves an image until
-you ask it to.
+objects in it. Turn a finished image into a camera tour with depth, motion, and
+titles. Image processing and video encoding run locally; optional online
+stellar-distance lookup sends sky coordinates to astronomical catalogues.
 
-[**Download Seiza for Mac 0.7.5**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.7.5-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
+[**Download Seiza for Mac 0.8.0**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.0-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
 **Also from Seiza:** [Core, CLI, and libraries](https://github.com/theatrus/seiza) ·
 [Seiza for Windows](https://github.com/theatrus/seiza-win) ·
@@ -50,19 +51,21 @@ Electron, web view, or local server.
 | Background correction | Fits automatic, polynomial, or radial-basis gradient models to linear mono or color data. Choose additive subtraction or multiplicative illumination correction, tune the amount, and inspect each change through live preview. |
 | Light deconvolution | Applies optional damped Richardson-Lucy restoration with controls for stellar FWHM, strength, noise, and ringing. |
 | Image inspection | Fits, zooms, and pans around the pointer; shows source and display histograms; and lets you search or copy image headers. |
-| Local plate solving | Blind-solves an image only when you press Solve. It sends no image or catalog data off the Mac. |
+| Local plate solving | Solves an image when requested by Solve or a video operation. It sends no image or catalog data off the Mac. |
 | Star and tilt measurement | Measures stars in the linear source image without a solve or catalog: HFR, FWHM, SNR, background, and PSF eccentricity per star, with a 3-by-3 sensor grid, corner tilt and field-curvature verdicts, and a triangle sector analysis. Overlays show measured stars, the tilt grid, and off-by-default parallelogram and triangle tilt diagrams in the viewport and composited exports. Verdicts are withheld until every required region holds at least three stars. |
 | Sky overlays | Toggles named and field stars, each deep-sky catalog, OpenNGC outlines, transients, comets, asteroids, detections, the coordinate grid, and field center. |
 | WCS export | Writes a solved image's linear or SIP solution as a standard header-only FITS `.wcs` sidecar. |
 | Catalog setup | Downloads, checks, installs, and repairs solver catalogs in Settings with clear progress and cache reuse. |
 | Image export and copy | Exports full-size PNG, JPEG, or TIFF files with optional overlays. PNG and TIFF support 16 bits per channel. Full-size clipboard copy keeps visible overlays. |
+| Parallax video | Creates fly-ins and editable multi-stop tours from aligned starless/stars layers, with dolly, pan, zoom, roll, held spins, push, titles and looping. Preview changes without rebuilding the scene, then export H.264 or HEVC MP4 using the Mac's native encoder. |
+| Stellar distances | Downloads offline star and object distances from Settings or the video workspace, with verification and progress. Optional online lookup reports its current stage and elapsed time. |
 | Finder previews | Shows stretched FITS and XISF thumbnails in Finder. Space-bar Quick Look keeps the full image centered and fitted as the preview changes size, without opening Seiza. |
 | Finder file support | Registers `.fits`, `.fit`, `.fts`, and `.xisf` files with a Seiza document icon. |
 | Signed in-app updates | Checks for releases on demand or on a user-controlled schedule, then verifies and installs them with Sparkle. |
 
 ## Download
 
-[**Download Seiza for Mac 0.7.5**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.7.5-universal.dmg), open it, and drag Seiza to Applications.
+[**Download Seiza for Mac 0.8.0**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.0-universal.dmg), open it, and drag Seiza to Applications.
 
 Or install with [Homebrew](https://brew.sh) from the
 [theatrus/homebrew-seiza tap](https://github.com/theatrus/homebrew-seiza):
@@ -127,6 +130,27 @@ DerivedData/Build/Products/Debug/Seiza.app
 
 Open `Seiza.xcodeproj` to run and sign it with a local development team.
 
+The app uses published `seiza-cabi` 0.25.1, `seiza` 0.25.1,
+`seiza-parallax` 0.2.1 and `seiza-download` 0.8.0. The renderer includes the
+upstream loop-motion and bright-star halo fixes without a local patch. Library
+and bridge header must be updated together. About reports the linked release
+version and source commit.
+
+## Make a parallax tour
+
+To try parallax video, open an image and choose **File → Parallax Video…** (or
+the film toolbar button). Import matching, stretched starless and unscreened
+stars PNG/TIFF layers in Source and confirm alignment, or select your installed,
+licensed StarXTerminator CLI. Camera offers fly-ins and generated tours, with
+editable stops, travel turns, held spins, push, pan, glide, fading titles, looping,
+and timing. Prepare the scene once; camera edits automatically refit the preview.
+Tours can be saved and loaded as JSON itineraries. Source images and the overall
+zoom are not saved in the itinerary. Labels and Output expose annotations, credits, sizing and
+native H.264/HEVC MP4 encoding. Plate solving and generated tours need installed
+catalogues; offline fields without distance data can use a manual background
+distance. Full video-project recovery remains planned. See the
+[implementation scope and remaining work](docs/PARALLAX-VIDEO.md).
+
 The app and astronomy document icons are generated from the checked-in colorful
 Seiza website mark. Regenerate them on macOS with:
 
@@ -169,8 +193,9 @@ publish the appcast, universal DMG, and zipped app to GitHub Releases. See
 
 ## Catalogs and solving
 
-Previewing images does not require catalog data, and Seiza never starts a solve
-until you press Solve. Blind solving any supported FITS, XISF, or raster image requires
+Previewing images does not require catalog data. Solving starts when you press
+Solve, or when preparing a video or generating a tour without sky coordinates.
+Blind solving any supported FITS, XISF, or raster image requires
 a complete Seiza catalog directory containing a star catalog and blind index.
 
 Open **Seiza > Settings** (`Command-,`), leave **Standard blind solving**
@@ -202,11 +227,14 @@ If you created a catalog directory on the command line, choose that directory
 in Seiza's Settings. The sandbox permission is retained as a security-scoped
 bookmark. The main object catalog supplies named-star and deep-sky overlays,
 `transients.bin` supplies dated transient overlays, and `minor-bodies.bin`
-supplies comet and asteroid positions at the image acquisition time. Solving and
-catalog loading
-only begin when the user presses Solve. If the required star catalog or blind
+supplies comet and asteroid positions at the image acquisition time. Solving and catalogue loading begin only when requested by Solve or a video operation. If the required star catalog or blind
 index is missing, Solve explains the problem and links back to Catalog Settings.
 Satellite overlays are intentionally deferred.
+
+For parallax video, Settings also offers **Offline parallax**. The same
+download is available in the video's Source inspector and installs stellar
+distances, object distances and the object catalogue. Solving catalogues are a
+separate package. Online distance lookup is optional and off by default.
 
 ## Finder integration
 

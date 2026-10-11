@@ -850,6 +850,14 @@ private struct ImagePageView: View {
                 .help("Export Image…")
 
                 Button {
+                    ParallaxWindowController.present(model: model)
+                } label: {
+                    Label("Parallax Video", systemImage: "film")
+                }
+                .disabled(model.image == nil || model.isPreviewRendering)
+                .help("Create Parallax Video…")
+
+                Button {
                     changeZoom(by: 1 / Self.zoomStep)
                 } label: {
                     Label("Zoom Out", systemImage: "minus.magnifyingglass")
@@ -975,6 +983,10 @@ private struct ImagePageView: View {
             }
             .onChange(of: exportCoordinator.copyRequestNumber) { _, _ in
                 requestImageCopy()
+            }
+            .onChange(of: exportCoordinator.parallaxRequestNumber) { _, _ in
+                guard model.image != nil, !model.isPreviewRendering else { NSSound.beep(); return }
+                ParallaxWindowController.present(model: model)
             }
             .onChange(of: editCoordinator.undoRequestNumber) { _, _ in
                 performUndo()

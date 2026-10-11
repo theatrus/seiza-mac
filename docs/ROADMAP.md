@@ -48,6 +48,19 @@ catalog setup.
 - Spotlight metadata importer for selected FITS headers
 - Finder Quick Actions for solve and export
 
+## 0.8.0 — parallax video
+
+The [parallax video workspace](PARALLAX-VIDEO.md) integrates imported pairs or
+an optional licensed separator, fly-ins, generated/editable tours, saved tour
+JSON, scene reuse, automatic camera previews, labels, and native H.264/HEVC
+export. Tour stops expose roll, pan, spin, push, zoom, and independent travel/hold
+timing, with global glide. The merged
+[seiza#240](https://github.com/theatrus/seiza/pull/240) is consumed through
+published C ABI 0.25.1 and parallax 0.2.1, including the loop and halo fixes from
+[seiza#242](https://github.com/theatrus/seiza/pull/242). Remaining work includes
+responsive native preparation cancellation, signed sandbox/separator QA,
+source refresh, route overlays, and full draft recovery.
+
 ## Phase 4 — the whole works (long term)
 
 - high-rate sequence review, blink/difference views, and registration

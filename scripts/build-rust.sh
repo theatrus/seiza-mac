@@ -22,6 +22,7 @@ for architecture in $architectures; do
 
   cargo_arguments=(
     build
+    --locked
     --manifest-path "$repository_root/Cargo.toml"
     --package seiza-mac-core
     --target "$rust_target"
