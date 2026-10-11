@@ -197,13 +197,19 @@ final class ParallaxSession: ObservableObject {
         case objects = "Object catalogue"
         case objectDistances = "Object distances"
         case starDistances = "Star distances"
+        case dustMap = "Dust map"
     }
     func chooseInput(_ kind: InputFile) {
         guard !isBusy else { return }
         let panel = NSOpenPanel()
         panel.message = "Choose \(kind.rawValue.lowercased())."
         panel.canChooseDirectories = kind == .objects
+        if kind == .dustMap {
+            panel.message = "Choose a dust map, white where the dust is opaque."
+            panel.allowedContentTypes = [.png, .jpeg, .tiff, .fits, .xisf]
+        }
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        if kind == .dustMap { chooseDustMap(ParallaxScopedURL(url)); return }
         if kind == .separator && !FileManager.default.isExecutableFile(atPath: url.path) {
             error = "Choose an executable rc-astro command."; return
         }
@@ -211,7 +217,113 @@ final class ParallaxSession: ObservableObject {
         invalidate(scene: true)
     }
     func clearInput(_ kind: InputFile) {
+        if kind == .dustMap { clearDustMap(); return }
         selectedInputs[kind] = nil; inputNames[kind] = nil; invalidate(scene: true)
+    }
+
+    // Dust maps. A prepared scene takes a new map without being prepared
+    // again: only its dust changes, and the result becomes the scene that
+    // refits and exports start from, so the map stays with them.
+    var canReloadDustMap: Bool {
+        selectedInputs[.dustMap] != nil && sceneVideo != nil && !isBusy && composition.scene.dust
+    }
+    var canExportDustMap: Bool { (prepared ?? sceneVideo) != nil && !isBusy }
+    var dustDescription: String {
+        guard composition.scene.dust else { return "Dust dimming is off." }
+        guard let summary else {
+            return selectedInputs[.dustMap] != nil ? "The dust map applies when the scene is prepared." :
+                "Dust is counted from the stars when the scene is prepared."
+        }
+        if summary.dustGiven == true {
+            return "Dust from the map: \(summary.starsInFrontOfDust ?? 0) stars seen through opaque dust fly in front of the nebula."
+        }
+        return "Dust counted from the stars."
+    }
+    func chooseDustMap(_ map: ParallaxScopedURL) {
+        guard !closed, !isBusy else { return }
+        guard composition.scene.dust else { error = "Turn on dust dimming to use a dust map."; return }
+        guard sceneVideo != nil else {
+            selectedInputs[.dustMap] = map; inputNames[.dustMap] = map.url.lastPathComponent
+            invalidate(scene: true); return
+        }
+        swapDust(map, message: "Applying the dust map…", select: true)
+    }
+    private func clearDustMap() {
+        guard !closed, !isBusy else { return }
+        // Without a scene, or with the dust off, no prepared scene holds the map.
+        guard sceneVideo != nil, composition.scene.dust else {
+            selectedInputs[.dustMap] = nil; inputNames[.dustMap] = nil; return
+        }
+        swapDust(nil, message: "Returning to the dust counted from the stars…", select: true)
+    }
+    /// Read the chosen map again, after it was edited in another program.
+    func reloadDustMap() {
+        guard canReloadDustMap, let map = selectedInputs[.dustMap] else { return }
+        swapDust(map, message: "Reloading the dust map…", select: false)
+    }
+    /// Swap `map` (nil for the counted dust) onto the prepared scene, and with
+    /// `select` make it the chosen map once it applies.
+    private func swapDust(_ map: ParallaxScopedURL?, message: String, select: Bool) {
+        guard let source = prepared ?? sceneVideo else { return }
+        if let message = composition.validationMessage { error = message; return }
+        // Camera edits clear `prepared` before their refit finishes (or while
+        // automatic preview is off). Refit the new dust to that current draft,
+        // rather than publishing the older camera held by `sceneVideo`.
+        let settings = prepared == nil ? composition.videoSettings(preview: true) : nil
+        let access = sceneResources
+        let (signal, generation) = begin(message)
+        let events = eventHandler(generation)
+        let path = map?.url.path
+        task = Task {
+            do {
+                let video = try await Task.detached(priority: .userInitiated) {
+                    try withExtendedLifetime((map, access)) {
+                        let painted = try ParallaxCore.withDustMap(source, path: path, cancellation: signal, events: events)
+                        if let settings {
+                            return try ParallaxCore.reconfigure(painted, settings: settings, cancellation: signal, events: events)
+                        }
+                        return painted
+                    }
+                }.value
+                try signal.check()
+                guard !closed, generation == revision else { return }
+                sceneVideo = video; prepared = video; summary = video.summary
+                if select { selectedInputs[.dustMap] = map; inputNames[.dustMap] = map?.url.lastPathComponent }
+                status = dustDescription
+                finish(signal, error: nil); requestFrame()
+            } catch { finish(signal, error: error) }
+        }
+    }
+    func exportDustMap() {
+        guard canExportDustMap else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.png, .tiff, .fits, .xisf]
+        panel.nameFieldStringValue = (sourceName as NSString).deletingPathExtension + "-dust.png"
+        panel.title = "Export Dust Map"
+        panel.message = "White where the dust is opaque: 16-bit PNG or TIFF, or 32-bit FITS or XISF. Paint over it and choose it again."
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        exportDustMap(to: destination)
+    }
+    func exportDustMap(to destination: URL) {
+        guard !closed, canExportDustMap, let video = prepared ?? sceneVideo else { return }
+        let access = ParallaxScopedURL(destination)
+        let (signal, generation) = begin("Writing dust map…")
+        task = Task {
+            do {
+                let written = try await Task.detached(priority: .userInitiated) {
+                    try withExtendedLifetime(access) {
+                        try signal.check()
+                        return try video.writeDustMap(to: access.url)
+                    }
+                }.value
+                try signal.check()
+                guard !closed, generation == revision else { return }
+                status = written ? "Dust map written to \(destination.lastPathComponent)." :
+                    "This scene has no dust to export: dust dimming is off, or too few stars show to map it."
+                finish(signal, error: nil)
+                if prepared == nil { scheduleRefit() }
+            } catch { finish(signal, error: error) }
+        }
     }
     func pickDistanceReference() { pickingDestination = false; pickingDistance = true; showsSource = true }
 
@@ -299,7 +411,9 @@ final class ParallaxSession: ObservableObject {
             objectDistances: selectedInputs[.objectDistances]?.url.path,
             starDistances: selectedInputs[.starDistances]?.url.path,
             rcAstroExecutable: selectedInputs[.separator]?.url.path,
-            rcAstroHost: rcAstroHost.isEmpty ? nil : rcAstroHost)
+            rcAstroHost: rcAstroHost.isEmpty ? nil : rcAstroHost,
+            // The core refuses a dust map with the dust off.
+            dustMap: composition.scene.dust ? selectedInputs[.dustMap]?.url.path : nil)
         return ParallaxRequest(inputs: inputs, scene: composition.scene, video: composition.videoSettings(preview: preview))
     }
 

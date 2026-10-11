@@ -403,10 +403,68 @@ final class ParallaxTests: XCTestCase {
                     "overlay", "overlayDensity", "labels", "labelColor", "watermark"] {
             XCTAssertNotNil(object[key], key)
         }
-        for key in ["image", "wcs", "distanceFocus", "distanceParsecs", "smallStars", "online", "catalogDirectory", "autoTour"] {
+        for key in ["image", "wcs", "distanceFocus", "distanceParsecs", "smallStars", "online", "catalogDirectory", "autoTour", "dustMap"] {
             XCTAssertNil(object[key], key)
         }
         XCTAssertEqual(object["watermark"] as? Bool, false)
+    }
+
+    func testDustMapsSwapReadBackAndWriteWithoutPreparingAgain() throws {
+        let (files, request) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        let original = try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in })
+        XCTAssertNotEqual(original.summary.dustGiven, true)
+        // One star is too few to count dust from.
+        XCTAssertNil(try original.dustMap(width: 4, height: 3))
+        XCTAssertNil(try original.dustMap(width: 4, height: 3, counted: true))
+        XCTAssertFalse(try original.writeDustMap(to: files.directory.appendingPathComponent("none.png")))
+        let originalPixels = try XCTUnwrap(original.frame(0).dataProvider?.data as Data?)
+
+        // Scene data remains usable without its source rasters. Swapping and
+        // resetting dust must not rerun preparation or mutate the old handle.
+        try FileManager.default.removeItem(atPath: request.inputs.starless!)
+        try FileManager.default.removeItem(atPath: request.inputs.stars!)
+
+        // Opaque everywhere, at half the image's size.
+        let painted = files.directory.appendingPathComponent("painted.png")
+        let white = Data(repeating: 255, count: 48 * 32 * 4)
+        try ImageFileWriter.write(XCTUnwrap(SeizaCore.makeRGBA8Image(data: white, width: 48, height: 32)), to: painted, format: .png)
+        let opaque = try ParallaxCore.withDustMap(original, path: painted.path, cancellation: ParallaxCancellation(), events: { _ in })
+        XCTAssertEqual(opaque.summary.dustGiven, true)
+        XCTAssertEqual(opaque.summary.detectedStars, original.summary.detectedStars)
+        for value in try XCTUnwrap(opaque.dustMap(width: 4, height: 3)) { XCTAssertEqual(value, 1, accuracy: 1e-4) }
+
+        // Each format offered by the save panel writes a reusable map.
+        for ext in ["png", "tiff", "fits", "xisf"] {
+            let written = files.directory.appendingPathComponent("dust.\(ext)")
+            XCTAssertTrue(try opaque.writeDustMap(to: written))
+            let again = try ParallaxCore.withDustMap(original, path: written.path, cancellation: ParallaxCancellation(), events: { _ in })
+            XCTAssertEqual(again.summary.dustGiven, true)
+            for value in try XCTUnwrap(again.dustMap(width: 8, height: 6)) { XCTAssertEqual(value, 1, accuracy: 1e-4) }
+            XCTAssertEqual(try again.frame(0).width, 66)
+        }
+
+        // Back to the counted dust, of which there is none here.
+        let counted = try ParallaxCore.withDustMap(opaque, path: nil, cancellation: ParallaxCancellation(), events: { _ in })
+        XCTAssertNotEqual(counted.summary.dustGiven, true)
+        XCTAssertNil(try counted.dustMap(width: 4, height: 3))
+        XCTAssertThrowsError(try ParallaxCore.withDustMap(original, path: files.directory.appendingPathComponent("missing.png").path,
+            cancellation: ParallaxCancellation(), events: { _ in }))
+        let cancelled = ParallaxCancellation(); cancelled.cancel()
+        XCTAssertThrowsError(try ParallaxCore.withDustMap(opaque, path: nil, cancellation: cancelled, events: { _ in })) {
+            XCTAssertTrue($0 is CancellationError)
+        }
+        XCTAssertEqual(try original.frame(0).dataProvider?.data as Data?, originalPixels)
+        XCTAssertEqual(try counted.frame(0).dataProvider?.data as Data?, originalPixels)
+    }
+
+    func testDustMapPathIsOmittedUntilChosen() throws {
+        let none = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(ParallaxInputs(image: "/source.png"))) as? [String: Any])
+        XCTAssertNil(none["dustMap"])
+        let chosen = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(
+            ParallaxInputs(image: "/source.png", dustMap: "/dust.xisf"))) as? [String: Any])
+        XCTAssertEqual(chosen["dustMap"] as? String, "/dust.xisf")
+        XCTAssertEqual(try ParallaxCore.json(ParallaxDustMapPath(path: nil)), "{}")
     }
 
     func testReconfigurationSharesSceneWithoutFilesAndPreservesOldFrames() async throws {
@@ -507,6 +565,78 @@ final class ParallaxTests: XCTestCase {
         session.close()
         try await waitUntil { !session.isReconfiguring }
         XCTAssertFalse(session.hasScene); XCTAssertFalse(session.hasPreview)
+        XCTAssertNil(session.error)
+    }
+
+    @MainActor
+    func testSessionDustMapKeepsPendingCameraAndSurvivesRefits() async throws {
+        let (files, request) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        let session = ParallaxSession(sourceURL: URL(fileURLWithPath: request.inputs.image),
+            processing: .default, wcs: request.inputs.wcs)
+        defer { session.close() }
+        try await waitUntil { !session.isBusy }
+        session.importLayer(URL(fileURLWithPath: request.inputs.starless!), starless: true)
+        try await waitUntil { !session.isBusy }
+        session.importLayer(URL(fileURLWithPath: request.inputs.stars!), starless: false)
+        try await waitUntil { !session.isBusy }
+        session.layersAligned = true
+        session.edit { $0.width = 80; $0.height = 60; $0.seconds = 0.5; $0.scene.distanceParsecs = 400 }
+        session.preparePreview()
+        try await waitUntil { !session.isBusy }
+        XCTAssertTrue(session.hasScene, session.error ?? "Preparation failed")
+
+        let painted = files.directory.appendingPathComponent("painted.png")
+        let white = Data(repeating: 255, count: 48 * 32 * 4)
+        try ImageFileWriter.write(XCTUnwrap(SeizaCore.makeRGBA8Image(data: white, width: 48, height: 32)), to: painted, format: .png)
+
+        // Applying a map while a camera edit has no preview must not restore
+        // the camera from the older scene handle.
+        session.automaticPreview = false
+        session.edit { $0.zoom = 1.5 }
+        session.chooseDustMap(ParallaxScopedURL(painted))
+        try await waitUntil { !session.isBusy && !session.isReconfiguring }
+        XCTAssertNil(session.error)
+        XCTAssertEqual(session.summary?.dustGiven, true)
+        XCTAssertEqual(session.summary?.fit.zoom.asked, 1.5)
+        XCTAssertEqual(session.inputNames[.dustMap], "painted.png")
+
+        session.automaticPreview = true
+        session.edit { $0.zoom = 1.7 }
+        var clear = Data(repeating: 0, count: 48 * 32 * 4)
+        for index in stride(from: 3, to: clear.count, by: 4) { clear[index] = 255 }
+        try ImageFileWriter.write(XCTUnwrap(SeizaCore.makeRGBA8Image(data: clear, width: 48, height: 32)), to: painted, format: .png)
+        session.reloadDustMap()
+        try await waitUntil { !session.isBusy && !session.isReconfiguring }
+        XCTAssertEqual(session.summary?.fit.zoom.asked, 1.7)
+        XCTAssertEqual(session.summary?.dustGiven, true)
+
+        let exported = files.directory.appendingPathComponent("session-dust.tiff")
+        session.edit { $0.zoom = 1.8 }
+        session.exportDustMap(to: exported)
+        XCTAssertTrue(session.isBusy, "Export must prevent overlapping writes and retain its destination access")
+        try await waitUntil { !session.isBusy && !session.isReconfiguring }
+        XCTAssertNil(session.error)
+        XCTAssertEqual(session.summary?.fit.zoom.asked, 1.8, "Export must resume a pending preview refit")
+        let original = try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in })
+        let readback = try ParallaxCore.withDustMap(original, path: exported.path, cancellation: ParallaxCancellation(), events: { _ in })
+        for value in try XCTUnwrap(readback.dustMap(width: 8, height: 6)) { XCTAssertEqual(value, 0, accuracy: 1e-4) }
+
+        session.chooseDustMap(ParallaxScopedURL(files.directory.appendingPathComponent("missing.png")))
+        try await waitUntil { !session.isBusy }
+        XCTAssertNotNil(session.error)
+        XCTAssertEqual(session.inputNames[.dustMap], "painted.png", "A failed map swap leaves the current selection intact")
+        XCTAssertEqual(session.summary?.dustGiven, true)
+
+        session.edit { $0.zoom = 1.9 }
+        try await waitUntil { !session.isReconfiguring }
+        XCTAssertEqual(session.summary?.fit.zoom.asked, 1.9)
+        XCTAssertEqual(session.summary?.dustGiven, true, "Camera refits retain the map")
+        session.clearInput(.dustMap)
+        try await waitUntil { !session.isBusy }
+        XCTAssertEqual(session.summary?.fit.zoom.asked, 1.9)
+        XCTAssertNotEqual(session.summary?.dustGiven, true)
+        XCTAssertNil(session.inputNames[.dustMap])
         XCTAssertNil(session.error)
     }
 

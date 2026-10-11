@@ -267,6 +267,14 @@ struct ParallaxWorkspace: View {
             Toggle("Dust dimming", isOn: compositionBinding(\.scene.dust))
             TextField("Dust strength", value: compositionBinding(\.scene.dustOpacity), format: .number)
                 .disabled(!session.composition.scene.dust)
+            // A map painted white where the dust is opaque replaces the counted
+            // dust; stars seen through its opaque places fly in front.
+            inputPicker(.dustMap).disabled(!session.composition.scene.dust)
+            HStack {
+                Button("Reload") { session.reloadDustMap() }.disabled(!session.canReloadDustMap)
+                Button("Export Dust Map…") { session.exportDustMap() }.disabled(!session.canExportDustMap)
+            }
+            Text(session.dustDescription).font(.caption)
         }
         DisclosureGroup("Catalogues and solving") {
             Text(CatalogAccess.displayPath.isEmpty ? "Choose a catalogue directory in Seiza Settings to enable solving and tour generation." : CatalogAccess.displayPath)

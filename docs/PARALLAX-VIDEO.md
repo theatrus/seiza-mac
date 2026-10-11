@@ -40,6 +40,10 @@ independent distance reference; the app also saves optional `tourGlide`, `tourTi
 an itinerary, not a full project: it does not embed images, bookmarks, labels,
 scene overrides, or export preferences.
 
+After the 0.8.0 release, `main` uses published `seiza-cabi` and `seiza` **0.26.0** and
+`seiza-parallax` **0.3.0**, which add [dust maps](#dust-maps); the bridge header
+is the 0.26.0 crate's.
+
 ## Current upstream feature coverage
 
 | Area | Controls / contract |
@@ -47,7 +51,7 @@ scene overrides, or export preferences.
 | Source | Imported stretched, aligned starless and unscreened stars PNG/TIFF, or an optional installed, licensed `rc-astro` executable for StarXTerminator. The integrator name is fixed to `seiza-mac`. |
 | Geometry | Source WCS, automatic solve, and minimum/maximum arcseconds per pixel. Imported layers must match dimensions and have no orientation transform; the user confirms matching stretch/alignment. |
 | Distances | Separate source-point distance reference, manual background and unmatched-star parsecs, Gaia magnitude limit, opt-in online lookup, app-managed distance cache. |
-| Scene | Moving-star limit, remaining stars as background field or dropped, keep galaxies in background, dust and dust opacity. |
+| Scene | Moving-star limit, remaining stars as background field or dropped, keep galaxies in background, dust and dust opacity, and a dust map (PNG, JPEG, TIFF, FITS or XISF) that replaces the counted dust. |
 | Catalogues | Existing app catalogue location; focused offline-distance download from Settings or Source; installed stellar count and magnitude coverage; optional object catalogue, object-distance and star-distance file overrides. |
 | Fly In | Focus, whole-image/focus start, dolly, pan, opening zoom, end lens multiplier, start/end roll, sideways swing and direction, smooth/linear easing, duration. |
 | Tour generation | Automatic or limited target count, default hold seconds, motion amount. All returned stops remain editable. |
@@ -121,6 +125,29 @@ stars, and avoids cutting unmatched halo knots into separate moving stars.
 Existing loop and scene controls cover these fixes; no new request fields were
 added. The native AVFoundation/VideoToolbox encoder remains unchanged.
 
+## Dust maps
+
+Dust dimming normally counts the dust from how few stars show through it. A
+dust map replaces that count with an image painted white where the dust is
+opaque and black where the sky is clear, at any size with the image's shape. In
+**Source → Stars and dust**:
+
+- **Choose Dust map…** applies a PNG, JPEG, TIFF, FITS or XISF map. What lies
+  behind the nebula dims by it, and where it lets through 5% of the light or
+  less (about 96% white) a star seen there flies in front of the nebula.
+- **Export Dust Map…** writes the dust in use, the size of the image, as a
+  16-bit PNG or TIFF or a 32-bit float FITS or XISF, to paint over. An exported
+  counted map can carry small opaque specks in clear sky; paint them out, or the
+  stars under them fly forward.
+- **Reload** reads the chosen map again after it was edited elsewhere, and
+  **Reset** returns to the counted dust.
+
+The section says where the dust came from and how many stars the map brought in
+front. The map, like the other input files, lasts while the window is open; tour
+itineraries do not record it. Dust maps need dust dimming on. Export reports its
+activity and prevents overlapping writes, retaining the destination's security
+scope until the native write finishes.
+
 ## Scene reuse and ownership
 
 `seiza_parallax_reconfigure_json` now implements the requested immutable scene
@@ -138,7 +165,13 @@ handle from the cached scene. These operations avoid repeating image loading,
 separation, star detection, solving, and distance queries.
 
 Changing layers, source geometry/WCS, catalogues, distances, star placement,
-dust, or galaxy placement invalidates the scene. The distance-reference point
+dust, or galaxy placement invalidates the scene. A dust map does not: choosing,
+reloading or resetting one calls `seiza_parallax_with_dust_map_json` on the
+latest prepared handle, which shares the scene's planes and stars and changes
+only the dust. If camera edits are still pending, the new dust is refitted to
+the current draft before publication, including with automatic preview off.
+The result becomes both the refit base and the preview, so later
+refits and exports keep the map. The distance-reference point
 is independent of camera targets, so touring another object does not silently
 change the background depth.
 

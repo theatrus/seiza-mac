@@ -56,6 +56,10 @@ Export a silent MP4 in **H.264 or HEVC** with the Mac's native video encoder.
 Choose 720p through 4K presets, portrait or landscape, or custom dimensions.
 Save and load tour itineraries as JSON to revisit the route later.
 
+In **Source → Stars and dust**, choose a dust map painted white where dust is
+opaque. Export the current map, edit it in an image editor, and reload it without
+preparing the scene again. Reset returns to dust estimated from the stars.
+
 ### Make a parallax tour
 
 1. **Open your finished image** and choose **File → Parallax Video…** or the
@@ -324,11 +328,11 @@ DerivedData/Build/Products/Debug/Seiza.app
 
 Open `Seiza.xcodeproj` to run and sign it with a local development team.
 
-The app uses published `seiza-cabi` 0.25.1, `seiza` 0.25.1,
-`seiza-parallax` 0.2.1 and `seiza-download` 0.8.0. The renderer includes the
-upstream loop-motion and bright-star halo fixes without a local patch. Library
-and bridge header must be updated together. About reports the linked release
-version and source commit.
+The app uses published `seiza-cabi` 0.26.0, `seiza` 0.26.0,
+`seiza-parallax` 0.3.0 and `seiza-download` 0.8.0, with dust-map support and
+image reading and writing through `seiza-image-io`. Library and bridge header
+must be updated together. About reports the linked release version and source
+commit.
 
 ### App icons
 
