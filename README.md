@@ -60,6 +60,11 @@ In **Source → Stars and dust**, choose a dust map painted white where dust is
 opaque. Export the current map, edit it in an image editor, and reload it without
 preparing the scene again. Reset returns to dust estimated from the stars.
 
+Turn on **Source → Depth planes** to move catalogued nebulae at distances of
+their own, and dust clouds in front of the nebula, on planes of their own. Dark
+nebulae move with the dust they lie in. The section lists the planes found, and
+a plane named after a catalogued object takes a distance of your own.
+
 ### Make a parallax tour
 
 1. **Open your finished image** and choose **File → Parallax Video…** or the
@@ -332,8 +337,8 @@ DerivedData/Build/Products/Debug/Seiza.app
 
 Open `Seiza.xcodeproj` to run and sign it with a local development team.
 
-The app uses published `seiza-cabi` 0.27.0, `seiza` 0.27.0,
-`seiza-parallax` 0.4.0, `seiza-stacking` 0.29.0 and `seiza-download` 0.8.0, with dust-map support and
+The app uses published `seiza-cabi` 0.29.0, `seiza` 0.29.0,
+`seiza-parallax` 0.6.0, `seiza-stacking` 0.31.0 and `seiza-download` 0.8.0, with dust maps, depth planes and
 image reading and writing through `seiza-image-io`. Library and bridge header
 must be updated together. About reports the linked release version and source
 commit.

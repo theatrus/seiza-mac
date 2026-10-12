@@ -73,8 +73,31 @@ struct ParallaxSceneSettings: Codable, Equatable {
     var keepGalaxies = false
     var dust = true
     var dustOpacity = 3.0
+    /// Lift catalogued nebulae at distances of their own, and dust clouds in
+    /// front of the nebula, onto depth planes.
+    var autoPlanes = false
+    var distanceOverrides: [ParallaxDistanceOverride] = []
     var minimumScaleArcsecPerPixel = 0.1
     var maximumScaleArcsecPerPixel = 20.0
+
+    func givenDistance(for object: String) -> Double? {
+        distanceOverrides.first { $0.object == object }?.distanceParsecs
+    }
+    /// Give `object` its own distance, replacing one given before.
+    mutating func setDistance(_ parsecs: Double, for object: String) {
+        if let index = distanceOverrides.firstIndex(where: { $0.object == object }) {
+            distanceOverrides[index].distanceParsecs = parsecs
+        } else { distanceOverrides.append(ParallaxDistanceOverride(object: object, distanceParsecs: parsecs)) }
+    }
+    /// Return `object` to the catalogue's distance.
+    mutating func clearDistance(for object: String) { distanceOverrides.removeAll { $0.object == object } }
+}
+
+/// A distance for a catalogued object, by name, in place of the catalogue's.
+/// It moves the depth plane that object places.
+struct ParallaxDistanceOverride: Codable, Equatable {
+    var object: String
+    var distanceParsecs: Double
 }
 
 struct ParallaxLabel: Codable, Equatable, Identifiable {
@@ -191,7 +214,7 @@ struct ParallaxComposition: Equatable {
         else { return "Choose even dimensions between 16 and 3840 pixels and 24, 30 or 60 fps." }
         guard duration.isFinite, duration > 0, duration <= 600 else { return "The video must be longer than zero and at most 10 minutes." }
         let point: ([Double]?) -> Bool = { $0.map { $0.count == 2 && $0.allSatisfy(\.isFinite) } ?? true }
-        for distance in [scene.distanceParsecs, scene.unmatchedDistanceParsecs].compactMap({ $0 }) {
+        for distance in [scene.distanceParsecs, scene.unmatchedDistanceParsecs].compactMap({ $0 }) + scene.distanceOverrides.map(\.distanceParsecs) {
             if !distance.isFinite || distance <= 0 { return "Distances must be positive, finite parsec values." }
         }
         guard point(scene.distanceFocus), scene.gaiaMaxMagnitude.isFinite,
@@ -314,6 +337,21 @@ struct ParallaxSummary: Decodable {
     /// how many stars its opaque places brought in front of the nebula.
     let dustGiven: Bool?
     let starsInFrontOfDust: Int?
+    let planes: [ParallaxPlane]?
+}
+
+/// A depth plane the scene lifted: its distance, how that was found, the
+/// share of the image it covers, and whether it blocks light behind it.
+struct ParallaxPlane: Decodable, Equatable {
+    let name: String
+    let distanceParsecs: Double
+    let basis: String
+    let coverage: Double
+    let absorbs: Bool
+    /// The catalogued object whose distance places the plane, which a
+    /// distance override moves it by; nil for a given mask or a cloud of dust
+    /// the star counts place.
+    let object: String?
 }
 
 struct ParallaxEvent: Decodable {
