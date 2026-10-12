@@ -60,6 +60,11 @@ In **Source → Stars and dust**, choose a dust map painted white where dust is
 opaque. Export the current map, edit it in an image editor, and reload it without
 preparing the scene again. Reset returns to dust estimated from the stars.
 
+Turn on **Source → Depth planes** to move catalogued nebulae at distances of
+their own, and dust clouds in front of the nebula, on planes of their own. Dark
+nebulae move with the dust they lie in. The section lists the planes found, and
+a plane named after a catalogued object takes a distance of your own.
+
 ### Make a parallax tour
 
 1. **Open your finished image** and choose **File → Parallax Video…** or the

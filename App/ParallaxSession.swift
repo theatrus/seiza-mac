@@ -74,6 +74,9 @@ final class ParallaxSession: ObservableObject {
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
     @Published private(set) var summary: ParallaxSummary?
+    /// The depth planes of the last scene prepared. They stay listed after a
+    /// scene edit, so distances can be given for several before preparing.
+    @Published private(set) var planes: [ParallaxPlane]?
     let sourceName: String
     private(set) var width = 0
     private(set) var height = 0
@@ -287,7 +290,7 @@ final class ParallaxSession: ObservableObject {
                 }.value
                 try signal.check()
                 guard !closed, generation == revision else { return }
-                sceneVideo = video; prepared = video; summary = video.summary
+                sceneVideo = video; prepared = video; summary = video.summary; planes = video.summary.planes
                 if select { selectedInputs[.dustMap] = map; inputNames[.dustMap] = map?.url.lastPathComponent }
                 status = dustDescription
                 finish(signal, error: nil); requestFrame()
@@ -325,6 +328,27 @@ final class ParallaxSession: ObservableObject {
             } catch { finish(signal, error: error) }
         }
     }
+    // Depth planes. Their distances are scene settings: a distance given for
+    // a plane's catalogued object needs the scene prepared again.
+    var planesAreCurrent: Bool { sceneVideo != nil }
+    var planesDescription: String? {
+        guard composition.scene.autoPlanes else { return nil }
+        let found = planes?.isEmpty == false
+        if planesAreCurrent { return found ? nil : "No catalogued nebula or dust cloud lies at a distance of its own." }
+        return found ? "From the last preparation. Prepare the scene again to apply changes." :
+            "Depth planes are found when the scene is prepared."
+    }
+    /// The planes to list: none while automatic planes are off.
+    var listedPlanes: [ParallaxPlane] { composition.scene.autoPlanes ? planes ?? [] : [] }
+    /// Distances given for objects that place no listed plane, so they can
+    /// still be removed.
+    var unlistedDistances: [ParallaxDistanceOverride] {
+        let listed = Set(listedPlanes.compactMap(\.object))
+        return composition.scene.distanceOverrides.filter { !listed.contains($0.object) }
+    }
+    func setDistance(_ parsecs: Double, for object: String) { edit { $0.scene.setDistance(parsecs, for: object) } }
+    func clearDistance(for object: String) { edit { $0.scene.clearDistance(for: object) } }
+
     func pickDistanceReference() { pickingDestination = false; pickingDistance = true; showsSource = true }
 
     func chooseLayer(starless isStarless: Bool) {
@@ -523,7 +547,7 @@ final class ParallaxSession: ObservableObject {
                     try signal.check()
                     guard !closed, generation == revision else { return }
                     sceneVideo = video; sceneResources = access
-                    prepared = video; summary = video.summary; wcs = video.summary.wcs
+                    prepared = video; summary = video.summary; wcs = video.summary.wcs; planes = video.summary.planes
                     status = "Preview ready. \(video.summary.withDistance) of \(video.summary.detectedStars) stars have catalog distances."
                     showsSource = false
                     finish(signal, error: nil); requestFrame()
@@ -673,7 +697,7 @@ final class ParallaxSession: ObservableObject {
                     try signal.check()
                     guard !closed else { return }
                     sceneVideo = video; sceneResources = retainedAccess
-                    wcs = video.summary.wcs; summary = video.summary
+                    wcs = video.summary.wcs; summary = video.summary; planes = video.summary.planes
                     status = "Encoding video…"
                     activity.networkPhase = nil
                     activity.receive(ParallaxEvent(kind: "note", message: status, fraction: nil))

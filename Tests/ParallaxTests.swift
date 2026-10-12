@@ -137,7 +137,7 @@ final class ParallaxTests: XCTestCase {
     }
 
     func testPlannerStopsPreserveUnwrappedMotionAndIncomingTiming() throws {
-        let json = #"{"schemaVersion":1,"focus":[100,80],"focusName":"Target","seconds":7,"tour":[{"name":"Whole Image","dolly":0,"zoom":1,"rotateDegrees":20,"pan":0,"travel":99,"hold":1},{"name":"Target","focus":[100,80],"dolly":0.4,"zoom":1.2,"rotateDegrees":380,"pan":0.6,"travel":4,"hold":2}]}"#
+        let json = #"{"schemaVersion":1,"focus":[100,80],"focusName":"Target","seconds":7,"tour":[{"name":"Whole Image","dolly":0,"zoom":1,"rotateDegrees":20,"pan":0,"travel":99,"hold":1},{"name":"Target","focus":[100,80],"dolly":0.4,"zoom":1.2,"rotateDegrees":380,"pan":0.6,"travel":4,"hold":2,"depthParsecs":2790}]}"#
         let plan = try JSONDecoder().decode(ParallaxTourPlan.self, from: Data(json.utf8))
         var composition = ParallaxComposition()
         composition.motion = .tour; composition.stops = plan.tour; composition.scene.distanceFocus = plan.focus
@@ -150,6 +150,8 @@ final class ParallaxTests: XCTestCase {
         XCTAssertEqual(stops[1]["rotateDegrees"] as? Double, 380)
         XCTAssertEqual(stops[1]["pan"] as? Double, 0.6)
         XCTAssertNil(stops[1]["id"])
+        // A planned stop's depth is left to the plane under its focus point.
+        XCTAssertNil(stops[1]["depthParsecs"])
         XCTAssertNil(encoded["autoTour"])
         XCTAssertEqual(encoded["distanceFocus"] as? [Double], [100, 80])
         composition.setTravelTurn(at: 1, clockwise: true)
@@ -403,7 +405,8 @@ final class ParallaxTests: XCTestCase {
                     "overlay", "overlayDensity", "labels", "labelColor", "watermark"] {
             XCTAssertNotNil(object[key], key)
         }
-        for key in ["image", "wcs", "distanceFocus", "distanceParsecs", "smallStars", "online", "catalogDirectory", "autoTour", "dustMap"] {
+        for key in ["image", "wcs", "distanceFocus", "distanceParsecs", "smallStars", "online", "catalogDirectory", "autoTour", "dustMap",
+                    "autoPlanes", "distanceOverrides"] {
             XCTAssertNil(object[key], key)
         }
         XCTAssertEqual(object["watermark"] as? Bool, false)
@@ -456,6 +459,56 @@ final class ParallaxTests: XCTestCase {
         }
         XCTAssertEqual(try original.frame(0).dataProvider?.data as Data?, originalPixels)
         XCTAssertEqual(try counted.frame(0).dataProvider?.data as Data?, originalPixels)
+    }
+
+    func testDepthPlanesTravelInTheRequestAndComeBackFromTheSummary() throws {
+        var composition = ParallaxComposition()
+        composition.scene.autoPlanes = true
+        composition.scene.setDistance(150, for: "vdB 2")
+        composition.scene.setDistance(2790, for: "Sh2-170")
+        // A second distance for the same object replaces the first.
+        composition.scene.setDistance(160, for: "vdB 2")
+        XCTAssertEqual(composition.scene.distanceOverrides, [ParallaxDistanceOverride(object: "vdB 2", distanceParsecs: 160),
+                                                            ParallaxDistanceOverride(object: "Sh2-170", distanceParsecs: 2790)])
+        XCTAssertEqual(composition.scene.givenDistance(for: "vdB 2"), 160)
+        let request = ParallaxRequest(inputs: ParallaxInputs(image: "/source.png"), scene: composition.scene,
+                                      video: composition.videoSettings(preview: false))
+        let encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(ParallaxCore.json(request).utf8)) as? [String: Any])
+        XCTAssertEqual(encoded["autoPlanes"] as? Bool, true)
+        let given = try XCTUnwrap(encoded["distanceOverrides"] as? [[String: Any]])
+        XCTAssertEqual(given.map { $0["object"] as? String }, ["vdB 2", "Sh2-170"])
+        XCTAssertEqual(given.first?["distanceParsecs"] as? Double, 160)
+        composition.scene.clearDistance(for: "vdB 2")
+        XCTAssertNil(composition.scene.givenDistance(for: "vdB 2"))
+        XCTAssertEqual(composition.scene.distanceOverrides.map(\.object), ["Sh2-170"])
+        XCTAssertNil(composition.validationMessage)
+        composition.scene.setDistance(-5, for: "Sh2-170")
+        XCTAssertNotNil(composition.validationMessage)
+
+        // A plane its catalogued object places names it; a given mask or a
+        // cloud the star counts place does not, with the field null or absent.
+        let planes = try JSONDecoder().decode([ParallaxPlane].self, from: Data(#"""
+            [{"name":"vdB 2","distanceParsecs":716.7,"basis":"measured, parallax","coverage":0.002,"absorbs":false,"object":"vdB 2"},
+             {"name":"dust cloud 1","distanceParsecs":300,"basis":"Gaia star counts, 70 stars in front, 270-330 pc","coverage":0.05,"absorbs":true,"object":null},
+             {"name":"knot","distanceParsecs":150,"basis":"given","coverage":0.01,"absorbs":true}]
+            """#.utf8))
+        XCTAssertEqual(planes.map(\.object), ["vdB 2", nil, nil])
+        XCTAssertEqual(planes.map(\.absorbs), [false, true, true])
+        XCTAssertEqual(planes[0].distanceParsecs, 716.7)
+    }
+
+    func testAutomaticPlanesPrepareWithoutAnObjectCatalogue() throws {
+        let (files, original) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        var request = original
+        request.inputs.objects = files.directory.appendingPathComponent("missing-objects.bin").path
+        request.scene.autoPlanes = true
+        let video = try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in })
+        XCTAssertEqual(video.summary.planes, [])
+        XCTAssertEqual(try video.frame(0).width, 66)
+        // A distance by name needs the catalogue to find the object.
+        request.scene.distanceOverrides = [ParallaxDistanceOverride(object: "NGC 7023", distanceParsecs: 150)]
+        XCTAssertThrowsError(try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in }))
     }
 
     func testDustMapPathIsOmittedUntilChosen() throws {
@@ -637,6 +690,49 @@ final class ParallaxTests: XCTestCase {
         XCTAssertEqual(session.summary?.fit.zoom.asked, 1.9)
         XCTAssertNotEqual(session.summary?.dustGiven, true)
         XCTAssertNil(session.inputNames[.dustMap])
+        XCTAssertNil(session.error)
+    }
+
+    @MainActor
+    func testSessionDepthPlaneSettingsNeedANewScene() async throws {
+        let (files, request) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        let session = ParallaxSession(sourceURL: URL(fileURLWithPath: request.inputs.image),
+            processing: .default, wcs: request.inputs.wcs)
+        defer { session.close() }
+        try await waitUntil { !session.isBusy }
+        session.importLayer(URL(fileURLWithPath: request.inputs.starless!), starless: true)
+        try await waitUntil { !session.isBusy }
+        session.importLayer(URL(fileURLWithPath: request.inputs.stars!), starless: false)
+        try await waitUntil { !session.isBusy }
+        session.layersAligned = true
+        session.edit { $0.width = 80; $0.height = 60; $0.seconds = 0.5; $0.scene.distanceParsecs = 400 }
+        session.preparePreview()
+        try await waitUntil { !session.isBusy }
+        XCTAssertTrue(session.hasScene, session.error ?? "Preparation failed")
+        XCTAssertEqual(session.planes, [])
+        XCTAssertNil(session.planesDescription, "Nothing to say while automatic planes are off")
+
+        session.edit { $0.scene.autoPlanes = true }
+        XCTAssertFalse(session.hasScene); XCTAssertFalse(session.hasPreview)
+        XCTAssertEqual(session.planesDescription, "Depth planes are found when the scene is prepared.")
+        session.undo()
+        XCTAssertFalse(session.composition.scene.autoPlanes)
+        XCTAssertFalse(session.hasScene, "Undo must not restore a freed native scene")
+
+        session.preparePreview()
+        try await waitUntil { !session.isBusy }
+        XCTAssertTrue(session.hasScene)
+        session.setDistance(150, for: "NGC 7023")
+        XCTAssertFalse(session.hasScene); XCTAssertFalse(session.hasPreview)
+        // Its object places no listed plane, so it is listed to be removed.
+        XCTAssertEqual(session.unlistedDistances.map(\.object), ["NGC 7023"])
+        session.setDistance(160, for: "NGC 7023")
+        XCTAssertEqual(session.composition.scene.distanceOverrides, [ParallaxDistanceOverride(object: "NGC 7023", distanceParsecs: 160)])
+        session.clearDistance(for: "NGC 7023")
+        XCTAssertTrue(session.composition.scene.distanceOverrides.isEmpty)
+        session.undo()
+        XCTAssertEqual(session.composition.scene.givenDistance(for: "NGC 7023"), 160)
         XCTAssertNil(session.error)
     }
 

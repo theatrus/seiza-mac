@@ -276,6 +276,22 @@ struct ParallaxWorkspace: View {
             }
             Text(session.dustDescription).font(.caption)
         }
+        Section("Depth planes") {
+            Toggle("Automatic depth planes", isOn: compositionBinding(\.scene.autoPlanes))
+            Text("Catalogued nebulae at distances of their own, and dust clouds in front of the nebula, move on planes of their own. A dark nebula moves with the dust it lies in.")
+                .font(.caption).foregroundStyle(.secondary)
+            ForEach(Array(session.listedPlanes.enumerated()), id: \.offset) { _, plane in planeRow(plane) }
+            if let description = session.planesDescription { Text(description).font(.caption) }
+            // A distance whose object places no listed plane: it may have moved
+            // its plane within reach of the nebula, or planes may be off.
+            ForEach(session.unlistedDistances, id: \.object) { given in
+                HStack {
+                    Text("\(given.object): \(given.distanceParsecs, specifier: "%.0f") pc").font(.caption)
+                    Spacer()
+                    Button("Remove") { session.clearDistance(for: given.object) }
+                }
+            }
+        }
         DisclosureGroup("Catalogues and solving") {
             Text(CatalogAccess.displayPath.isEmpty ? "Choose a catalogue directory in Seiza Settings to enable solving and tour generation." : CatalogAccess.displayPath)
                 .font(.caption).textSelection(.enabled)
@@ -548,6 +564,35 @@ struct ParallaxWorkspace: View {
     private func labelBinding<T>(_ id: UUID, _ key: WritableKeyPath<ParallaxLabel, T>, fallback: T) -> Binding<T> {
         Binding(get: { session.composition.labels.first { $0.id == id }?[keyPath: key] ?? fallback }, set: { value in
             session.edit { if let index = $0.labels.firstIndex(where: { $0.id == id }) { $0.labels[index][keyPath: key] = value } }
+        })
+    }
+
+    /// A depth plane's name, distance, how the distance was found and how much
+    /// of the image it covers. A plane its catalogued object places takes a
+    /// distance of the user's.
+    private func planeRow(_ plane: ParallaxPlane) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(plane.name).fontWeight(.medium)
+            if let object = plane.object {
+                HStack {
+                    TextField("Distance (pc)", value: planeDistance(object, prepared: plane.distanceParsecs), format: .number)
+                    if session.composition.scene.givenDistance(for: object) != nil {
+                        Button("Use Catalogue") { session.clearDistance(for: object) }
+                    }
+                }
+            } else {
+                Text("\(plane.distanceParsecs, specifier: "%.0f") pc")
+            }
+            Text("\(plane.basis) · \(plane.coverage * 100, specifier: "%.1f")% of the image\(plane.absorbs ? " · dark cloud" : "")")
+                .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+        }
+    }
+
+    private func planeDistance(_ object: String, prepared: Double) -> Binding<Double> {
+        Binding(get: { session.composition.scene.givenDistance(for: object) ?? prepared }, set: { value in
+            // Committing the prepared distance unchanged gives no distance.
+            guard session.composition.scene.givenDistance(for: object) != nil || value != prepared else { return }
+            session.setDistance(value, for: object)
         })
     }
 

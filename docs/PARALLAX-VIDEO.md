@@ -49,7 +49,8 @@ an itinerary, not a full project: it does not embed images, bookmarks, labels,
 scene overrides, or export preferences.
 
 The current workspace includes [dust maps](#dust-maps), introduced in Seiza
-0.26.0 and retained in the published 0.27.0 C ABI.
+0.26.0 and retained in the published 0.27.0 C ABI, and
+[depth planes](#depth-planes), introduced in Seiza 0.29.0.
 
 ## Current upstream feature coverage
 
@@ -59,6 +60,7 @@ The current workspace includes [dust maps](#dust-maps), introduced in Seiza
 | Geometry | Source WCS, automatic solve, and minimum/maximum arcseconds per pixel. Imported layers must match dimensions and have no orientation transform; the user confirms matching stretch/alignment. |
 | Distances | Separate source-point distance reference, manual background and unmatched-star parsecs, Gaia magnitude limit, opt-in online lookup, app-managed distance cache. |
 | Scene | Moving-star limit, remaining stars as background field or dropped, keep galaxies in background, dust and dust opacity, and a dust map (PNG, JPEG, TIFF, FITS or XISF) that replaces the counted dust. |
+| Depth planes | Automatic planes for catalogued nebulae and dust clouds at distances of their own; the planes found, with distances given by catalogued object name. |
 | Catalogues | Existing app catalogue location; focused offline-distance download from Settings or Source; installed stellar count and magnitude coverage; optional object catalogue, object-distance and star-distance file overrides. |
 | Fly In | Focus, whole-image/focus start, dolly, pan, opening zoom, end lens multiplier, start/end roll, sideways swing and direction, smooth/linear easing, duration. |
 | Tour generation | Automatic or limited target count, default hold seconds, motion amount. All returned stops remain editable. |
@@ -154,6 +156,39 @@ front. The map, like the other input files, lasts while the window is open; tour
 itineraries do not record it. Dust maps need dust dimming on. Export reports its
 activity and prevents overlapping writes, retaining the destination's security
 scope until the native write finishes.
+
+## Depth planes
+
+**Automatic depth planes**, in **Source → Depth planes**, lifts parts of the
+image onto planes at distances of their own, so they move against the nebula
+as the camera flies:
+
+- A catalogued nebula at least 15% nearer or farther than the nebula, by a
+  measured distance or one taken from an object around it, moves on a plane
+  with its own light.
+- A dark nebula moves with the cloud of dust it lies in. A cloud that holds the
+  nebula stays with it. A cloud at least 15% in front moves as one plane, at
+  the distance of its dark nebulae, or where the Gaia stars seen through it run
+  short. A dark cloud dims what lies behind it.
+
+Once the scene is prepared, the section lists each plane: its distance, how
+that was found, the share of the image it covers, and whether it is a dark
+cloud. When there are none it says so. The activity log names the dark nebulae
+that stay with the nebula.
+
+A plane named after a catalogued object takes a distance of your own, in
+parsecs (`distanceOverrides` by the plane's `object`). The list stays while
+distances are given for several planes; prepare the scene again to apply them.
+**Use Catalogue** returns a plane to the catalogue's distance. A plane moved
+within 15% of the nebula drops out of the list, so its distance is listed below
+it with **Remove**, as are distances kept while automatic planes are off. A
+cloud placed only by the star counts has no catalogued object, and its distance
+cannot be changed. Both settings belong to the scene, so changing either needs
+a new preparation, and both are part of undo.
+
+A planned tour gives each stop on a plane that plane's depth. The app leaves
+the depth out of its stops, so a stop always centres on the plane under its
+point, even after the planes change.
 
 ## Scene reuse and ownership
 
@@ -278,6 +313,11 @@ tests cover successive camera edits, manual preview, independent distance
 reference, scene invalidation/undo, catalogue installation, and closing during
 queued refits. Catalogue tests cover missing/corrupt database status, magnitude
 coverage, the focused three-file selection and compressed transfer counters.
+Depth plane tests cover `autoPlanes` and `distanceOverrides` in the request,
+planes read with and without an object, a second distance replacing the first,
+removal, the scene invalidated by either setting and kept freed by undo, a
+planned stop's depth left out, and preparation with automatic planes but no
+object catalogue. They need the 0.29.0 core, which accepts both fields.
 
 The `92b1604` regression pass additionally checks an unfit edge framing and its
 successful immutable refit, matching Swift/native zoom and growth bounds,
