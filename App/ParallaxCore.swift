@@ -15,17 +15,21 @@ struct ParallaxStop: Codable, Equatable, Identifiable {
     var spinDegrees = 0.0
     var push = 0.0
     var title: String?
+    /// An image with transparency shown during the stop in place of its
+    /// title, with or without stop titles.
+    var card: String?
 
     enum CodingKeys: String, CodingKey {
-        case name, focus, dolly, zoom, rotateDegrees, pan, travel, hold, spinDegrees, push, title
+        case name, focus, dolly, zoom, rotateDegrees, pan, travel, hold, spinDegrees, push, title, card
     }
     init(name: String? = "Whole Image", focus: [Double]? = nil, dolly: Double = 0,
          zoom: Double = 1, rotateDegrees: Double = 0, pan: Double = 0,
-         travel: Double = 4, hold: Double = 1, spinDegrees: Double = 0, push: Double = 0, title: String? = nil) {
+         travel: Double = 4, hold: Double = 1, spinDegrees: Double = 0, push: Double = 0, title: String? = nil,
+         card: String? = nil) {
         self.name = name; self.focus = focus; self.dolly = dolly; self.zoom = zoom
         self.rotateDegrees = rotateDegrees; self.pan = pan; self.travel = travel; self.hold = hold
         self.spinDegrees = spinDegrees; self.push = push
-        self.title = title
+        self.title = title; self.card = card
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -40,6 +44,7 @@ struct ParallaxStop: Codable, Equatable, Identifiable {
         spinDegrees = try c.decodeIfPresent(Double.self, forKey: .spinDegrees) ?? 0
         push = try c.decodeIfPresent(Double.self, forKey: .push) ?? 0
         title = try c.decodeIfPresent(String.self, forKey: .title)
+        card = try c.decodeIfPresent(String.self, forKey: .card)
     }
     var displayName: String { name ?? (focus == nil ? "Whole Image" : "Custom Point") }
 }
@@ -109,11 +114,25 @@ struct ParallaxLabel: Codable, Equatable, Identifiable {
     enum CodingKeys: String, CodingKey { case x, y, radius, text }
 }
 
+/// A watermark of text, an image such as a logo, or both, in a corner of
+/// every frame. Absent text or image draws none.
+struct ParallaxWatermarkStyle: Encodable, Equatable {
+    var text: String?
+    var image: String?
+    var corner = "bottomRight"
+    var size = 0.06
+    var opacity = 0.8
+}
+
 enum ParallaxWatermark: Encodable, Equatable {
-    case disabled, text(String)
+    case disabled, text(String), styled(ParallaxWatermarkStyle)
     func encode(to encoder: Encoder) throws {
         var c = encoder.singleValueContainer()
-        switch self { case .disabled: try c.encode(false); case .text(let text): try c.encode(text) }
+        switch self {
+        case .disabled: try c.encode(false)
+        case .text(let text): try c.encode(text)
+        case .styled(let style): try c.encode(style)
+        }
     }
 }
 
@@ -145,6 +164,10 @@ struct ParallaxVideoSettings: Encodable, Equatable {
     var labels: [ParallaxLabel] = []
     var labelColor = "#F0F4F8"
     var watermark = ParallaxWatermark.disabled
+    /// Title cards over the start and end, shown for `cardSeconds` each.
+    var introCard: String?
+    var outroCard: String?
+    var cardSeconds = 3.0
 }
 
 struct ParallaxComposition: Equatable {
@@ -181,6 +204,26 @@ struct ParallaxComposition: Equatable {
     var labelColor = "#F0F4F8"
     var creditEnabled = false
     var credit = "Rendered with seiza.fyi"
+    /// A logo drawn with the credit, its corner, its height as a share of the
+    /// frame's shorter side, and the opacity of both.
+    var logoPath: String?
+    var watermarkCorner = "bottomRight"
+    var watermarkSize = 0.06
+    var watermarkOpacity = 0.8
+    /// Title cards over the start and end of the video.
+    var introCard: String?
+    var outroCard: String?
+    var cardSeconds = 3.0
+
+    /// The credit and logo as the native core takes them: the plain text
+    /// while that is all there is, else text, logo, corner, size and opacity.
+    var watermark: ParallaxWatermark {
+        let text = creditEnabled ? credit : nil
+        let style = ParallaxWatermarkStyle(text: text, image: logoPath, corner: watermarkCorner,
+                                           size: watermarkSize, opacity: watermarkOpacity)
+        if style == ParallaxWatermarkStyle(text: text) { return text.map(ParallaxWatermark.text) ?? .disabled }
+        return .styled(style)
+    }
 
     var duration: Double {
         motion == .tour ? stops.enumerated().reduce(0) { $0 + $1.element.hold + ($1.offset == 0 ? 0 : $1.element.travel) } + loopClosingDuration : seconds
@@ -231,6 +274,9 @@ struct ParallaxComposition: Equatable {
             labelColor.range(of: "^#[0-9a-fA-F]{6}$", options: .regularExpression) != nil,
             labels.allSatisfy({ [$0.x, $0.y, $0.radius].allSatisfy(\.isFinite) && $0.radius >= 0 && !$0.text.isEmpty })
         else { return "Labels need valid positions, nonnegative radii and a color in #RRGGBB format." }
+        guard watermarkSize.isFinite, watermarkSize > 0, watermarkSize <= 1,
+            watermarkOpacity.isFinite, (0...1).contains(watermarkOpacity), cardSeconds.isFinite, cardSeconds > 0
+        else { return "The logo needs a height above 0 and at most 1, an opacity from 0 to 1, and cards a duration above 0." }
         if motion == .tour {
             guard stops.count >= 2 else { return "A tour needs at least two stops." }
             for stop in stops {
@@ -254,7 +300,8 @@ struct ParallaxComposition: Equatable {
             growthLimit: growthLimit, fadeFrom: fadeFrom, tour: motion == .tour ? stops : [], tourGlide: tourGlide,
             tourTitles: motion == .tour && tourTitles, tourLoop: motion == .tour && tourLoop,
             seconds: duration, fps: fps, size: "\(w)x\(h)", overlay: overlay, overlayDensity: overlayDensity,
-            labels: labels, labelColor: labelColor, watermark: creditEnabled ? .text(credit) : .disabled)
+            labels: labels, labelColor: labelColor, watermark: watermark,
+            introCard: introCard, outroCard: outroCard, cardSeconds: cardSeconds)
     }
 }
 
@@ -299,7 +346,13 @@ struct ParallaxFitValue: Decodable {
     let used: Double
     var changed: Bool { abs(asked - used) > 0.0001 }
 }
-struct ParallaxStopFit: Decodable { let zoom: ParallaxFitValue; let pan: ParallaxFitValue }
+struct ParallaxStopFit: Decodable {
+    let zoom: ParallaxFitValue
+    let pan: ParallaxFitValue
+    /// How far the stop flies in: the fit flies it less far where it would
+    /// show much of the smooth fill behind a depth plane.
+    let dolly: ParallaxFitValue?
+}
 struct ParallaxFit: Decodable {
     let zoom: ParallaxFitValue
     let pan: ParallaxFitValue
@@ -316,6 +369,9 @@ struct ParallaxFit: Decodable {
         for (index, stop) in stops.enumerated() {
             if stop.zoom.changed { notes.append(String(format: "Stop %d zoom: %.2f → %.2f", index + 1, stop.zoom.asked, stop.zoom.used)) }
             if stop.pan.changed { notes.append(String(format: "Stop %d pan: %.2f → %.2f", index + 1, stop.pan.asked, stop.pan.used)) }
+            if let dolly = stop.dolly, dolly.changed {
+                notes.append(String(format: "Stop %d dolly: %.2f → %.2f", index + 1, dolly.asked, dolly.used))
+            }
         }
         return notes
     }

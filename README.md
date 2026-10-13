@@ -79,7 +79,8 @@ a plane named after a catalogued object takes a distance of your own.
    Review the candidate, click **Apply Tour**, then edit the stops, motion, titles,
    and looping. Click **Prepare Preview** to build the scene; subsequent camera
    edits update the preview without repeating star detection or distance lookup.
-4. **Export the video.** Add annotations and credits in **Labels**. In **Output**,
+4. **Export the video.** Add annotations, a credit and logo, and title cards in
+   **Labels**. In **Output**,
    choose dimensions, frame rate, H.264 or HEVC, and quality, then click
    **Export Video…**. Rendering and encoding run locally.
 

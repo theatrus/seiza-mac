@@ -369,6 +369,8 @@ struct ParallaxWorkspace: View {
                 TextField("Name", text: Binding(get: { session.composition.stops[index].name ?? "" }, set: { name in session.editStop { $0.name = name } }))
                 TextField("On-screen title", text: Binding(get: { session.composition.stops[index].title ?? "" }, set: { title in session.editStop { $0.title = title.isEmpty ? nil : title } }))
                     .help("Shown during this stop when Show stop titles is enabled. Leave blank for no title.")
+                overlayPicker("Card", path: session.composition.stops[index].card, slot: .stop(session.composition.stops[index].id))
+                    .help("An image with transparency shown during this stop in place of its title, with or without stop titles.")
                     Button("Pick Destination") { session.pickingDistance = false; session.showsSource = true; session.pickingDestination = true }
                 Button("Use Whole Image") { session.editStop { $0.focus = nil; $0.name = "Whole Image"; $0.dolly = 0; $0.zoom = 1; $0.pan = 0 } }
                 destinationCoordinates
@@ -555,9 +557,37 @@ struct ParallaxWorkspace: View {
             }
             Text("Positions and radius use source pixels.").font(.caption).foregroundStyle(.secondary)
         }
-        Section("Credit") {
+        Section("Credit and logo") {
             Toggle("Show credit", isOn: compositionBinding(\.creditEnabled))
             TextField("Credit text", text: compositionBinding(\.credit)).disabled(!session.composition.creditEnabled)
+            overlayPicker("Logo", path: session.composition.logoPath, slot: .logo)
+            Picker("Corner", selection: compositionBinding(\.watermarkCorner)) {
+                Text("Bottom right").tag("bottomRight"); Text("Bottom left").tag("bottomLeft")
+                Text("Top right").tag("topRight"); Text("Top left").tag("topLeft")
+            }
+            TextField("Logo height (share of frame)", value: compositionBinding(\.watermarkSize), format: .number)
+                .disabled(session.composition.logoPath == nil)
+            Slider(value: compositionBinding(\.watermarkOpacity), in: 0...1) { Text("Opacity") }
+            Text("The logo sits in the credit's corner, just inside the credit text.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        Section("Title cards") {
+            overlayPicker("Opening Card", path: session.composition.introCard, slot: .intro)
+            overlayPicker("Closing Card", path: session.composition.outroCard, slot: .outro)
+            TextField("Card duration (s)", value: compositionBinding(\.cardSeconds), format: .number)
+            Text("Images with transparency, fitted inside the frame: make them the frame's size for sharp lettering. The opening card fades out after the start and the closing card fades in for the end; a looping tour shows them across its join.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    /// A button to choose an image laid over the video, and to remove it.
+    private func overlayPicker(_ title: String, path: String?, slot: ParallaxSession.OverlayImage) -> some View {
+        VStack(alignment: .leading) {
+            HStack {
+                Button("Choose \(title)…") { session.chooseOverlayImage(slot) }
+                if path != nil { Button("Remove") { session.clearOverlayImage(slot) } }
+            }
+            if let path { Text(URL(fileURLWithPath: path).lastPathComponent).font(.caption).textSelection(.enabled) }
         }
     }
 

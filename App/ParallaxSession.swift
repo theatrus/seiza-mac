@@ -224,6 +224,36 @@ final class ParallaxSession: ObservableObject {
         selectedInputs[kind] = nil; inputNames[kind] = nil; invalidate(scene: true)
     }
 
+    /// Images laid over the video: a logo with the credit, opening and closing
+    /// title cards, and a stop's card. Each chosen file stays readable for
+    /// the rest of the session, so undo can bring it back.
+    enum OverlayImage: Equatable { case logo, intro, outro, stop(UUID) }
+    private var overlayFiles: [String: ParallaxScopedURL] = [:]
+
+    func chooseOverlayImage(_ slot: OverlayImage) {
+        guard !isBusy else { return }
+        let panel = NSOpenPanel()
+        panel.message = slot == .logo
+            ? "Choose a logo, a PNG or TIFF with transparency."
+            : "Choose a title card, a PNG or TIFF with transparency, the size of the video's frame for sharp lettering."
+        panel.allowedContentTypes = [.png, .tiff]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        overlayFiles[url.path] = ParallaxScopedURL(url)
+        setOverlayImage(url.path, for: slot)
+    }
+    func clearOverlayImage(_ slot: OverlayImage) { setOverlayImage(nil, for: slot) }
+    private func setOverlayImage(_ path: String?, for slot: OverlayImage) {
+        edit { composition in
+            switch slot {
+            case .logo: composition.logoPath = path
+            case .intro: composition.introCard = path
+            case .outro: composition.outroCard = path
+            case .stop(let id):
+                if let index = composition.stops.firstIndex(where: { $0.id == id }) { composition.stops[index].card = path }
+            }
+        }
+    }
+
     // Dust maps. A prepared scene takes a new map without being prepared
     // again: only its dust changes, and the result becomes the scene that
     // refits and exports start from, so the map stays with them.
