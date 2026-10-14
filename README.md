@@ -49,6 +49,9 @@ Choose **File → Parallax Video…** to open the video workspace. Each stop has
 own destination, travel time, hold, zoom, pan, roll, spin, and forward push.
 Add fading titles, keep the camera gliding through holds, and make the tour loop.
 Scrub the preview while you edit; camera changes reuse the prepared scene.
+After **Prepare Preview**, generated tours use the scene's depth planes and
+distance overrides. Each stop can follow the scene's depth or use an explicit
+distance, which is preserved when saving and loading tours.
 
 ![Seiza's parallax workspace showing an Iris Nebula preview, editable tour stops, and controls for dolly, pan, roll, a full spin, and forward push](docs/images/seiza-parallax-tour.jpg)
 
@@ -64,6 +67,9 @@ Turn on **Source → Depth planes** to move catalogued nebulae at distances of
 their own, and dust clouds in front of the nebula, on planes of their own. Dark
 nebulae move with the dust they lie in. The section lists the planes found, and
 a plane named after a catalogued object takes a distance of your own.
+**Object distances** also accepts other catalogue names, including large objects
+left on the background. **Custom depth planes** imports painted masks with
+names and distances, with controls to replace, reload or remove each mask.
 
 ### Make a parallax tour
 
@@ -75,10 +81,11 @@ a plane named after a catalogued object takes a distance of your own.
    data in Settings. The Source inspector also offers the offline distance
    download. Online distance lookup is optional; fields without background
    distance data can use a manual distance.
-3. **Plan the camera move.** Choose Fly In or generate a tour in **Camera**.
+3. **Plan the camera move.** Click **Prepare Preview** to build the scene, then
+   choose Fly In or generate a tour in **Camera** using that scene's depths.
    Review the candidate, click **Apply Tour**, then edit the stops, motion, titles,
-   and looping. Click **Prepare Preview** to build the scene; subsequent camera
-   edits update the preview without repeating star detection or distance lookup.
+   and looping. Camera edits update the preview without repeating star detection
+   or distance lookup.
 4. **Export the video.** Add annotations, a credit and logo, and title cards in
    **Labels**. In **Output**,
    choose dimensions, frame rate, H.264 or HEVC, and quality, then click
@@ -338,7 +345,7 @@ DerivedData/Build/Products/Debug/Seiza.app
 
 Open `Seiza.xcodeproj` to run and sign it with a local development team.
 
-The app uses published `seiza-cabi` 0.30.0, `seiza` 0.30.0,
+The app uses published `seiza-cabi` 0.30.1, `seiza` 0.30.1,
 `seiza-parallax` 0.7.0, `seiza-stacking` 0.32.0 and `seiza-download` 0.8.0, with dust maps, depth planes and
 image reading and writing through `seiza-image-io`. Library and bridge header
 must be updated together. About reports the linked release version and source

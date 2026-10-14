@@ -287,8 +287,8 @@ catalogues remain a separate package.
 The small Mac-only download/status adapter lives in
 `Rust/seiza-mac-core/src/catalogs.rs`; its declarations are outside the vendored
 upstream header. Direct `seiza`, `seiza-download`, and `seiza-cabi` dependencies
-use the same exact Git revision in development (registry versions in released
-0.8.0). The build checks their locked sources; About reports the C ABI's
+use exact published versions with registry checksums in `Cargo.lock`.
+The build checks their locked sources; About reports the C ABI's
 version and source commit.
 
 Catalogue label metadata is loaded lazily by upstream. Keep catalogue/file
