@@ -367,8 +367,11 @@ struct ParallaxWorkspace: View {
                 .font(.caption).foregroundStyle(.secondary)
             Button(session.hasWCS ? "Generate Tour" : "Solve & Generate Tour", action: session.generateTour)
                 .disabled(!session.sourceReady || setup.isRunning)
-            if session.composition.scene.autoPlanes || !session.composition.scene.planes.isEmpty {
-                Text("Generated framing uses catalogue distances. Preview each stop after changing depth planes; choose Follow scene depth if its distance no longer matches.")
+            if session.hasScene {
+                Text("Plans on the prepared scene, including its depth planes and distance overrides. Applying the tour reuses that scene.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text("Prepare Preview first to generate framing from the scene's depths. Without a prepared scene, generation uses catalogue distances.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let candidate = session.candidate {

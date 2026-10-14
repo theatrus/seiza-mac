@@ -139,8 +139,9 @@ final class ParallaxTests: XCTestCase {
     func testPlannerStopsPreserveUnwrappedMotionAndIncomingTiming() throws {
         let json = #"{"schemaVersion":1,"focus":[100,80],"focusName":"Target","seconds":7,"tour":[{"name":"Whole Image","dolly":0,"zoom":1,"rotateDegrees":20,"pan":0,"travel":99,"hold":1},{"name":"Target","focus":[100,80],"dolly":0.4,"zoom":1.2,"rotateDegrees":380,"pan":0.6,"travel":4,"hold":2,"depthParsecs":2790}]}"#
         let plan = try JSONDecoder().decode(ParallaxTourPlan.self, from: Data(json.utf8))
+        XCTAssertEqual(plan.tour[1].depthParsecs, 2790)
         var composition = ParallaxComposition()
-        composition.motion = .tour; composition.stops = plan.tour; composition.scene.distanceFocus = plan.focus
+        composition.applyTour(plan, onScene: false)
         XCTAssertEqual(composition.duration, 7)
         XCTAssertEqual(composition.arrival(at: 1), 5)
         composition.stops[1].name = "Renamed"
@@ -152,6 +153,21 @@ final class ParallaxTests: XCTestCase {
         XCTAssertNil(stops[1]["id"])
         XCTAssertEqual(stops[1]["depthParsecs"] as? Double, 2790)
         XCTAssertNil(stops[0]["depthParsecs"], "Stops without a depth continue to follow the scene")
+        var onScene = ParallaxComposition()
+        onScene.scene.distanceFocus = [10, 10]
+        onScene.distanceName = "Original reference"
+        onScene.applyTour(plan, onScene: true)
+        XCTAssertEqual(onScene.stops[1].depthParsecs, 2790)
+        XCTAssertEqual(onScene.scene.distanceFocus, [10, 10])
+        XCTAssertEqual(onScene.distanceName, "Original reference")
+        let kept = try JSONSerialization.jsonObject(with: JSONEncoder().encode(onScene.videoSettings(preview: false))) as! [String: Any]
+        XCTAssertEqual((kept["tour"] as! [[String: Any]])[1]["depthParsecs"] as? Double, 2790)
+        onScene.stops[1].focus = [120, 90]
+        XCTAssertEqual(onScene.stops[1].depthParsecs, 2790, "Moving a focus must preserve an explicit depth")
+        onScene.stops[1].depthParsecs = nil
+        XCTAssertNil(onScene.stops[1].depthParsecs)
+        onScene.stops[1].depthParsecs = -1
+        XCTAssertNotNil(onScene.validationMessage)
         XCTAssertNil(encoded["autoTour"])
         XCTAssertEqual(encoded["distanceFocus"] as? [Double], [100, 80])
         composition.setTravelTurn(at: 1, clockwise: true)
@@ -972,6 +988,132 @@ final class ParallaxTests: XCTestCase {
         session.undo()
         XCTAssertEqual(session.composition.scene.givenDistance(for: "NGC 7023"), 160)
         XCTAssertNil(session.error)
+    }
+
+    func testScenePlanSettingsEncodeTheFrameAndTourOptions() throws {
+        let settings = ParallaxScenePlanSettings(size: "1920x1080", autoTour: ParallaxTourOptions(targets: 3, hold: 2, motion: 0.5))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(ParallaxCore.json(settings).utf8)) as? [String: Any])
+        XCTAssertEqual(Set(object.keys), ["size", "autoTour"])
+        XCTAssertEqual(object["size"] as? String, "1920x1080")
+        let tour = try XCTUnwrap(object["autoTour"] as? [String: Any])
+        XCTAssertEqual(tour["targets"] as? Int, 3); XCTAssertEqual(tour["hold"] as? Double, 2)
+        XCTAssertEqual(tour["motion"] as? Double, 0.5)
+    }
+
+    /// Two nebulae in the synthetic image, using the supported legacy object
+    /// catalogue format. Tests must not depend on an installed sky catalogue.
+    private func writeTourCatalog(in files: ParallaxFiles) throws {
+        var data = Data("SEIZAOB1".utf8)
+        func append<T>(_ value: T) { var v = value; withUnsafeBytes(of: &v) { data.append(contentsOf: $0) } }
+        func string(_ value: String) { append(UInt16(value.utf8.count).littleEndian); data.append(contentsOf: value.utf8) }
+        append(UInt32(2).littleEndian)
+        for (name, ra, dec) in [("NGC 9001", 56.75, 24.12), ("IC 9002", 56.73, 24.13)] {
+            append(UInt8(3)) // Nebula
+            append(ra.bitPattern.littleEndian); append(dec.bitPattern.littleEndian)
+            for value: Float in [.nan, 0.8, 0.6, .nan] { append(value.bitPattern.littleEndian) }
+            string(name); string("")
+        }
+        try data.write(to: files.directory.appendingPathComponent("objects.bin"))
+    }
+
+    @MainActor
+    func testSessionPlansToursOnThePreparedSceneAndKeepsIt() async throws {
+        let (files, request) = try planeFixture()
+        try writeTourCatalog(in: files)
+        let bookmark = UserDefaults.standard.object(forKey: "catalogBookmark")
+        let catalogPath = UserDefaults.standard.object(forKey: "catalogDirectory")
+        defer {
+            UserDefaults.standard.set(bookmark, forKey: "catalogBookmark")
+            UserDefaults.standard.set(catalogPath, forKey: "catalogDirectory")
+        }
+        try CatalogAccess.save(files.directory)
+        defer { withExtendedLifetime(files) {} }
+        let session = ParallaxSession(sourceURL: URL(fileURLWithPath: request.inputs.image),
+            processing: .default, wcs: request.inputs.wcs)
+        defer { session.close() }
+        try await waitUntil { !session.isBusy }
+        session.importLayer(URL(fileURLWithPath: request.inputs.starless!), starless: true)
+        try await waitUntil { !session.isBusy }
+        session.importLayer(URL(fileURLWithPath: request.inputs.stars!), starless: false)
+        try await waitUntil { !session.isBusy }
+        session.layersAligned = true
+        session.edit { $0.width = 80; $0.height = 60; $0.seconds = 0.5; $0.scene.distanceParsecs = 400 }
+        session.selectPlaneMask(ParallaxScopedURL(try planeMask(in: files)))
+        let planeID = try XCTUnwrap(session.composition.scene.planes.first?.id)
+        session.editPlane(planeID) { $0.distanceParsecs = 150 }
+        session.preparePreview()
+        try await waitUntil { !session.isBusy }
+        XCTAssertTrue(session.hasScene, session.error ?? "Preparation failed")
+        let scene = session.composition.scene
+        session.generateTour()
+        try await waitUntil { !session.isBusy }
+        XCTAssertEqual(session.activity.entries.first?.message, "Planning tour on the prepared scene…")
+        XCTAssertTrue(session.hasScene)
+        let plan = try XCTUnwrap(session.candidate, session.error ?? "No scene plan")
+        XCTAssertEqual(plan.tour.first { $0.name == "NGC 9001" }?.depthParsecs, 150)
+        session.applyCandidate()
+        XCTAssertEqual(session.composition.scene, scene, "A tour planned on the scene keeps its distance")
+        XCTAssertTrue(session.hasScene)
+        try await waitUntil { !session.isReconfiguring }
+        XCTAssertTrue(session.hasPreview, session.error ?? "Refit failed")
+
+        session.generateTour()
+        try await waitUntil { !session.isBusy }
+        XCTAssertNotNil(session.candidate)
+        session.edit { $0.width = 100 }
+        XCTAssertNil(session.candidate, "A different frame requires new planning")
+        session.generateTour()
+        try await waitUntil { !session.isBusy }
+        XCTAssertNotNil(session.candidate)
+        session.undo()
+        XCTAssertNil(session.candidate, "Undoing frame dimensions also requires new planning")
+        session.generateTour()
+        try await waitUntil { !session.isBusy }
+        XCTAssertNotNil(session.candidate)
+        session.redo()
+        XCTAssertNil(session.candidate)
+        session.generateTour()
+        try await waitUntil { !session.isBusy }
+        XCTAssertNotNil(session.candidate)
+        session.editPlane(planeID) { $0.distanceParsecs = 200 }
+        XCTAssertNil(session.candidate, "An old scene's plan must not survive a depth edit")
+        XCTAssertFalse(session.hasScene)
+        session.preparePreview()
+        try await waitUntil { !session.isBusy }
+        session.generateTour()
+        session.cancel()
+        try await waitUntil { !session.isBusy }
+        XCTAssertNil(session.candidate, "Cancelled native planning must not publish a result")
+        XCTAssertTrue(session.hasScene)
+        session.generateTour()
+        session.close()
+        XCTAssertNil(session.candidate)
+        XCTAssertFalse(session.hasScene)
+    }
+
+    @MainActor
+    func testImportedTourAppliesExplicitDepthAndRejectsInvalidDepth() async throws {
+        let (files, request) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        let session = ParallaxSession(sourceURL: URL(fileURLWithPath: request.inputs.image), processing: .default, wcs: request.inputs.wcs)
+        defer { session.close() }
+        try await waitUntil { !session.isBusy }
+        var plan = ParallaxTourPlan(focus: [35, 27], focusName: "Imported reference", seconds: 6,
+            tour: [ParallaxStop(), ParallaxStop(name: "Explicit", focus: [35, 27], depthParsecs: 150)])
+        let url = files.directory.appendingPathComponent("tour.json")
+        try JSONEncoder().encode(plan).write(to: url)
+        session.loadTour(from: url)
+        XCTAssertEqual(session.candidate?.tour.last?.depthParsecs, 150)
+        session.applyCandidate()
+        XCTAssertEqual(session.composition.stops.last?.depthParsecs, 150)
+        XCTAssertEqual(session.composition.scene.distanceFocus, [35, 27])
+        XCTAssertEqual(session.composition.distanceName, "Imported reference")
+        plan.tour[1].depthParsecs = -1
+        try JSONEncoder().encode(plan).write(to: url)
+        session.loadTour(from: url)
+        XCTAssertNil(session.candidate)
+        XCTAssertNotNil(session.error)
+        XCTAssertEqual(session.composition.stops.last?.depthParsecs, 150)
     }
 
     @MainActor

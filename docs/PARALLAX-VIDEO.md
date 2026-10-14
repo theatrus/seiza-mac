@@ -20,7 +20,7 @@ The release provenance above describes the shipped 0.8.0 artifacts. Shared
 stacking controls are covered in [STACKING.md](STACKING.md); the dust-map
 workspace is included and tested alongside the stacking changes.
 
-The current development build uses published core/C ABI **0.30.0**, parallax
+The current development build uses published core/C ABI **0.30.1**, parallax
 **0.7.0**, stacking **0.32.0**, and image I/O **0.5.0**. Its header matches the
 published C ABI; the versioned release descriptions above are historical.
 
@@ -45,7 +45,15 @@ an imported stars layer is retried only after the user confirms its alignment.
 Preview and export use the same fallback, and the activity log records the retry
 and outcome. Existing WCS is reused without solving again. Automatic separation
 has no imported stars file to retry and retains upstream's original-image solve.
-Generation options affect only the next candidate.
+Generation options affect only the next candidate. Once a scene is prepared,
+generation plans on it instead (`seiza_parallax_plan_scene_tour_json`, from
+Seiza 0.30.1): each stop is framed at the depth of the plane the scene shows
+its target on, as an automatic tour of that scene would be. Applying such a
+tour keeps the scene's distance reference, so the scene is not prepared again,
+and each stop keeps its explicit depth until Follow scene depth is selected.
+Imported and catalogue-generated tours also preserve explicit stop depths.
+Changing the scene or output dimensions discards a pending scene-generated
+candidate, so it cannot later apply framing for an obsolete scene.
 
 Tour JSON can be loaded and saved. It retains every stop field and the scene's
 independent distance reference; the app also saves optional `tourGlide`, `tourTitles`, and `tourLoop`. Older JSON remains readable. It is
@@ -53,7 +61,7 @@ an itinerary, not a full project: it does not embed images, bookmarks, labels,
 scene overrides, or export preferences.
 
 The current workspace includes [dust maps](#dust-maps), introduced in Seiza
-0.26.0 and retained in the published 0.30.0 C ABI, and
+0.26.0 and retained in the published 0.30.1 C ABI, and
 [depth planes](#depth-planes), introduced in Seiza 0.29.0.
 
 ## Current upstream feature coverage
@@ -222,22 +230,21 @@ or distance reference. **Use Whole Image** clears the stop's explicit depth.
 The native activity log warns when a stop's explicit depth differs from the
 plane shown there; choose Follow scene depth to remove that override.
 
-### Remaining tour-planner API gap in 0.30.0
+### Prepared-scene tour planning in 0.30.1
 
-The Rust renderer can plan against its prepared scene, but the published
-`seiza_parallax_plan_tour_json` C API still invokes the catalogue-only free
-planner. The Mac's editable generated tours therefore do not use the prepared
-planes or manual distance overrides when choosing dolly, zoom and pan. The
-Camera inspector calls out that limitation when automatic or custom planes are enabled.
-Refitting still applies the renderer's camera fitting and reduced-fill dolly
-adjustments; that does not replace scene-aware planning.
+Generate Tour calls `seiza_parallax_plan_scene_tour_json` when a scene has been
+prepared. It passes the current output dimensions and tour options, keeps the
+scene alive for the native call, and preserves its distance reference when
+applying the returned editable stops. Custom masks and named distance overrides
+therefore contribute to generated framing. Without a prepared scene the
+catalogue-only planner remains available; the inspector explains that preparing
+first is necessary to use scene depths.
 
-The required upstream API is a planner accepting an existing immutable
-`SeizaParallax` handle, automatic-tour options and output dimensions, returning
-the owned editable plan JSON. It should expose `Parallax::plan_tour`, support
-cancellation, and preserve the prepared scene's distance reference when the
-plan is applied. Until that API is published, preview each generated stop after
-changing depth planes. No temporary Git pin or duplicate renderer is used.
+The new native planner has no cancellation or progress callback. It runs away
+from the main thread; cancellation suppresses its result and retains the handle
+and file scopes until the native call returns. Closing the window cannot publish
+a late result or free a handle still in use. Preparation and refitting retain
+their existing native cancellation and progress support.
 
 ## Scene reuse and ownership
 
@@ -280,8 +287,8 @@ catalogues remain a separate package.
 The small Mac-only download/status adapter lives in
 `Rust/seiza-mac-core/src/catalogs.rs`; its declarations are outside the vendored
 upstream header. Direct `seiza`, `seiza-download`, and `seiza-cabi` dependencies
-use the same exact Git revision in development (registry versions in released
-0.8.0). The build checks their locked sources; About reports the C ABI's
+use exact published versions with registry checksums in `Cargo.lock`.
+The build checks their locked sources; About reports the C ABI's
 version and source commit.
 
 Catalogue label metadata is loaded lazily by upstream. Keep catalogue/file
@@ -377,6 +384,24 @@ of 600 pc, lifting it from the background (12.8% coverage). Both native scenes
 rendered frames. The Mac UI was checked for named override entry, mask import,
 and editing the mask's name and distance. All 213 native tests and the universal
 Release build and unsigned bundle validation passed on Seiza 0.30.0.
+
+The 0.30.1 integration pass passed 216 native tests, all three Rust wrapper
+tests, Rust fmt/Clippy, all nine upstream C ABI parallax tests, the universal
+Release build, unsigned bundle validation and an exact published-header check.
+A synthetic catalogue test verifies scene-generated stop depths, reference
+preservation, cancellation, and invalidating pending plans on scene/frame edits
+(including undo/redo). Import/apply tests preserve explicit depths and reject
+invalid ones.
+
+Real Big Q tours were generated on three prepared scenes: automatic planes,
+LBN 587 overridden to 600 pc, and a custom mask at 350 pc. All seven-stop tours
+fit inside the image and rendered sampled frames; generated stops retained the
+given object/mask depths. The ordinary scene plan needed a 1.5× correction on
+one stop, resolving the previous catalogue-only tour's 64× fit failure. Iris
+produced an eight-stop scene tour with a valid fit. Each plan round-tripped its
+explicit depths through JSON. A shortened Iris tour exported through native
+HEVC and independently decoded all 111 frames at 640×360 over 3.7 seconds with
+increasing timestamps.
 
 The `92b1604` regression pass additionally checks an unfit edge framing and its
 successful immutable refit, matching Swift/native zoom and growth bounds,
