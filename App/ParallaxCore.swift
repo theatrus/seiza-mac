@@ -86,21 +86,32 @@ struct ParallaxSceneSettings: Codable, Equatable {
     /// Lift catalogued nebulae at distances of their own, and dust clouds in
     /// front of the nebula, onto depth planes.
     var autoPlanes = false
+    var planes: [ParallaxMaskPlane] = []
     var distanceOverrides: [ParallaxDistanceOverride] = []
     var minimumScaleArcsecPerPixel = 0.1
     var maximumScaleArcsecPerPixel = 20.0
 
     func givenDistance(for object: String) -> Double? {
-        distanceOverrides.first { $0.object == object }?.distanceParsecs
+        distanceOverrides.first { Self.objectKey($0.object) == Self.objectKey(object) }?.distanceParsecs
     }
     /// Give `object` its own distance, replacing one given before.
     mutating func setDistance(_ parsecs: Double, for object: String) {
-        if let index = distanceOverrides.firstIndex(where: { $0.object == object }) {
+        if let index = distanceOverrides.firstIndex(where: { Self.objectKey($0.object) == Self.objectKey(object) }) {
             distanceOverrides[index].distanceParsecs = parsecs
-        } else { distanceOverrides.append(ParallaxDistanceOverride(object: object, distanceParsecs: parsecs)) }
+        } else { distanceOverrides.append(ParallaxDistanceOverride(object: object.trimmingCharacters(in: .whitespacesAndNewlines), distanceParsecs: parsecs)) }
     }
     /// Return `object` to the catalogue's distance.
-    mutating func clearDistance(for object: String) { distanceOverrides.removeAll { $0.object == object } }
+    mutating func clearDistance(for object: String) { distanceOverrides.removeAll { Self.objectKey($0.object) == Self.objectKey(object) } }
+    private static func objectKey(_ name: String) -> String { name.filter { !$0.isWhitespace }.lowercased() }
+}
+
+/// A user-selected mask. The UUID identifies its editor row, not a native field.
+struct ParallaxMaskPlane: Codable, Equatable, Identifiable {
+    var id = UUID()
+    var mask: String
+    var distanceParsecs: Double
+    var name: String
+    enum CodingKeys: String, CodingKey { case mask, distanceParsecs, name }
 }
 
 /// A distance for a catalogued object, by name, in place of the catalogue's.
@@ -262,8 +273,14 @@ struct ParallaxComposition: Equatable {
         else { return "Choose even dimensions between 16 and 3840 pixels and 24, 30 or 60 fps." }
         guard duration.isFinite, duration > 0, duration <= 600 else { return "The video must be longer than zero and at most 10 minutes." }
         let point: ([Double]?) -> Bool = { $0.map { $0.count == 2 && $0.allSatisfy(\.isFinite) } ?? true }
-        for distance in [scene.distanceParsecs, scene.unmatchedDistanceParsecs].compactMap({ $0 }) + scene.distanceOverrides.map(\.distanceParsecs) {
+        for distance in [scene.distanceParsecs, scene.unmatchedDistanceParsecs].compactMap({ $0 }) + scene.distanceOverrides.map(\.distanceParsecs) + scene.planes.map(\.distanceParsecs) {
             if !distance.isFinite || distance <= 0 { return "Distances must be positive, finite parsec values." }
+        }
+        if scene.distanceOverrides.contains(where: { $0.object.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+            return "Give each object distance a catalogue object name."
+        }
+        if scene.planes.contains(where: { $0.mask.isEmpty || $0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+            return "Choose a mask and a name for each custom depth plane."
         }
         guard point(scene.distanceFocus), scene.gaiaMaxMagnitude.isFinite,
             (1...25).contains(scene.gaiaMaxMagnitude), scene.dustOpacity.isFinite, scene.dustOpacity >= 0,

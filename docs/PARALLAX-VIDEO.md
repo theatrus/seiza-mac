@@ -64,7 +64,7 @@ The current workspace includes [dust maps](#dust-maps), introduced in Seiza
 | Geometry | Source WCS, automatic solve, and minimum/maximum arcseconds per pixel. Imported layers must match dimensions and have no orientation transform; the user confirms matching stretch/alignment. |
 | Distances | Separate source-point distance reference, manual background and unmatched-star parsecs, Gaia magnitude limit, opt-in online lookup, app-managed distance cache. |
 | Scene | Moving-star limit, remaining stars as background field or dropped, keep galaxies in background, dust and dust opacity, and a dust map (PNG, JPEG, TIFF, FITS or XISF) that replaces the counted dust. |
-| Depth planes | Automatic planes for catalogued nebulae and dust clouds at distances of their own; the planes found, with distances given by catalogued object name. |
+| Depth planes | Automatic planes for nebulae and dust clouds; distance overrides for any catalogue object by name; custom mask images with names and distances, replacement, reload and removal. |
 | Catalogues | Existing app catalogue location; focused offline-distance download from Settings or Source; installed stellar count and magnitude coverage; optional object catalogue, object-distance and star-distance file overrides. |
 | Fly In | Focus, whole-image/focus start, dolly, pan, opening zoom, end lens multiplier, start/end roll, sideways swing and direction, smooth/linear easing, duration. |
 | Tour generation | Automatic or limited target count, default hold seconds, motion amount. All returned stops remain editable. |
@@ -188,12 +188,30 @@ that stay with the nebula.
 A plane named after a catalogued object takes a distance of your own, in
 parsecs (`distanceOverrides` by the plane's `object`). The list stays while
 distances are given for several planes; prepare the scene again to apply them.
-**Use Catalogue** returns a plane to the catalogue's distance. A plane moved
-within 15% of the nebula drops out of the list, so its distance is listed below
-it with **Remove**, as are distances kept while automatic planes are off. A
-cloud placed only by the star counts has no catalogued object, and its distance
-cannot be changed. Both settings belong to the scene, so changing either needs
-a new preparation, and both are part of undo.
+**Use Catalogue** returns a plane to the catalogue's distance. **Source → Object
+distances** also accepts any catalogue object name and a positive distance in
+parsecs, including a large nebula that automatic detection leaves on the
+background. Enable automatic planes to lift it at that distance. Names are
+resolved by the core when preparing; an unknown name produces an error. Adding
+the same name with different case or spacing updates its distance. Every given
+distance remains editable/removable here, even when its plane drops out of the
+prepared list or automatic planes are off. A cloud placed only by the star
+counts has no catalogue name to override.
+
+**Source → Custom depth planes → Import Mask…** accepts PNG, JPEG, TIFF, FITS
+or XISF masks. White marks the region to lift; black leaves it on the background.
+Masks can be smaller than the source but must have its aspect ratio; floating
+samples must lie between 0 and 1. The core validates shape and sample range
+before preparing. Each custom plane has an editable name and positive distance
+in parsecs, plus **Replace Mask…**, **Reload** and **Remove**. Custom masks work
+with automatic planes on or off. Reload after painting the file in another app.
+
+These are scene settings: editing, replacing, reloading or removing them clears
+the prepared preview and requires **Prepare Preview**. Setting changes participate
+in undo; restoring them rebuilds the scene rather than reviving a freed handle.
+Chosen mask files stay readable for the session and for native tasks already in
+flight, including after replacement or removal so undo can restore them. Tour
+JSON saves camera stops; mask planes and object overrides remain in this workspace.
 
 **Camera → Stop → Follow scene depth** is the default for new stops. It omits
 `depthParsecs`, so framing follows the plane under the destination. Turn it off
@@ -210,7 +228,7 @@ The Rust renderer can plan against its prepared scene, but the published
 `seiza_parallax_plan_tour_json` C API still invokes the catalogue-only free
 planner. The Mac's editable generated tours therefore do not use the prepared
 planes or manual distance overrides when choosing dolly, zoom and pan. The
-Camera inspector calls out that limitation when automatic planes are enabled.
+Camera inspector calls out that limitation when automatic or custom planes are enabled.
 Refitting still applies the renderer's camera fitting and reduced-fill dolly
 adjustments; that does not replace scene-aware planning.
 
@@ -344,11 +362,21 @@ tests cover successive camera edits, manual preview, independent distance
 reference, scene invalidation/undo, catalogue installation, and closing during
 queued refits. Catalogue tests cover missing/corrupt database status, magnitude
 coverage, the focused three-file selection and compressed transfer counters.
-Depth plane tests cover `autoPlanes` and `distanceOverrides` in the request,
+Depth plane tests cover `autoPlanes`, custom `planes` and `distanceOverrides` in the request,
 planes read with and without an object, a second distance replacing the first,
 removal, the scene invalidated by either setting and kept freed by undo, a
-planned stop's depth left out, and preparation with automatic planes but no
-object catalogue. They need the 0.29.0 core, which accepts both fields.
+planned stop's explicit depth preserved, and preparation with automatic planes but no
+object catalogue. Custom-mask tests prepare smaller masks of the source's shape,
+reject wrong shapes and missing files, and cover replacement, reload, removal,
+undo and camera refits. Named override entry tests cover blank names, invalid
+distances, and updates to an existing name despite case or spacing differences.
+
+The custom-plane validation pass also prepared the real Big Q image with a
+smaller mask at 350 pc (1.2% coverage), then separately gave LBN 587 a distance
+of 600 pc, lifting it from the background (12.8% coverage). Both native scenes
+rendered frames. The Mac UI was checked for named override entry, mask import,
+and editing the mask's name and distance. All 213 native tests and the universal
+Release build and unsigned bundle validation passed on Seiza 0.30.0.
 
 The `92b1604` regression pass additionally checks an unfit edge framing and its
 successful immutable refit, matching Swift/native zoom and growth bounds,

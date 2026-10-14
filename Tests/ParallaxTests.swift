@@ -407,7 +407,7 @@ final class ParallaxTests: XCTestCase {
         }
         XCTAssertNil(object["introCard"]); XCTAssertNil(object["outroCard"])
         for key in ["image", "wcs", "distanceFocus", "distanceParsecs", "smallStars", "online", "catalogDirectory", "autoTour", "dustMap",
-                    "autoPlanes", "distanceOverrides"] {
+                    "autoPlanes", "distanceOverrides", "planes"] {
             XCTAssertNil(object[key], key)
         }
         XCTAssertEqual(object["watermark"] as? Bool, false)
@@ -635,6 +635,108 @@ final class ParallaxTests: XCTestCase {
         // A distance by name needs the catalogue to find the object.
         request.scene.distanceOverrides = [ParallaxDistanceOverride(object: "NGC 7023", distanceParsecs: 150)]
         XCTAssertThrowsError(try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in }))
+    }
+
+    private func planeMask(in files: ParallaxFiles, name: String = "cloud", width: Int = 48, height: Int = 32) throws -> URL {
+        var pixels = Data(count: width * height * 4)
+        for y in 0..<height {
+            for x in 0..<width {
+                let value: UInt8 = (x - width / 2) * (x - width / 2) + (y - height / 2) * (y - height / 2) < 36 ? 255 : 0
+                let i = (y * width + x) * 4
+                pixels[i] = value; pixels[i + 1] = value; pixels[i + 2] = value; pixels[i + 3] = 255
+            }
+        }
+        let url = files.directory.appendingPathComponent(name + ".png")
+        try ImageFileWriter.write(XCTUnwrap(SeizaCore.makeRGBA8Image(data: pixels, width: width, height: height)), to: url, format: .png)
+        return url
+    }
+
+    private func planeFixture() throws -> (ParallaxFiles, ParallaxRequest) {
+        let (files, request) = try fixture()
+        // The core drops a region with no distinct light to lift. Give the
+        // selected mask a bright cloud over the smooth background.
+        var pixels = Data(count: 96 * 64 * 4)
+        for y in 0..<64 {
+            for x in 0..<96 {
+                let r2 = Double((x - 48) * (x - 48) + (y - 32) * (y - 32))
+                let cloud = UInt8(120 * exp(-r2 / 40))
+                let i = (y * 96 + x) * 4
+                pixels[i] = 20 + cloud; pixels[i + 1] = 30 + cloud; pixels[i + 2] = 25 + cloud; pixels[i + 3] = 255
+            }
+        }
+        try ImageFileWriter.write(XCTUnwrap(SeizaCore.makeRGBA8Image(data: pixels, width: 96, height: 64)),
+            to: URL(fileURLWithPath: request.inputs.starless!), format: .png)
+        return (files, request)
+    }
+
+    func testCustomMaskPlaneEncodingValidationAndNativePreparation() throws {
+        let (files, original) = try planeFixture()
+        let mask = try planeMask(in: files)
+        var composition = ParallaxComposition()
+        let plane = ParallaxMaskPlane(mask: mask.path, distanceParsecs: 150, name: "My cloud")
+        composition.scene.planes = [plane]
+        let encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(composition.scene)) as? [String: Any])
+        let row = try XCTUnwrap((encoded["planes"] as? [[String: Any]])?.first)
+        XCTAssertEqual(row["mask"] as? String, mask.path)
+        XCTAssertEqual(row["distanceParsecs"] as? Double, 150)
+        XCTAssertEqual(row["name"] as? String, "My cloud")
+        XCTAssertNil(row["id"], "The native strict JSON contract must not receive editor UUIDs")
+        let restored = try JSONDecoder().decode(ParallaxSceneSettings.self, from: JSONEncoder().encode(composition.scene))
+        XCTAssertEqual(restored.planes.first?.mask, mask.path)
+        XCTAssertEqual(restored.planes.first?.distanceParsecs, 150)
+        for value in [0, -1, Double.infinity, Double.nan] {
+            composition.scene.planes[0].distanceParsecs = value
+            XCTAssertNotNil(composition.validationMessage)
+        }
+        composition.scene.planes[0] = plane
+        composition.scene.planes[0].name = "  "
+        XCTAssertNotNil(composition.validationMessage)
+        composition.scene.planes[0] = plane
+        XCTAssertNil(composition.validationMessage)
+
+        var request = original
+        request.scene.planes = [plane]
+        XCTAssertFalse(request.scene.autoPlanes)
+        let video = try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in })
+        let actual = try XCTUnwrap(video.summary.planes?.first)
+        XCTAssertEqual(actual.name, "My cloud"); XCTAssertEqual(actual.distanceParsecs, 150)
+        XCTAssertEqual(actual.basis, "given"); XCTAssertNil(actual.object)
+        XCTAssertGreaterThan(actual.coverage, 0.05); XCTAssertLessThan(actual.coverage, 0.1)
+        XCTAssertEqual(try video.frame(0).width, 66)
+
+        request.scene.planes[0].mask = try planeMask(in: files, name: "square", width: 32, height: 32).path
+        XCTAssertThrowsError(try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in })) {
+            XCTAssertTrue($0.localizedDescription.contains("My cloud"), $0.localizedDescription)
+            XCTAssertTrue($0.localizedDescription.contains("shape"), $0.localizedDescription)
+        }
+        request.scene.planes[0].mask = files.directory.appendingPathComponent("missing.png").path
+        XCTAssertThrowsError(try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in }))
+        XCTAssertEqual(try video.frame(0).width, 66, "Failed preparations leave the immutable prior handle usable")
+    }
+
+    @MainActor
+    func testNamedDistanceEntryValidatesAndUpdatesExistingNames() async throws {
+        let (files, request) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        let session = ParallaxSession(sourceURL: URL(fileURLWithPath: request.inputs.image), processing: .default, wcs: request.inputs.wcs)
+        defer { session.close() }
+        try await waitUntil { !session.isBusy }
+        XCTAssertTrue(session.addDistanceOverride(object: "  NGC 7000  ", parsecs: 600))
+        XCTAssertEqual(session.unlistedDistances, [ParallaxDistanceOverride(object: "NGC 7000", distanceParsecs: 600)])
+        XCTAssertTrue(session.addDistanceOverride(object: "ngc7000", parsecs: 700))
+        XCTAssertEqual(session.composition.scene.distanceOverrides.count, 1)
+        XCTAssertEqual(session.composition.scene.givenDistance(for: "NGC 7000"), 700)
+        for value in [0, -1, Double.infinity, Double.nan] {
+            XCTAssertFalse(session.addDistanceOverride(object: "IC 1396", parsecs: value))
+        }
+        XCTAssertFalse(session.addDistanceOverride(object: " \n", parsecs: 500))
+        XCTAssertEqual(session.composition.scene.distanceOverrides.count, 1)
+        session.undo()
+        XCTAssertEqual(session.composition.scene.givenDistance(for: "ngc7000"), 600)
+        session.clearDistance(for: "ngc7000")
+        XCTAssertTrue(session.composition.scene.distanceOverrides.isEmpty)
+        session.undo()
+        XCTAssertEqual(session.composition.scene.givenDistance(for: "NGC 7000"), 600)
     }
 
     func testDustMapPathIsOmittedUntilChosen() throws {
@@ -877,6 +979,52 @@ final class ParallaxTests: XCTestCase {
         let deadline = ContinuousClock.now + .seconds(10)
         while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
         XCTAssertTrue(condition(), "Timed out waiting for the parallax session")
+    }
+
+    @MainActor
+    func testCustomPlaneSelectionEditsReplacementAndUndoRebuildTheScene() async throws {
+        let (files, request) = try planeFixture()
+        let mask = try planeMask(in: files)
+        let replacement = try planeMask(in: files, name: "replacement")
+        let session = ParallaxSession(sourceURL: URL(fileURLWithPath: request.inputs.image), processing: .default, wcs: request.inputs.wcs)
+        defer { session.close(); withExtendedLifetime(files) {} }
+        try await waitUntil { !session.isBusy }
+        session.importLayer(URL(fileURLWithPath: request.inputs.starless!), starless: true)
+        try await waitUntil { !session.isBusy }
+        session.importLayer(URL(fileURLWithPath: request.inputs.stars!), starless: false)
+        try await waitUntil { !session.isBusy }
+        session.layersAligned = true
+        session.edit { $0.width = 80; $0.height = 60; $0.seconds = 0.5; $0.scene.distanceParsecs = 400 }
+        session.preparePreview()
+        try await waitUntil { !session.isBusy }
+        XCTAssertTrue(session.hasScene, session.error ?? "Preparation failed")
+        session.selectPlaneMask(ParallaxScopedURL(mask))
+        XCTAssertFalse(session.hasScene)
+        let id = try XCTUnwrap(session.composition.scene.planes.first?.id)
+        session.editPlane(id) { $0.distanceParsecs = 150; $0.name = "Foreground" }
+        session.preparePreview()
+        try await waitUntil { !session.isBusy }
+        XCTAssertTrue(session.hasPreview, session.error ?? "Mask preparation failed")
+        XCTAssertEqual(session.summary?.planes?.first?.name, "Foreground")
+        XCTAssertEqual(session.summary?.planes?.first?.distanceParsecs, 150)
+        session.reloadPlane(id)
+        XCTAssertFalse(session.hasScene, "Reload must reread masks edited outside the app")
+        session.selectPlaneMask(ParallaxScopedURL(replacement), replacing: id)
+        XCTAssertEqual(session.composition.scene.planes.first?.id, id)
+        XCTAssertEqual(session.composition.scene.planes.first?.name, "Foreground")
+        session.undo()
+        XCTAssertEqual(session.composition.scene.planes.first?.mask, mask.path)
+        session.removePlane(id)
+        XCTAssertTrue(session.composition.scene.planes.isEmpty)
+        session.undo()
+        XCTAssertEqual(session.composition.scene.planes.first?.mask, mask.path)
+        session.preparePreview()
+        try await waitUntil { !session.isBusy }
+        XCTAssertTrue(session.hasPreview, session.error ?? "Undo lost access to the mask")
+        session.edit { $0.zoom = 1.2 }
+        try await waitUntil { !session.isReconfiguring }
+        XCTAssertTrue(session.hasScene)
+        XCTAssertEqual(session.summary?.planes?.first?.distanceParsecs, 150)
     }
 
     private func verifyMovie(codec: NativeVideoExporter.Codec) async throws {

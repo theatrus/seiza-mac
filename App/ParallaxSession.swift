@@ -90,6 +90,9 @@ final class ParallaxSession: ObservableObject {
     // Keep security scopes for as long as any scene/refit needs those files.
     private var sceneResources: [ParallaxScopedURL] = []
     private var selectedInputs: [InputFile: ParallaxScopedURL] = [:]
+    // Retain previous selections too: undo may restore a removed/replaced mask.
+    // Native tasks capture these scopes before leaving the main actor.
+    private var maskFiles: [String: ParallaxScopedURL] = [:]
     private var refitTask: Task<Void, Never>?
     private var refitSignal: ParallaxCancellation?
     private var refitRequested = false
@@ -379,6 +382,55 @@ final class ParallaxSession: ObservableObject {
     func setDistance(_ parsecs: Double, for object: String) { edit { $0.scene.setDistance(parsecs, for: object) } }
     func clearDistance(for object: String) { edit { $0.scene.clearDistance(for: object) } }
 
+    @discardableResult
+    func addDistanceOverride(object: String, parsecs: Double) -> Bool {
+        guard !closed, !isBusy else { return false }
+        guard !object.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              parsecs.isFinite, parsecs > 0 else {
+            error = "Enter a catalogue object name and a positive, finite distance in parsecs."
+            return false
+        }
+        error = nil
+        setDistance(parsecs, for: object)
+        return true
+    }
+
+    func choosePlaneMask(replacing id: UUID? = nil) {
+        guard sourceReady, !closed, !isBusy else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.png, .jpeg, .tiff, .fits, .xisf]
+        panel.message = "Choose a mask: white lifts a region onto this plane, black leaves it behind. Use the source image's aspect ratio; floating-point samples must be between 0 and 1."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        selectPlaneMask(ParallaxScopedURL(url), replacing: id)
+    }
+    func selectPlaneMask(_ access: ParallaxScopedURL, replacing id: UUID? = nil) {
+        guard sourceReady, !closed, !isBusy else { return }
+        if let id, !composition.scene.planes.contains(where: { $0.id == id }) { return }
+        maskFiles[access.url.path] = access
+        let previous = composition
+        let distance = summary?.backgroundDistanceParsecs ?? composition.scene.distanceParsecs ?? 1000
+        edit { draft in
+            if let id, let index = draft.scene.planes.firstIndex(where: { $0.id == id }) {
+                draft.scene.planes[index].mask = access.url.path
+            } else {
+                draft.scene.planes.append(ParallaxMaskPlane(mask: access.url.path, distanceParsecs: distance,
+                    name: access.url.deletingPathExtension().lastPathComponent))
+            }
+        }
+        // Choosing the same path again also reloads an externally edited mask.
+        if composition == previous { invalidate(scene: true) }
+    }
+    func editPlane(_ id: UUID, _ body: (inout ParallaxMaskPlane) -> Void) {
+        edit { draft in
+            if let index = draft.scene.planes.firstIndex(where: { $0.id == id }) { body(&draft.scene.planes[index]) }
+        }
+    }
+    func removePlane(_ id: UUID) { edit { $0.scene.planes.removeAll { $0.id == id } } }
+    func reloadPlane(_ id: UUID) {
+        guard !closed, !isBusy, composition.scene.planes.contains(where: { $0.id == id }) else { return }
+        invalidate(scene: true)
+    }
+
     func pickDistanceReference() { pickingDestination = false; pickingDistance = true; showsSource = true }
 
     func chooseLayer(starless isStarless: Bool) {
@@ -472,7 +524,7 @@ final class ParallaxSession: ObservableObject {
     }
 
     private func resources() -> [ParallaxScopedURL] {
-        Array(selectedInputs.values) + [CatalogAccess.resolve().map(ParallaxScopedURL.init)].compactMap { $0 }
+        Array(selectedInputs.values) + Array(maskFiles.values) + [CatalogAccess.resolve().map(ParallaxScopedURL.init)].compactMap { $0 }
     }
 
     private func begin(_ message: String) -> (ParallaxCancellation, Int) {
