@@ -49,7 +49,7 @@ an itinerary, not a full project: it does not embed images, bookmarks, labels,
 scene overrides, or export preferences.
 
 The current workspace includes [dust maps](#dust-maps), introduced in Seiza
-0.26.0 and retained in the published 0.29.1 C ABI, and
+0.26.0 and retained in the published 0.30.0 C ABI, and
 [depth planes](#depth-planes), introduced in Seiza 0.29.0.
 
 ## Current upstream feature coverage
@@ -64,9 +64,9 @@ The current workspace includes [dust maps](#dust-maps), introduced in Seiza
 | Catalogues | Existing app catalogue location; focused offline-distance download from Settings or Source; installed stellar count and magnitude coverage; optional object catalogue, object-distance and star-distance file overrides. |
 | Fly In | Focus, whole-image/focus start, dolly, pan, opening zoom, end lens multiplier, start/end roll, sideways swing and direction, smooth/linear easing, duration. |
 | Tour generation | Automatic or limited target count, default hold seconds, motion amount. All returned stops remain editable. |
-| Tour stops | Name, independent on-screen title, focus, dolly, zoom, pan, unwrapped roll, incoming travel seconds, hold seconds, held spin degrees, and push through the remaining depth. |
+| Tour stops | Name, independent on-screen title, an optional card image shown in place of the title, focus, dolly, zoom, pan, unwrapped roll, incoming travel seconds, hold seconds, held spin degrees, and push through the remaining depth. |
 | Tour motion | Overall zoom, glide through holds, fading stop titles, and seamless looping with an automatic return when needed. CW/CCW shortcuts distinguish travel turns from held spins. |
-| Labels | Depth-aware catalogue labels and density; custom text, source x/y/radius and color; optional editable credit. |
+| Labels | Depth-aware catalogue labels and density; custom text, source x/y/radius and color; optional editable credit, with a logo image in a chosen corner, its height and the opacity of both; opening and closing title cards and how long each shows. |
 | Output | 720p, 1080p, 1440p, 4K, orientation swap, custom even dimensions up to 3840 per side, 24/30/60 fps, Standard/High rendering, star growth limit and fade threshold. |
 | Fit feedback | Requested versus fitted zoom, pan, lead, sideways motion, and per-stop zoom/pan. `fit.inside` drives a persistent warning below the preview and in Camera when any frames still extend beyond the image. |
 | Native encoding | Silent SDR MP4 through AVFoundation/VideoToolbox, H.264 or HEVC, bounded pixel-buffer pool, hardware acceleration allowed with native software fallback. |
@@ -84,7 +84,12 @@ is a cut; upstream now handles it without unbounded camera speeds.
 gentle inward zoom. The default 0.2 maintains gentle motion. Spinning stops
 suppress the usual glide around their own target. The
 final hold slows to rest when looping is off. Stop titles fade in and out during
-held stops, independently of catalogue labels. The first stop's incoming travel is inactive. Total duration is all holds plus the
+held stops, independently of catalogue labels. A stop's card, a PNG or TIFF
+with transparency, shows in the same window in place of its title, whether
+or not stop titles are on. Opening and closing cards are fitted inside the
+frame, so make them the frame's size for sharp lettering; the opening card
+fades out after the start, the closing card fades in for the end, and a
+looping tour shows them across its join. The first stop's incoming travel is inactive. Total duration is all holds plus the
 incoming travel of every stop after the first. Time values remain independent
 of frame counts; the prepared summary determines the exported frame count.
 

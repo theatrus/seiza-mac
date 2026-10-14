@@ -79,7 +79,8 @@ a plane named after a catalogued object takes a distance of your own.
    Review the candidate, click **Apply Tour**, then edit the stops, motion, titles,
    and looping. Click **Prepare Preview** to build the scene; subsequent camera
    edits update the preview without repeating star detection or distance lookup.
-4. **Export the video.** Add annotations and credits in **Labels**. In **Output**,
+4. **Export the video.** Add annotations, a credit and logo, and title cards in
+   **Labels**. In **Output**,
    choose dimensions, frame rate, H.264 or HEVC, and quality, then click
    **Export Video…**. Rendering and encoding run locally.
 
@@ -337,8 +338,8 @@ DerivedData/Build/Products/Debug/Seiza.app
 
 Open `Seiza.xcodeproj` to run and sign it with a local development team.
 
-The app uses published `seiza-cabi` 0.29.1, `seiza` 0.29.1,
-`seiza-parallax` 0.6.1, `seiza-stacking` 0.31.0 and `seiza-download` 0.8.0, with dust maps, depth planes and
+The app uses published `seiza-cabi` 0.30.0, `seiza` 0.30.0,
+`seiza-parallax` 0.7.0, `seiza-stacking` 0.32.0 and `seiza-download` 0.8.0, with dust maps, depth planes and
 image reading and writing through `seiza-image-io`. Library and bridge header
 must be updated together. About reports the linked release version and source
 commit.

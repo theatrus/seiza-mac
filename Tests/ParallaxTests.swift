@@ -402,14 +402,94 @@ final class ParallaxTests: XCTestCase {
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         for key in ["start", "dolly", "truck", "truckAngleDegrees", "pan", "zoom", "zoomEnd", "rotateDegrees",
                     "easing", "quality", "growthLimit", "fadeFrom", "tour", "tourGlide", "tourTitles", "tourLoop", "seconds", "fps", "size",
-                    "overlay", "overlayDensity", "labels", "labelColor", "watermark"] {
+                    "overlay", "overlayDensity", "labels", "labelColor", "watermark", "cardSeconds"] {
             XCTAssertNotNil(object[key], key)
         }
+        XCTAssertNil(object["introCard"]); XCTAssertNil(object["outroCard"])
         for key in ["image", "wcs", "distanceFocus", "distanceParsecs", "smallStars", "online", "catalogDirectory", "autoTour", "dustMap",
                     "autoPlanes", "distanceOverrides"] {
             XCTAssertNil(object[key], key)
         }
         XCTAssertEqual(object["watermark"] as? Bool, false)
+    }
+
+    func testCreditLogoAndCardsEncodeForTheNativeCore() throws {
+        var composition = ParallaxComposition()
+        func settings() throws -> [String: Any] {
+            let data = try JSONEncoder().encode(composition.videoSettings(preview: false))
+            return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        }
+        // The credit alone stays plain text, as before.
+        XCTAssertEqual(try settings()["watermark"] as? Bool, false)
+        composition.creditEnabled = true
+        XCTAssertEqual(try settings()["watermark"] as? String, "Rendered with seiza.fyi")
+        // A logo, or a corner of the user's, sends the whole watermark.
+        composition.logoPath = "/logo.png"; composition.watermarkCorner = "topLeft"
+        let styled = try XCTUnwrap(try settings()["watermark"] as? [String: Any])
+        XCTAssertEqual(styled["text"] as? String, "Rendered with seiza.fyi")
+        XCTAssertEqual(styled["image"] as? String, "/logo.png")
+        XCTAssertEqual(styled["corner"] as? String, "topLeft")
+        XCTAssertEqual(styled["size"] as? Double, 0.06); XCTAssertEqual(styled["opacity"] as? Double, 0.8)
+        composition.creditEnabled = false
+        XCTAssertNil(try XCTUnwrap(try settings()["watermark"] as? [String: Any])["text"])
+        composition.watermarkOpacity = 2
+        XCTAssertNotNil(composition.validationMessage)
+        composition.watermarkOpacity = 0.8; composition.cardSeconds = 0
+        XCTAssertNotNil(composition.validationMessage)
+        composition.cardSeconds = 4
+        XCTAssertNil(composition.validationMessage)
+        // Cards travel with the settings, a stop's with the stop.
+        composition.motion = .tour; composition.introCard = "/start.png"; composition.stops[1].card = "/stop.png"
+        let object = try settings()
+        XCTAssertEqual(object["introCard"] as? String, "/start.png"); XCTAssertNil(object["outroCard"])
+        XCTAssertEqual(object["cardSeconds"] as? Double, 4)
+        let tour = try XCTUnwrap(object["tour"] as? [[String: Any]])
+        XCTAssertNil(tour[0]["card"]); XCTAssertEqual(tour[1]["card"] as? String, "/stop.png")
+        let decoded = try JSONDecoder().decode(ParallaxStop.self, from: JSONEncoder().encode(composition.stops[1]))
+        XCTAssertEqual(decoded.card, "/stop.png")
+        // A stop the fit flies less far is reported.
+        let fit = try JSONDecoder().decode(ParallaxFit.self, from: Data(#"""
+            {"zoom":{"asked":1,"used":1},"pan":{"asked":0,"used":0},"lead":{"asked":1,"used":1},
+             "truck":{"asked":0,"used":0},"inside":true,"stops":[
+             {"zoom":{"asked":1,"used":1},"pan":{"asked":0,"used":0}},
+             {"zoom":{"asked":3.2,"used":4},"pan":{"asked":0.12,"used":0.66},"dolly":{"asked":0.88,"used":0.34}}]}
+            """#.utf8))
+        XCTAssertTrue(fit.adjustments.contains("Stop 2 dolly: 0.88 → 0.34"), "\(fit.adjustments)")
+    }
+
+    func testCardsAndLogoAreDrawnOverTheFrames() throws {
+        let (files, request) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        func png(_ name: String, width: Int, height: Int, color: [UInt8]) throws -> String {
+            var data = Data(count: width * height * 4)
+            for i in 0..<(width * height) { for channel in 0..<4 { data[i * 4 + channel] = color[channel] } }
+            let url = files.directory.appendingPathComponent(name)
+            try ImageFileWriter.write(XCTUnwrap(SeizaCore.makeRGBA8Image(data: data, width: width, height: height)),
+                                      to: url, format: .png)
+            return url.path
+        }
+        var composition = ParallaxComposition()
+        composition.introCard = try png("card.png", width: 66, height: 48, color: [0, 0, 255, 255])
+        composition.cardSeconds = 0.2
+        composition.logoPath = try png("logo.png", width: 40, height: 10, color: [0, 255, 0, 255])
+        composition.watermarkCorner = "topLeft"; composition.watermarkSize = 0.25; composition.watermarkOpacity = 1
+        var carded = request
+        carded.video.introCard = composition.introCard; carded.video.cardSeconds = composition.cardSeconds
+        carded.video.watermark = composition.watermark
+        var warnings: [String] = []
+        let video = try ParallaxCore.prepare(carded, cancellation: ParallaxCancellation()) {
+            if $0.kind == "warning", let message = $0.message { warnings.append(message) }
+        }
+        func pixel(_ frame: Int, _ x: Int, _ y: Int) throws -> [UInt8] {
+            let data = try XCTUnwrap(video.frame(frame).dataProvider?.data as Data?)
+            let i = (y * 66 + x) * 4
+            return [data[i], data[i + 1], data[i + 2]]
+        }
+        let last = video.summary.frames - 1
+        XCTAssertEqual(try pixel(0, 50, 40), [0, 0, 255], "The opening card covers the first frame")
+        XCTAssertNotEqual(try pixel(last, 50, 40), [0, 0, 255], "and is gone by the end")
+        XCTAssertEqual(try pixel(last, 20, 16), [0, 255, 0], "The logo sits a label's height in from the top-left corner")
+        XCTAssertTrue(warnings.contains { $0.contains("transparency") }, "An opaque card is warned of: \(warnings)")
     }
 
     func testDustMapsSwapReadBackAndWriteWithoutPreparingAgain() throws {
