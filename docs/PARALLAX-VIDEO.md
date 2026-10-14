@@ -49,7 +49,7 @@ an itinerary, not a full project: it does not embed images, bookmarks, labels,
 scene overrides, or export preferences.
 
 The current workspace includes [dust maps](#dust-maps), introduced in Seiza
-0.26.0 and retained in the published 0.29.1 C ABI, and
+0.26.0 and retained in the published 0.30.0 C ABI, and
 [depth planes](#depth-planes), introduced in Seiza 0.29.0.
 
 ## Current upstream feature coverage
