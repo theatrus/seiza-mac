@@ -41,7 +41,14 @@ an imported stars layer is retried only after the user confirms its alignment.
 Preview and export use the same fallback, and the activity log records the retry
 and outcome. Existing WCS is reused without solving again. Automatic separation
 has no imported stars file to retry and retains upstream's original-image solve.
-Generation options affect only the next candidate.
+Generation options affect only the next candidate. Once a scene is prepared,
+generation plans on it instead (`seiza_parallax_plan_scene_tour_json`, from
+Seiza 0.30.1): each stop is framed at the depth of the plane the scene shows
+its target on, as an automatic tour of that scene would be. Applying such a
+tour keeps the scene's distance reference, so the scene is not prepared again,
+and each stop keeps its plane's depth until its point moves. A tour planned from
+the catalogue, or loaded from a file, leaves each stop's depth to the plane under
+its point.
 
 Tour JSON can be loaded and saved. It retains every stop field and the scene's
 independent distance reference; the app also saves optional `tourGlide`, `tourTitles`, and `tourLoop`. Older JSON remains readable. It is

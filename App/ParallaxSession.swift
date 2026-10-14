@@ -70,6 +70,9 @@ final class ParallaxSession: ObservableObject {
     @Published var codec = NativeVideoExporter.Codec.h264
     @Published var tourOptions = ParallaxTourOptions()
     @Published private(set) var candidate: ParallaxTourPlan?
+    /// Whether the candidate was planned on the prepared scene, whose
+    /// distance it keeps.
+    private var candidateOnScene = false
     @Published private(set) var exportedURL: URL?
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
@@ -517,6 +520,25 @@ final class ParallaxSession: ObservableObject {
               tourOptions.motion.isFinite, tourOptions.motion >= 0 else {
             error = "Tour hold and motion must be finite, nonnegative numbers."; return
         }
+        // With a prepared scene, plan on it: stops on depth planes are framed
+        // at their planes' depths, as an automatic tour of the scene would be.
+        if let scene = sceneVideo {
+            let settings = ParallaxScenePlanSettings(size: "\(composition.width)x\(composition.height)", autoTour: tourOptions)
+            let (signal, generation) = begin("Planning tour on the prepared scene…")
+            task = Task {
+                do {
+                    let plan = try await Task.detached(priority: .userInitiated) {
+                        try ParallaxCore.planOnScene(scene, settings: settings, cancellation: signal)
+                    }.value
+                    try signal.check()
+                    guard !closed, generation == revision else { return }
+                    candidate = plan; candidateOnScene = true
+                    status = "Generated \(plan.tour.count) stops on the prepared scene. Apply the tour or keep your draft."
+                    finish(signal, error: nil)
+                } catch { finish(signal, error: error) }
+            }
+            return
+        }
         do {
             var request = try request(preview: false)
             request.autoTour = tourOptions
@@ -538,7 +560,7 @@ final class ParallaxSession: ObservableObject {
                     }.value
                     try signal.check()
                     guard !closed, generation == revision else { return }
-                    wcs = result.1; candidate = result.0
+                    wcs = result.1; candidate = result.0; candidateOnScene = false
                     status = "Generated \(result.0.tour.count) stops. Apply the tour or keep your draft."
                     finish(signal, error: nil)
                 } catch { finish(signal, error: error) }
@@ -548,16 +570,13 @@ final class ParallaxSession: ObservableObject {
 
     func applyCandidate() {
         guard let plan = candidate else { return }
-        edit {
-            $0.motion = .tour; $0.stops = plan.tour
-            $0.scene.distanceFocus = plan.focus; $0.distanceName = plan.focusName
-            if let glide = plan.tourGlide { $0.tourGlide = glide }
-            if let titles = plan.tourTitles { $0.tourTitles = titles }
-            if let loop = plan.tourLoop { $0.tourLoop = loop }
-        }
-        selectedStop = plan.tour.first?.id; candidate = nil
+        // A plan made on the prepared scene keeps the scene's distance; taking
+        // the plan's focus would prepare the scene again.
+        let onScene = candidateOnScene
+        edit { $0.applyTour(plan, onScene: onScene) }
+        selectedStop = plan.tour.first?.id; candidate = nil; candidateOnScene = false
     }
-    func discardCandidate() { candidate = nil }
+    func discardCandidate() { candidate = nil; candidateOnScene = false }
 
     func preparePreview() {
         guard canPrepare else { return }
@@ -669,12 +688,9 @@ final class ParallaxSession: ObservableObject {
             let access = ParallaxScopedURL(url)
             let plan = try withExtendedLifetime(access) { try JSONDecoder().decode(ParallaxTourPlan.self, from: Data(contentsOf: url)) }
             guard plan.schemaVersion == 1 else { throw SeizaCoreError.message("Unsupported tour schema.") }
-            var draft = composition; draft.motion = .tour; draft.stops = plan.tour; draft.scene.distanceFocus = plan.focus
-            if let glide = plan.tourGlide { draft.tourGlide = glide }
-            if let titles = plan.tourTitles { draft.tourTitles = titles }
-            if let loop = plan.tourLoop { draft.tourLoop = loop }
+            var draft = composition; draft.applyTour(plan, onScene: false)
             if let message = draft.validationMessage { throw SeizaCoreError.message(message) }
-            candidate = plan; status = "Tour loaded. Apply it to replace the current draft."
+            candidate = plan; candidateOnScene = false; status = "Tour loaded. Apply it to replace the current draft."
         } catch { self.error = error.localizedDescription }
     }
 

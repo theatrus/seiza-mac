@@ -5,7 +5,9 @@ import Foundation
 struct ParallaxStop: Codable, Equatable, Identifiable {
     var id = UUID()
     var name: String? = "Whole Image"
-    var focus: [Double]?
+    /// The place the stop centres. Moving it drops the depth it was planned
+    /// at, so the core takes the plane the image shows at the new place.
+    var focus: [Double]? { didSet { if focus != oldValue { depthParsecs = nil } } }
     var dolly = 0.0
     var zoom = 1.0
     var rotateDegrees = 0.0
@@ -18,9 +20,13 @@ struct ParallaxStop: Codable, Equatable, Identifiable {
     /// An image with transparency shown during the stop in place of its
     /// title, with or without stop titles.
     var card: String?
+    /// The distance of the plane the stop centres its place on, as a tour
+    /// planned on the prepared scene gives it; the plane the image shows at
+    /// the place when nil.
+    var depthParsecs: Double?
 
     enum CodingKeys: String, CodingKey {
-        case name, focus, dolly, zoom, rotateDegrees, pan, travel, hold, spinDegrees, push, title, card
+        case name, focus, dolly, zoom, rotateDegrees, pan, travel, hold, spinDegrees, push, title, card, depthParsecs
     }
     init(name: String? = "Whole Image", focus: [Double]? = nil, dolly: Double = 0,
          zoom: Double = 1, rotateDegrees: Double = 0, pan: Double = 0,
@@ -45,6 +51,7 @@ struct ParallaxStop: Codable, Equatable, Identifiable {
         push = try c.decodeIfPresent(Double.self, forKey: .push) ?? 0
         title = try c.decodeIfPresent(String.self, forKey: .title)
         card = try c.decodeIfPresent(String.self, forKey: .card)
+        depthParsecs = try c.decodeIfPresent(Double.self, forKey: .depthParsecs)
     }
     var displayName: String { name ?? (focus == nil ? "Whole Image" : "Custom Point") }
 }
@@ -53,6 +60,13 @@ struct ParallaxTourOptions: Codable {
     var targets: Int? = 5
     var hold = 1.5
     var motion = 1.0
+}
+
+/// How to plan a tour on a prepared scene: the frame it is for, and how many
+/// targets, how long at each and how much motion.
+struct ParallaxScenePlanSettings: Encodable {
+    var size: String
+    var autoTour: ParallaxTourOptions
 }
 
 struct ParallaxTourPlan: Codable {
@@ -242,6 +256,18 @@ struct ParallaxComposition: Equatable {
         return stops.prefix(index).reduce(0) { $0 + $1.hold }
             + stops.prefix(index + 1).dropFirst().reduce(0) { $0 + $1.travel }
     }
+    /// Take `plan`'s tour. A plan made on the prepared scene keeps the scene's
+    /// distance reference, and its stops their planes' depths. A plan from the
+    /// catalogue alone, or a saved tour, moves the distance reference to its
+    /// focus and leaves each stop's depth to the plane under its place.
+    mutating func applyTour(_ plan: ParallaxTourPlan, onScene: Bool) {
+        motion = .tour
+        stops = onScene ? plan.tour : plan.tour.map { var stop = $0; stop.depthParsecs = nil; return stop }
+        if !onScene { scene.distanceFocus = plan.focus; distanceName = plan.focusName }
+        if let glide = plan.tourGlide { tourGlide = glide }
+        if let titles = plan.tourTitles { tourTitles = titles }
+        if let loop = plan.tourLoop { tourLoop = loop }
+    }
     mutating func setSpin(at index: Int, clockwise: Bool) {
         guard stops.indices.contains(index) else { return }
         stops[index].spinDegrees = clockwise ? -360 : 360
@@ -282,7 +308,8 @@ struct ParallaxComposition: Equatable {
             for stop in stops {
                 guard point(stop.focus), [stop.dolly, stop.pan, stop.zoom, stop.rotateDegrees, stop.travel, stop.hold, stop.spinDegrees, stop.push].allSatisfy(\.isFinite),
                     (0..<1).contains(stop.dolly), (0...1).contains(stop.pan), stop.zoom > 0,
-                    (0..<1).contains(stop.push), stop.travel >= 0, stop.hold >= 0
+                    (0..<1).contains(stop.push), stop.travel >= 0, stop.hold >= 0,
+                    stop.depthParsecs.map({ $0.isFinite && $0 > 0 }) ?? true
                 else { return "Every stop needs valid framing, spin, push and nonnegative times." }
             }
         }
@@ -577,7 +604,28 @@ enum ParallaxCore {
         guard let pointer else { throw error(failure) }
         defer { seiza_string_free(pointer) }
         try cancellation.check()
-        let result = try JSONDecoder().decode(ParallaxTourPlan.self, from: Data(String(cString: pointer).utf8))
+        return try validatedPlan(String(cString: pointer))
+    }
+
+    /// A tour planned on `video`'s prepared scene, as an automatic tour of
+    /// that scene would be: each stop frames its target at the depth of the
+    /// plane the scene shows it on. The scene keeps its distance, so the
+    /// plan's focus matters only to a new preparation.
+    static func planOnScene(_ video: ParallaxVideo, settings: ParallaxScenePlanSettings,
+                            cancellation: ParallaxCancellation) throws -> ParallaxTourPlan {
+        try cancellation.check()
+        var failure: UnsafeMutablePointer<CChar>?
+        let pointer = try withExtendedLifetime(video) {
+            try json(settings).withCString { seiza_parallax_plan_scene_tour_json(video.pointer, $0, &failure) }
+        }
+        guard let pointer else { throw error(failure) }
+        defer { seiza_string_free(pointer) }
+        try cancellation.check()
+        return try validatedPlan(String(cString: pointer))
+    }
+
+    private static func validatedPlan(_ json: String) throws -> ParallaxTourPlan {
+        let result = try JSONDecoder().decode(ParallaxTourPlan.self, from: Data(json.utf8))
         guard result.schemaVersion == 1, result.tour.count >= 2 else { throw SeizaCoreError.invalidCABIResponse }
         var composition = ParallaxComposition()
         composition.motion = .tour; composition.stops = result.tour; composition.scene.distanceFocus = result.focus
