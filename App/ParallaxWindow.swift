@@ -43,6 +43,8 @@ struct ParallaxWorkspace: View {
     @ObservedObject private var setup = CatalogSetupController.shared
     @State private var inspector = "Source"
     @State private var showsActivity = false
+    @State private var distanceObject = ""
+    @State private var objectDistance = 1000.0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -282,14 +284,43 @@ struct ParallaxWorkspace: View {
                 .font(.caption).foregroundStyle(.secondary)
             ForEach(Array(session.listedPlanes.enumerated()), id: \.offset) { _, plane in planeRow(plane) }
             if let description = session.planesDescription { Text(description).font(.caption) }
-            // A distance whose object places no listed plane: it may have moved
-            // its plane within reach of the nebula, or planes may be off.
-            ForEach(session.unlistedDistances, id: \.object) { given in
+        }
+        Section("Object distances") {
+            TextField("Object name", text: $distanceObject, prompt: Text("e.g. NGC 7000"))
+            TextField("Distance (pc)", value: $objectDistance, format: .number)
+            Button("Add or Update Distance") {
+                if session.addDistanceOverride(object: distanceObject, parsecs: objectDistance) { distanceObject = "" }
+            }.disabled(distanceObject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !objectDistance.isFinite || objectDistance <= 0)
+            Text("Use any catalogue object name, including a large nebula left on the background. Enable Automatic depth planes to lift it at the given distance. Unknown names are reported when preparing the scene.")
+                .font(.caption).foregroundStyle(.secondary)
+            ForEach(session.composition.scene.distanceOverrides, id: \.object) { given in
                 HStack {
-                    Text("\(given.object): \(given.distanceParsecs, specifier: "%.0f") pc").font(.caption)
-                    Spacer()
+                    TextField("\(given.object) (pc)", value: Binding(
+                        get: { session.composition.scene.givenDistance(for: given.object) ?? given.distanceParsecs },
+                        set: { session.setDistance($0, for: given.object) }), format: .number)
                     Button("Remove") { session.clearDistance(for: given.object) }
                 }
+            }
+        }
+        Section("Custom depth planes") {
+            Button("Import Mask…") { session.choosePlaneMask() }.disabled(!session.sourceReady)
+            Text("White marks the region to lift; black stays behind. Masks may be smaller but must match the source's aspect ratio. Use values from 0 to 1 for FITS or XISF masks. Custom planes work with automatic planes on or off.")
+                .font(.caption).foregroundStyle(.secondary)
+            ForEach(session.composition.scene.planes) { plane in
+                VStack(alignment: .leading) {
+                    TextField("Name", text: planeBinding(plane, \.name))
+                    TextField("Distance (pc)", value: planeBinding(plane, \.distanceParsecs), format: .number)
+                    Text(URL(fileURLWithPath: plane.mask).lastPathComponent).font(.caption).textSelection(.enabled)
+                    HStack {
+                        Button("Replace Mask…") { session.choosePlaneMask(replacing: plane.id) }
+                        Button("Reload") { session.reloadPlane(plane.id) }
+                        Button("Remove") { session.removePlane(plane.id) }
+                    }
+                }
+            }
+            if !session.composition.scene.planes.isEmpty {
+                Text("Prepare Preview after changes. Reload after painting a mask in another app. Tour files contain camera stops; these scene settings stay in this workspace.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         DisclosureGroup("Catalogues and solving") {
@@ -336,7 +367,7 @@ struct ParallaxWorkspace: View {
                 .font(.caption).foregroundStyle(.secondary)
             Button(session.hasWCS ? "Generate Tour" : "Solve & Generate Tour", action: session.generateTour)
                 .disabled(!session.sourceReady || setup.isRunning)
-            if session.composition.scene.autoPlanes {
+            if session.composition.scene.autoPlanes || !session.composition.scene.planes.isEmpty {
                 Text("Generated framing uses catalogue distances. Preview each stop after changing depth planes; choose Follow scene depth if its distance no longer matches.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -640,6 +671,11 @@ struct ParallaxWorkspace: View {
             guard session.composition.scene.givenDistance(for: object) != nil || value != prepared else { return }
             session.setDistance(value, for: object)
         })
+    }
+
+    private func planeBinding<T>(_ plane: ParallaxMaskPlane, _ key: WritableKeyPath<ParallaxMaskPlane, T>) -> Binding<T> {
+        Binding(get: { session.composition.scene.planes.first { $0.id == plane.id }?[keyPath: key] ?? plane[keyPath: key] },
+                set: { value in session.editPlane(plane.id) { $0[keyPath: key] = value } })
     }
 
     private func inputPicker(_ kind: ParallaxSession.InputFile) -> some View {
