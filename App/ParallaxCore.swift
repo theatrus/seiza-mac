@@ -6,9 +6,6 @@ struct ParallaxStop: Codable, Equatable, Identifiable {
     var id = UUID()
     var name: String? = "Whole Image"
     var focus: [Double]?
-    /// Nil follows the prepared scene at the focus; an explicit depth is
-    /// preserved when an externally authored tour is imported and edited.
-    var depthParsecs: Double?
     var dolly = 0.0
     var zoom = 1.0
     var rotateDegrees = 0.0
@@ -21,6 +18,9 @@ struct ParallaxStop: Codable, Equatable, Identifiable {
     /// An image with transparency shown during the stop in place of its
     /// title, with or without stop titles.
     var card: String?
+    /// Nil follows the scene under the focus. Preserve an explicit depth
+    /// from a generated or imported tour until the user chooses Follow scene.
+    var depthParsecs: Double?
 
     enum CodingKeys: String, CodingKey {
         case name, focus, depthParsecs, dolly, zoom, rotateDegrees, pan, travel, hold, spinDegrees, push, title, card
@@ -58,6 +58,13 @@ struct ParallaxTourOptions: Codable {
     var targets: Int? = 5
     var hold = 1.5
     var motion = 1.0
+}
+
+/// How to plan a tour on a prepared scene: the frame it is for, and how many
+/// targets, how long at each and how much motion.
+struct ParallaxScenePlanSettings: Encodable {
+    var size: String
+    var autoTour: ParallaxTourOptions
 }
 
 struct ParallaxTourPlan: Codable {
@@ -257,6 +264,17 @@ struct ParallaxComposition: Equatable {
         guard stops.indices.contains(index) else { return 0 }
         return stops.prefix(index).reduce(0) { $0 + $1.hold }
             + stops.prefix(index + 1).dropFirst().reduce(0) { $0 + $1.travel }
+    }
+    /// Take `plan`'s tour. A plan made on the prepared scene keeps the scene's
+    /// distance reference. Imported and catalogue plans supply a new reference.
+    /// Every path preserves explicit stop depths, including externally authored ones.
+    mutating func applyTour(_ plan: ParallaxTourPlan, onScene: Bool) {
+        motion = .tour
+        stops = plan.tour
+        if !onScene { scene.distanceFocus = plan.focus; distanceName = plan.focusName }
+        if let glide = plan.tourGlide { tourGlide = glide }
+        if let titles = plan.tourTitles { tourTitles = titles }
+        if let loop = plan.tourLoop { tourLoop = loop }
     }
     mutating func setSpin(at index: Int, clockwise: Bool) {
         guard stops.indices.contains(index) else { return }
@@ -602,7 +620,28 @@ enum ParallaxCore {
         guard let pointer else { throw error(failure) }
         defer { seiza_string_free(pointer) }
         try cancellation.check()
-        let result = try JSONDecoder().decode(ParallaxTourPlan.self, from: Data(String(cString: pointer).utf8))
+        return try validatedPlan(String(cString: pointer))
+    }
+
+    /// A tour planned on `video`'s prepared scene, as an automatic tour of
+    /// that scene would be: each stop frames its target at the depth of the
+    /// plane the scene shows it on. The scene keeps its distance, so the
+    /// plan's focus matters only to a new preparation.
+    static func planOnScene(_ video: ParallaxVideo, settings: ParallaxScenePlanSettings,
+                            cancellation: ParallaxCancellation) throws -> ParallaxTourPlan {
+        try cancellation.check()
+        var failure: UnsafeMutablePointer<CChar>?
+        let pointer = try withExtendedLifetime(video) {
+            try json(settings).withCString { seiza_parallax_plan_scene_tour_json(video.pointer, $0, &failure) }
+        }
+        guard let pointer else { throw error(failure) }
+        defer { seiza_string_free(pointer) }
+        try cancellation.check()
+        return try validatedPlan(String(cString: pointer))
+    }
+
+    private static func validatedPlan(_ json: String) throws -> ParallaxTourPlan {
+        let result = try JSONDecoder().decode(ParallaxTourPlan.self, from: Data(json.utf8))
         guard result.schemaVersion == 1, result.tour.count >= 2 else { throw SeizaCoreError.invalidCABIResponse }
         var composition = ParallaxComposition()
         composition.motion = .tour; composition.stops = result.tour; composition.scene.distanceFocus = result.focus
