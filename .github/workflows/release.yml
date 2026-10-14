@@ -226,11 +226,12 @@ jobs:
             '' \
             "### New in ${version}" \
             '' \
-            '- Align directory and live stacks to one shared FITS/XISF image while keeping brightness and noise normalization specific to each channel.' \
-            '- Choose channel references automatically; shared-grid alignment tries up to five ranked lights and reports skipped candidates.' \
-            '- Resume saved shared-grid stacks with their reference metadata, and protect lights, calibration masters and alignment images from output overwrites.' \
-            '- Export, choose, reload or reset parallax dust maps in the video workspace. Camera edits are preserved when changing maps, with progress during map export.' \
-            '- Uses published Seiza/C ABI 0.27.0, stacking 0.29.0 and parallax 0.4.0.' \
+            '- Generate editable tours on a prepared scene, framing targets at the depths of its nebulae, dust clouds, custom planes and distance overrides.' \
+            '- Lift objects onto automatic depth planes, give any catalogue object a distance, and import painted masks with editable names and distances.' \
+            '- Preserve explicit per-stop depths through tour import, editing, save and rendering, or choose Follow scene depth.' \
+            '- Add a logo and credit in any corner, opening and closing title cards, and a custom card for each tour stop.' \
+            '- Keep scene-aware tour candidates consistent with scene edits, output-size changes and undo/redo while reusing the prepared scene for camera edits.' \
+            '- Uses published Seiza/C ABI 0.30.1, parallax 0.7.0, stacking 0.32.0 and image I/O 0.5.0.' \
             '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
             "- [Download the zipped application](${release_base}/Seiza-${version}-universal.zip)" \

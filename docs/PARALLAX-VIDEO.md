@@ -20,7 +20,7 @@ The release provenance above describes the shipped 0.8.0 artifacts. Shared
 stacking controls are covered in [STACKING.md](STACKING.md); the dust-map
 workspace is included and tested alongside the stacking changes.
 
-The current development build uses published core/C ABI **0.30.1**, parallax
+Seiza for Mac **0.8.2** uses published core/C ABI **0.30.1**, parallax
 **0.7.0**, stacking **0.32.0**, and image I/O **0.5.0**. Its header matches the
 published C ABI; the versioned release descriptions above are historical.
 
