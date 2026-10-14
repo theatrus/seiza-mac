@@ -20,6 +20,10 @@ The release provenance above describes the shipped 0.8.0 artifacts. Shared
 stacking controls are covered in [STACKING.md](STACKING.md); the dust-map
 workspace is included and tested alongside the stacking changes.
 
+The current development build uses published core/C ABI **0.30.0**, parallax
+**0.7.0**, stacking **0.32.0**, and image I/O **0.5.0**. Its header matches the
+published C ABI; the versioned release descriptions above are historical.
+
 ## Workspace
 
 **File → Parallax Video…** and the viewer's film button open an independent,
@@ -64,11 +68,11 @@ The current workspace includes [dust maps](#dust-maps), introduced in Seiza
 | Catalogues | Existing app catalogue location; focused offline-distance download from Settings or Source; installed stellar count and magnitude coverage; optional object catalogue, object-distance and star-distance file overrides. |
 | Fly In | Focus, whole-image/focus start, dolly, pan, opening zoom, end lens multiplier, start/end roll, sideways swing and direction, smooth/linear easing, duration. |
 | Tour generation | Automatic or limited target count, default hold seconds, motion amount. All returned stops remain editable. |
-| Tour stops | Name, independent on-screen title, an optional card image shown in place of the title, focus, dolly, zoom, pan, unwrapped roll, incoming travel seconds, hold seconds, held spin degrees, and push through the remaining depth. |
+| Tour stops | Name, independent on-screen title, an optional card image shown in place of the title, focus, optional explicit depth in parsecs or Follow scene depth, dolly, zoom, pan, unwrapped roll, incoming travel seconds, hold seconds, held spin degrees, and push through the remaining depth. |
 | Tour motion | Overall zoom, glide through holds, fading stop titles, and seamless looping with an automatic return when needed. CW/CCW shortcuts distinguish travel turns from held spins. |
 | Labels | Depth-aware catalogue labels and density; custom text, source x/y/radius and color; optional editable credit, with a logo image in a chosen corner, its height and the opacity of both; opening and closing title cards and how long each shows. |
 | Output | 720p, 1080p, 1440p, 4K, orientation swap, custom even dimensions up to 3840 per side, 24/30/60 fps, Standard/High rendering, star growth limit and fade threshold. |
-| Fit feedback | Requested versus fitted zoom, pan, lead, sideways motion, and per-stop zoom/pan. `fit.inside` drives a persistent warning below the preview and in Camera when any frames still extend beyond the image. |
+| Fit feedback | Requested versus fitted zoom, pan, lead, sideways motion, and per-stop zoom/pan/dolly. `fit.inside` drives a persistent warning below the preview and in Camera when any frames still extend beyond the image. |
 | Native encoding | Silent SDR MP4 through AVFoundation/VideoToolbox, H.264 or HEVC, bounded pixel-buffer pool, hardware acceleration allowed with native software fallback. |
 
 A stop's roll controls travel orientation; `spinDegrees` adds a turn around a held
@@ -191,9 +195,31 @@ cloud placed only by the star counts has no catalogued object, and its distance
 cannot be changed. Both settings belong to the scene, so changing either needs
 a new preparation, and both are part of undo.
 
-A planned tour gives each stop on a plane that plane's depth. The app leaves
-the depth out of its stops, so a stop always centres on the plane under its
-point, even after the planes change.
+**Camera → Stop → Follow scene depth** is the default for new stops. It omits
+`depthParsecs`, so framing follows the plane under the destination. Turn it off
+to enter a positive, finite stop depth in parsecs. Explicit depths from imported
+or generated tours survive editing, saving and rendering. These are camera
+settings: edits and undo refit the existing scene without changing its planes
+or distance reference. **Use Whole Image** clears the stop's explicit depth.
+The native activity log warns when a stop's explicit depth differs from the
+plane shown there; choose Follow scene depth to remove that override.
+
+### Remaining tour-planner API gap in 0.30.0
+
+The Rust renderer can plan against its prepared scene, but the published
+`seiza_parallax_plan_tour_json` C API still invokes the catalogue-only free
+planner. The Mac's editable generated tours therefore do not use the prepared
+planes or manual distance overrides when choosing dolly, zoom and pan. The
+Camera inspector calls out that limitation when automatic planes are enabled.
+Refitting still applies the renderer's camera fitting and reduced-fill dolly
+adjustments; that does not replace scene-aware planning.
+
+The required upstream API is a planner accepting an existing immutable
+`SeizaParallax` handle, automatic-tour options and output dimensions, returning
+the owned editable plan JSON. It should expose `Parallax::plan_tour`, support
+cancellation, and preserve the prepared scene's distance reference when the
+plan is applied. Until that API is published, preview each generated stop after
+changing depth planes. No temporary Git pin or duplicate renderer is used.
 
 ## Scene reuse and ownership
 

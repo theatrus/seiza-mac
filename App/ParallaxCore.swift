@@ -6,6 +6,9 @@ struct ParallaxStop: Codable, Equatable, Identifiable {
     var id = UUID()
     var name: String? = "Whole Image"
     var focus: [Double]?
+    /// Nil follows the prepared scene at the focus; an explicit depth is
+    /// preserved when an externally authored tour is imported and edited.
+    var depthParsecs: Double?
     var dolly = 0.0
     var zoom = 1.0
     var rotateDegrees = 0.0
@@ -20,13 +23,14 @@ struct ParallaxStop: Codable, Equatable, Identifiable {
     var card: String?
 
     enum CodingKeys: String, CodingKey {
-        case name, focus, dolly, zoom, rotateDegrees, pan, travel, hold, spinDegrees, push, title, card
+        case name, focus, depthParsecs, dolly, zoom, rotateDegrees, pan, travel, hold, spinDegrees, push, title, card
     }
     init(name: String? = "Whole Image", focus: [Double]? = nil, dolly: Double = 0,
          zoom: Double = 1, rotateDegrees: Double = 0, pan: Double = 0,
          travel: Double = 4, hold: Double = 1, spinDegrees: Double = 0, push: Double = 0, title: String? = nil,
-         card: String? = nil) {
+         card: String? = nil, depthParsecs: Double? = nil) {
         self.name = name; self.focus = focus; self.dolly = dolly; self.zoom = zoom
+        self.depthParsecs = depthParsecs
         self.rotateDegrees = rotateDegrees; self.pan = pan; self.travel = travel; self.hold = hold
         self.spinDegrees = spinDegrees; self.push = push
         self.title = title; self.card = card
@@ -35,6 +39,7 @@ struct ParallaxStop: Codable, Equatable, Identifiable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try c.decodeIfPresent(String.self, forKey: .name)
         focus = try c.decodeIfPresent([Double].self, forKey: .focus)
+        depthParsecs = try c.decodeIfPresent(Double.self, forKey: .depthParsecs)
         dolly = try c.decodeIfPresent(Double.self, forKey: .dolly) ?? 0
         zoom = try c.decodeIfPresent(Double.self, forKey: .zoom) ?? 1
         rotateDegrees = try c.decodeIfPresent(Double.self, forKey: .rotateDegrees) ?? 0
@@ -280,6 +285,9 @@ struct ParallaxComposition: Equatable {
         if motion == .tour {
             guard stops.count >= 2 else { return "A tour needs at least two stops." }
             for stop in stops {
+                if let depth = stop.depthParsecs, !depth.isFinite || depth <= 0 {
+                    return "Stop depths must be positive, finite parsec values."
+                }
                 guard point(stop.focus), [stop.dolly, stop.pan, stop.zoom, stop.rotateDegrees, stop.travel, stop.hold, stop.spinDegrees, stop.push].allSatisfy(\.isFinite),
                     (0..<1).contains(stop.dolly), (0...1).contains(stop.pan), stop.zoom > 0,
                     (0..<1).contains(stop.push), stop.travel >= 0, stop.hold >= 0

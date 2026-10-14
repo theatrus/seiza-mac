@@ -150,8 +150,8 @@ final class ParallaxTests: XCTestCase {
         XCTAssertEqual(stops[1]["rotateDegrees"] as? Double, 380)
         XCTAssertEqual(stops[1]["pan"] as? Double, 0.6)
         XCTAssertNil(stops[1]["id"])
-        // A planned stop's depth is left to the plane under its focus point.
-        XCTAssertNil(stops[1]["depthParsecs"])
+        XCTAssertEqual(stops[1]["depthParsecs"] as? Double, 2790)
+        XCTAssertNil(stops[0]["depthParsecs"], "Stops without a depth continue to follow the scene")
         XCTAssertNil(encoded["autoTour"])
         XCTAssertEqual(encoded["distanceFocus"] as? [Double], [100, 80])
         composition.setTravelTurn(at: 1, clockwise: true)
@@ -413,6 +413,52 @@ final class ParallaxTests: XCTestCase {
         XCTAssertEqual(object["watermark"] as? Bool, false)
     }
 
+    func testExplicitStopDepthSurvivesTourRoundTripAndValidates() throws {
+        let data = Data(#"{"schemaVersion":1,"focus":[100,80],"focusName":"Reference","seconds":7,"tour":[{"hold":1},{"focus":[100,80],"hold":2,"travel":4,"depthParsecs":150}]}"#.utf8)
+        let imported = try JSONDecoder().decode(ParallaxTourPlan.self, from: data)
+        var composition = ParallaxComposition()
+        composition.motion = .tour; composition.stops = imported.tour
+        composition.stops[1].title = "Edited title"
+        let saved = ParallaxTourPlan(focus: imported.focus, focusName: imported.focusName,
+            seconds: composition.duration, tour: composition.stops)
+        let restored = try JSONDecoder().decode(ParallaxTourPlan.self, from: JSONEncoder().encode(saved))
+        XCTAssertEqual(restored.tour[1].depthParsecs, 150)
+        XCTAssertEqual(restored.tour[1].title, "Edited title")
+        XCTAssertNil(restored.tour[0].depthParsecs)
+        XCTAssertNil(composition.validationMessage)
+        for depth in [0, -1, Double.infinity, Double.nan] {
+            composition.stops[1].depthParsecs = depth
+            XCTAssertEqual(composition.validationMessage, "Stop depths must be positive, finite parsec values.")
+        }
+        composition.stops[1].depthParsecs = nil
+        XCTAssertNil(composition.validationMessage)
+        let settings = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(composition.videoSettings(preview: false))) as? [String: Any])
+        XCTAssertNil((settings["tour"] as? [[String: Any]])?[1]["depthParsecs"])
+    }
+
+    func testExplicitDepthReachesNativeFitAndCanReturnToSceneDepth() throws {
+        let (files, request) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        let scene = try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in })
+        var settings = request.video
+        settings.tour = [ParallaxStop(travel: 0, hold: 0.1),
+            ParallaxStop(name: "Explicit", focus: [35, 27], dolly: 0.3, pan: 0.3, travel: 0.3, hold: 0.1, depthParsecs: 150)]
+        var warnings: [String] = []
+        let explicit = try ParallaxCore.reconfigure(scene, settings: settings, cancellation: ParallaxCancellation()) {
+            if $0.kind == "warning", let message = $0.message { warnings.append(message) }
+        }
+        XCTAssertTrue(warnings.contains { $0.contains("stop 2") && $0.contains("150 pc") }, "\(warnings)")
+        XCTAssertEqual(explicit.summary.backgroundDistanceParsecs, scene.summary.backgroundDistanceParsecs)
+        XCTAssertEqual(try explicit.frame(explicit.summary.frames - 1).width, scene.summary.width)
+        settings.tour[1].depthParsecs = nil; warnings = []
+        let following = try ParallaxCore.reconfigure(scene, settings: settings, cancellation: ParallaxCancellation()) {
+            if $0.kind == "warning", let message = $0.message { warnings.append(message) }
+        }
+        XCTAssertFalse(warnings.contains { $0.contains("is framed at") }, "\(warnings)")
+        XCTAssertEqual(following.summary.backgroundFocus, scene.summary.backgroundFocus)
+        XCTAssertEqual(try following.frame(following.summary.frames - 1).width, scene.summary.width)
+    }
+
     func testCreditLogoAndCardsEncodeForTheNativeCore() throws {
         var composition = ParallaxComposition()
         func settings() throws -> [String: Any] {
@@ -668,6 +714,16 @@ final class ParallaxTests: XCTestCase {
         XCTAssertTrue(session.hasPreview, session.error ?? "Refit failed")
         XCTAssertEqual(session.summary?.fit.zoom.asked, 1.3)
         XCTAssertEqual(session.summary?.backgroundFocus, reference)
+
+        session.edit { $0.motion = .tour; $0.stops[1].focus = [35, 27]; $0.stops[1].depthParsecs = 150 }
+        XCTAssertTrue(session.hasScene, "Stop depth changes the camera, not the prepared scene")
+        try await waitUntil { !session.isReconfiguring }
+        XCTAssertTrue(session.hasPreview, session.error ?? "Depth refit failed")
+        XCTAssertEqual(session.summary?.backgroundFocus, reference)
+        session.undo()
+        XCTAssertNil(session.composition.stops[1].depthParsecs)
+        XCTAssertTrue(session.hasScene)
+        try await waitUntil { !session.isReconfiguring }
 
         session.automaticPreview = false
         session.edit { $0.zoom = 1.5 }
