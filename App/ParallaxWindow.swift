@@ -336,6 +336,10 @@ struct ParallaxWorkspace: View {
                 .font(.caption).foregroundStyle(.secondary)
             Button(session.hasWCS ? "Generate Tour" : "Solve & Generate Tour", action: session.generateTour)
                 .disabled(!session.sourceReady || setup.isRunning)
+            if session.composition.scene.autoPlanes {
+                Text("Generated framing uses catalogue distances. Preview each stop after changing depth planes; choose Follow scene depth if its distance no longer matches.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if let candidate = session.candidate {
                 Text("\(candidate.tour.count) stops · \(candidate.seconds, specifier: "%.1f") seconds")
                 HStack {
@@ -371,9 +375,21 @@ struct ParallaxWorkspace: View {
                     .help("Shown during this stop when Show stop titles is enabled. Leave blank for no title.")
                 overlayPicker("Card", path: session.composition.stops[index].card, slot: .stop(session.composition.stops[index].id))
                     .help("An image with transparency shown during this stop in place of its title, with or without stop titles.")
-                    Button("Pick Destination") { session.pickingDistance = false; session.showsSource = true; session.pickingDestination = true }
-                Button("Use Whole Image") { session.editStop { $0.focus = nil; $0.name = "Whole Image"; $0.dolly = 0; $0.zoom = 1; $0.pan = 0 } }
+                Button("Pick Destination") { session.pickingDistance = false; session.showsSource = true; session.pickingDestination = true }
+                Button("Use Whole Image") { session.editStop { $0.focus = nil; $0.depthParsecs = nil; $0.name = "Whole Image"; $0.dolly = 0; $0.zoom = 1; $0.pan = 0 } }
                 destinationCoordinates
+                Toggle("Follow scene depth", isOn: Binding(
+                    get: { session.composition.stops[index].depthParsecs == nil },
+                    set: { follow in session.editStop {
+                        $0.depthParsecs = follow ? nil : session.summary?.backgroundDistanceParsecs ?? session.composition.scene.distanceParsecs ?? 1000
+                    } }))
+                if session.composition.stops[index].depthParsecs != nil {
+                    TextField("Stop depth (pc)", value: Binding(
+                        get: { session.composition.stops[index].depthParsecs ?? 1000 },
+                        set: { depth in session.editStop { $0.depthParsecs = depth } }), format: .number)
+                }
+                Text("Follow the plane under the destination, or give a depth for this stop's framing. This does not move the scene's planes.")
+                    .font(.caption).foregroundStyle(.secondary)
                 TextField("Travel to stop (s)", value: stopBinding(\.travel), format: .number).disabled(index == 0)
                 TextField("Hold (s)", value: stopBinding(\.hold), format: .number)
                 Text("Set hold to 0 to pass straight through. Glide, spin and push can keep a held stop moving.").font(.caption).foregroundStyle(.secondary)
