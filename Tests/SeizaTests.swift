@@ -106,6 +106,108 @@ final class ImageCollectionTests: XCTestCase {
         XCTAssertFalse(ImageCollection.isSupportedImage(URL(fileURLWithPath: "/tmp/a.svg")))
     }
 
+    func testDirectoryScanIncludesNestedImagesAndDeduplicatesOverlappingRoots() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let relativePaths = [
+            "frame10.fits", "lights/Ha/frame2.FIT", "lights/OIII/frame2.FIT",
+            "lights/nested.fits/preview.XISF", "notes.txt", "lights/.hidden.png",
+            ".hidden/frame.png", "capture.app/Contents/preview.png",
+        ]
+        for path in relativePaths {
+            let url = directory.appendingPathComponent(path)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            XCTAssertTrue(FileManager.default.createFile(atPath: url.path, contents: Data()))
+        }
+        // Directory links must not cause loops or import another copy of the tree.
+        try FileManager.default.createSymbolicLink(
+            at: directory.appendingPathComponent("lights/loop"), withDestinationURL: directory)
+
+        let scan = ImageCollection.scan(from: [
+            directory, directory.appendingPathComponent("lights/Ha"),
+            directory.appendingPathComponent("frame10.fits"),
+        ])
+
+        XCTAssertTrue(scan.includesDirectory)
+        XCTAssertEqual(scan.directories.count, 2)
+        XCTAssertEqual(scan.images, [
+            "lights/Ha/frame2.FIT", "lights/OIII/frame2.FIT", "frame10.fits",
+            "lights/nested.fits/preview.XISF",
+        ].map { directory.appendingPathComponent($0).standardizedFileURL })
+    }
+
+    func testPathGroupingKeepsRepeatedFilenamesDistinctAndNaturallyOrdersFolders() {
+        let root = URL(fileURLWithPath: "/captures/night", isDirectory: true)
+        let urls = [
+            "session10/lights/frame1.fits", "session2/lights/frame10.fits",
+            "session2/lights/frame1.fits", "frame0.fits",
+        ].map { root.appendingPathComponent($0) }
+        let collection = ImageBrowserCollection(urls: urls, directories: [root])
+
+        let groups = collection.groups(for: .path)
+
+        XCTAssertEqual(groups.map(\.title), ["night", "session2/lights", "session10/lights"])
+        XCTAssertEqual(groups.map(\.imageIndices), [[3], [2, 1], [0]])
+        XCTAssertEqual(Set(groups.map(\.id)).count, 3)
+        XCTAssertEqual(collection.groups(for: .none).flatMap(\.imageIndices), [0, 1, 2, 3])
+    }
+
+    func testPathGroupingRetainsOpenedRootEvenWhenAllImagesAreDeeplyNested() {
+        let root = URL(fileURLWithPath: "/captures/night", isDirectory: true)
+        let collection = ImageBrowserCollection(
+            urls: [root.appendingPathComponent("lights/Ha/frame.fits")], directories: [root])
+
+        XCTAssertEqual(collection.groups(for: .path).map(\.title), ["lights/Ha"])
+        XCTAssertEqual(collection.parentPaths, ["lights/Ha"])
+    }
+
+    func testPathGroupingDisambiguatesMultipleRootsAndUsesPathComponentBoundaries() {
+        let roots = ["/captures/session", "/archive/session"].map {
+            URL(fileURLWithPath: $0, isDirectory: true)
+        }
+        let collection = ImageBrowserCollection(
+            urls: [
+                roots[0].appendingPathComponent("lights/frame.fits"),
+                roots[1].appendingPathComponent("lights/frame.fits"),
+                URL(fileURLWithPath: "/captures/session-other/frame.fits"),
+            ], directories: roots)
+
+        XCTAssertEqual(collection.parentPaths, [
+            "/captures/session/lights", "/archive/session/lights", "/captures/session-other",
+        ])
+        XCTAssertEqual(Set(collection.groups(for: .path).map(\.id)).count, 3)
+    }
+
+    func testBrowserFilterGroupingUsesFilenameFiltersAndPreservesEveryImageIndex() {
+        let urls = [
+            "Ha/frame_OIII_10.fits", "OIII/frame_Ha_2.fits", "Ha/frame_OIII_2.fits",
+            "preview.png", "frame_filter_Clear_1.fits", "frame_filter_CLEAR_2.fits",
+        ].map { URL(fileURLWithPath: "/captures/\($0)") }
+        let collection = ImageBrowserCollection(urls: urls)
+
+        let groups = collection.groups(for: .filter)
+
+        XCTAssertEqual(groups.map(\.title), ["Clear", "H-alpha", "OIII", "Other"])
+        XCTAssertEqual(groups.map(\.imageIndices), [[4, 5], [1], [2, 0], [3]])
+        XCTAssertEqual(groups.flatMap(\.imageIndices).sorted(), Array(urls.indices))
+        XCTAssertEqual(Set(groups.map(\.id)).count, groups.count)
+    }
+
+    func testDirectImageGroupingUsesCommonParentAndHandlesEmptyCollections() {
+        let collection = ImageBrowserCollection(urls: [
+            URL(fileURLWithPath: "/captures/night/frame.fits"),
+            URL(fileURLWithPath: "/captures/night/lights/frame.fits"),
+        ])
+
+        XCTAssertEqual(collection.parentPaths, ["night", "lights"])
+        for grouping in ImageBrowserGrouping.allCases {
+            XCTAssertTrue(ImageBrowserCollection(urls: []).groups(for: grouping)
+                .flatMap(\.imageIndices).isEmpty)
+        }
+    }
+
     func testStackableImagesAreLimitedToLinearAstronomyFormats() {
         XCTAssertTrue(ImageCollection.isStackableImage(URL(fileURLWithPath: "/tmp/a.FITS")))
         XCTAssertTrue(ImageCollection.isStackableImage(URL(fileURLWithPath: "/tmp/a.fit")))
@@ -2236,7 +2338,9 @@ final class DocumentWindowLifecycleTests: XCTestCase {
         )
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let image = directory.appendingPathComponent("frame.png")
+        let image = directory.appendingPathComponent("night/lights/frame.png")
+        try FileManager.default.createDirectory(
+            at: image.deletingLastPathComponent(), withIntermediateDirectories: true)
         XCTAssertTrue(FileManager.default.createFile(atPath: image.path, contents: Data()))
 
         let delegate = AppDelegate()

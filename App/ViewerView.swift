@@ -151,6 +151,7 @@ private extension DeepSkyCatalog {
 
 struct ViewerView: View {
     let urls: [URL]
+    let browserCollection: ImageBrowserCollection
     let showsImageBrowser: Bool
     let exportCoordinator: ImageExportCoordinator
     let editCoordinator: ImageEditCommandCoordinator
@@ -165,9 +166,11 @@ struct ViewerView: View {
     @State private var showImageBrowser: Bool
     @State private var isDropTarget = false
     @State private var showStackWorkflow = false
+    @AppStorage private var browserGrouping: ImageBrowserGrouping
 
     init(
         urls: [URL],
+        directories: [URL] = [],
         initialIndex: Int = 0,
         showsImageBrowser: Bool = false,
         exportCoordinator: ImageExportCoordinator,
@@ -178,6 +181,10 @@ struct ViewerView: View {
         onStackComplete: @escaping (ImageStackBatchResult) -> Void = { _ in }
     ) {
         self.urls = urls
+        let collection = ImageBrowserCollection(urls: urls, directories: directories)
+        browserCollection = collection
+        let grouping = AppStorage(wrappedValue: ImageBrowserGrouping.path, "imageBrowserGrouping")
+        _browserGrouping = grouping
         self.showsImageBrowser = showsImageBrowser
         self.exportCoordinator = exportCoordinator
         self.editCoordinator = editCoordinator
@@ -185,21 +192,26 @@ struct ViewerView: View {
         self.onSelectionChange = onSelectionChange
         self.onDropURLs = onDropURLs
         self.onStackComplete = onStackComplete
-        let selectedIndex = min(max(initialIndex, 0), max(urls.count - 1, 0))
+        let order = collection.groups(for: showsImageBrowser ? grouping.wrappedValue : .none)
+            .flatMap(\.imageIndices)
+        let selectedIndex = order[min(max(initialIndex, 0), max(order.count - 1, 0))]
         _selectedIndex = State(initialValue: selectedIndex)
         _model = State(initialValue: ImageDocumentModel(url: urls[selectedIndex]))
         _showImageBrowser = State(initialValue: showsImageBrowser)
     }
 
     var body: some View {
+        let order = browsingIndices
+        let position = order.firstIndex(of: selectedIndex) ?? 0
         HSplitView {
             if showsImageBrowser && showImageBrowser {
                 ImageBrowserDrawer(
-                    urls: urls,
+                    collection: browserCollection,
+                    grouping: $browserGrouping,
                     selectedIndex: $selectedIndex,
                     select: select
                 )
-                .frame(minWidth: 170, idealWidth: 210, maxWidth: 280)
+                .frame(minWidth: 190, idealWidth: 230, maxWidth: 320)
             }
 
             ImagePageView(
@@ -208,10 +220,10 @@ struct ViewerView: View {
                 editCoordinator: editCoordinator,
                 processingClipboardCoordinator: processingClipboardCoordinator,
                 showInspector: $showInspector,
-                position: selectedIndex + 1,
+                position: position + 1,
                 itemCount: urls.count,
-                canGoPrevious: selectedIndex > 0,
-                canGoNext: selectedIndex + 1 < urls.count,
+                canGoPrevious: position > 0,
+                canGoNext: position + 1 < order.count,
                 goPrevious: { move(by: -1) },
                 goNext: { move(by: 1) }
             )
@@ -280,9 +292,16 @@ struct ViewerView: View {
         urls.filter(ImageCollection.isStackableImage)
     }
 
+    private var browsingIndices: [Int] {
+        browserCollection.groups(for: showsImageBrowser ? browserGrouping : .none)
+            .flatMap(\.imageIndices)
+    }
+
     private func move(by offset: Int) {
-        let newIndex = min(max(selectedIndex + offset, 0), urls.count - 1)
-        select(newIndex)
+        let order = browsingIndices
+        guard let position = order.firstIndex(of: selectedIndex) else { return }
+        let newPosition = min(max(position + offset, 0), order.count - 1)
+        select(order[newPosition])
     }
 
     private func select(_ index: Int) {
@@ -308,9 +327,12 @@ struct ViewerView: View {
 }
 
 private struct ImageBrowserDrawer: View {
-    let urls: [URL]
+    let collection: ImageBrowserCollection
+    @Binding var grouping: ImageBrowserGrouping
     @Binding var selectedIndex: Int
     let select: (Int) -> Void
+
+    @State private var collapsedGroups = Set<String>()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -318,66 +340,145 @@ private struct ImageBrowserDrawer: View {
                 Text("Images")
                     .font(.headline)
                 Spacer()
-                Text(urls.count.formatted())
+                Text(collection.urls.count.formatted())
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
 
+            Picker("Group by", selection: $grouping) {
+                ForEach(ImageBrowserGrouping.allCases) { option in
+                    Text(option.title).tag(option)
+                }
+            }
+            .controlSize(.small)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 10)
+            .help("Group images by folder path or filter detected in the filename")
+
             Divider()
 
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 8) {
-                        ForEach(urls.indices, id: \.self) { index in
-                            Button {
-                                select(index)
-                            } label: {
-                                ImageBrowserRow(
-                                    url: urls[index],
-                                    isSelected: index == selectedIndex
-                                )
+                        ForEach(collection.groups(for: grouping)) { group in
+                            Section {
+                                if !collapsedGroups.contains(group.id) {
+                                    ForEach(group.imageIndices, id: \.self) { index in
+                                        Button {
+                                            select(index)
+                                        } label: {
+                                            ImageBrowserRow(
+                                                url: collection.urls[index],
+                                                parentPath: grouping == .path
+                                                    ? nil : collection.parentPaths[index],
+                                                isSelected: index == selectedIndex
+                                            )
+                                        }
+                                        .buttonStyle(.plain)
+                                        .id(index)
+                                        .help(collection.urls[index].path)
+                                        .accessibilityLabel(collection.urls[index].path)
+                                        .accessibilityValue(index == selectedIndex ? "Selected" : "")
+                                    }
+                                }
+                            } header: {
+                                if grouping != .none {
+                                    groupHeader(group)
+                                }
                             }
-                            .buttonStyle(.plain)
-                            .id(index)
-                            .accessibilityLabel(urls[index].lastPathComponent)
-                            .accessibilityValue(index == selectedIndex ? "Selected" : "")
                         }
                     }
                     .padding(8)
+                    .id(grouping)
                 }
-                .onChange(of: selectedIndex) { _, newIndex in
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        proxy.scrollTo(newIndex, anchor: .center)
-                    }
-                    prefetch(around: newIndex)
+                .onAppear {
+                    revealSelection(using: proxy)
+                }
+                .onChange(of: selectedIndex) { _, _ in
+                    revealSelection(using: proxy)
+                }
+                .onChange(of: grouping) { _, _ in
+                    revealSelection(using: proxy)
                 }
             }
         }
         .background(.background)
-        .onAppear {
-            prefetch(around: selectedIndex)
-        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Image Browser")
     }
 
+    private func groupHeader(_ group: ImageBrowserGroup) -> some View {
+        let isCollapsed = collapsedGroups.contains(group.id)
+        return Button {
+            if isCollapsed {
+                collapsedGroups.remove(group.id)
+            } else {
+                collapsedGroups.insert(group.id)
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                    .font(.caption2.weight(.semibold))
+                    .frame(width: 10)
+                Image(systemName: grouping == .path ? "folder" : "camera.filters")
+                    .foregroundStyle(.secondary)
+                Text(group.title)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+                Text(group.imageIndices.count.formatted())
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(group.title)
+        .accessibilityLabel("\(group.title), \(group.imageIndices.count) images")
+        .accessibilityValue(isCollapsed ? "Collapsed" : "Expanded")
+        .accessibilityHint(isCollapsed ? "Expand group" : "Collapse group")
+    }
+
+    private func revealSelection(using proxy: ScrollViewProxy) {
+        if let group = collection.groups(for: grouping).first(where: {
+            $0.imageIndices.contains(selectedIndex)
+        }) {
+            collapsedGroups.remove(group.id)
+        }
+        let index = selectedIndex
+        // Wait for an expanded group's rows to enter the layout before scrolling.
+        DispatchQueue.main.async {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                proxy.scrollTo(index, anchor: .center)
+            }
+        }
+        prefetch(around: index)
+    }
+
     private func prefetch(around index: Int) {
-        let lowerBound = max(index - 4, urls.startIndex)
-        let upperBound = min(index + 5, urls.endIndex)
-        ImageThumbnailCache.prefetch(Array(urls[lowerBound..<upperBound]))
+        let order = collection.groups(for: grouping).flatMap(\.imageIndices)
+        guard let position = order.firstIndex(of: index) else { return }
+        let lowerBound = max(position - 4, order.startIndex)
+        let upperBound = min(position + 5, order.endIndex)
+        ImageThumbnailCache.prefetch(order[lowerBound..<upperBound].map { collection.urls[$0] })
     }
 }
 
 private struct ImageBrowserRow: View {
     let url: URL
+    let parentPath: String?
     let isSelected: Bool
 
     @StateObject private var model: ImageThumbnailModel
 
-    init(url: URL, isSelected: Bool) {
+    init(url: URL, parentPath: String?, isSelected: Bool) {
         self.url = url
+        self.parentPath = parentPath
         self.isSelected = isSelected
         _model = StateObject(wrappedValue: ImageThumbnailModel(url: url))
     }
@@ -408,6 +509,13 @@ private struct ImageBrowserRow: View {
                 .font(.caption)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
+            if let parentPath {
+                Text(parentPath)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
         }
         .padding(6)
         .frame(maxWidth: .infinity, alignment: .leading)

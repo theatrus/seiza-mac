@@ -109,6 +109,7 @@ enum ImageCollection {
     struct Scan: Sendable {
         let images: [URL]
         let includesDirectory: Bool
+        let directories: [URL]
     }
 
     static func collect(from roots: [URL]) -> [URL] {
@@ -117,20 +118,25 @@ enum ImageCollection {
 
     static func scan(from roots: [URL]) -> Scan {
         var images: [URL] = []
-        var includesDirectory = false
+        var directories: [URL] = []
 
         for root in roots {
             let values = try? root.resourceValues(forKeys: [.isDirectoryKey])
             if values?.isDirectory == true {
-                includesDirectory = true
-                let contents = try? FileManager.default.contentsOfDirectory(
+                directories.append(root.standardizedFileURL)
+                guard let contents = FileManager.default.enumerator(
                     at: root,
-                    includingPropertiesForKeys: nil,
-                    options: [.skipsHiddenFiles]
-                )
-                images.append(contentsOf: (contents ?? []).filter { url in
-                    isSupportedImage(url) && !url.hasDirectoryPath
-                })
+                    includingPropertiesForKeys: [.isRegularFileKey],
+                    options: [.skipsHiddenFiles, .skipsPackageDescendants],
+                    errorHandler: { _, _ in true }
+                ) else { continue }
+                for case let url as URL in contents {
+                    guard !Task.isCancelled else { break }
+                    if isSupportedImage(url),
+                       (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
+                        images.append(url)
+                    }
+                }
             } else if isSupportedImage(root) {
                 images.append(root)
             }
@@ -146,7 +152,11 @@ enum ImageCollection {
                     ? $0.path.localizedStandardCompare($1.path) == .orderedAscending
                     : nameOrder == .orderedAscending
             }
-        return Scan(images: sortedImages, includesDirectory: includesDirectory)
+        return Scan(
+            images: sortedImages,
+            includesDirectory: !directories.isEmpty,
+            directories: directories
+        )
     }
 
     static func isSupportedImage(_ url: URL) -> Bool {
@@ -155,5 +165,109 @@ enum ImageCollection {
 
     static func isStackableImage(_ url: URL) -> Bool {
         ["fits", "fit", "fts", "xisf"].contains(url.pathExtension.lowercased())
+    }
+}
+
+enum ImageBrowserGrouping: String, CaseIterable, Identifiable {
+    case path
+    case filter
+    case none
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .path: "Folder Path"
+        case .filter: "Filter"
+        case .none: "None"
+        }
+    }
+}
+
+struct ImageBrowserGroup: Identifiable {
+    let id: String
+    let title: String
+    let imageIndices: [Int]
+}
+
+/// Keeps original image indices stable while presenting different browsing orders.
+struct ImageBrowserCollection {
+    let urls: [URL]
+    let parentPaths: [String]
+    private let pathGroups: [ImageBrowserGroup]
+    private let filterGroups: [ImageBrowserGroup]
+
+    init(urls: [URL], directories: [URL] = []) {
+        self.urls = urls
+        let parents = urls.map { $0.standardizedFileURL.deletingLastPathComponent() }
+        let roots = directories.isEmpty
+            ? Self.commonDirectory(of: parents).map { [$0] } ?? []
+            : Array(Set(directories.map(\.standardizedFileURL)))
+        let rootNames = Dictionary(grouping: roots, by: \.lastPathComponent)
+        let parentPaths = parents.map { parent in
+            let components = parent.pathComponents
+            let root = roots.filter { components.starts(with: $0.pathComponents) }
+                .max { $0.pathComponents.count < $1.pathComponents.count }
+            guard let root else { return parent.path }
+            let relative = components.dropFirst(root.pathComponents.count).joined(separator: "/")
+            let rootTitle = rootNames[root.lastPathComponent]?.count == 1
+                ? root.lastPathComponent : root.path
+            if roots.count == 1 && !relative.isEmpty { return relative }
+            return relative.isEmpty ? rootTitle : rootTitle + "/" + relative
+        }
+        self.parentPaths = parentPaths
+
+        let indicesByParent = Dictionary(grouping: urls.indices, by: { parents[$0] })
+        pathGroups = indicesByParent.map { parent, indices in
+            ImageBrowserGroup(
+                id: "path:" + parent.path,
+                title: parentPaths[indices[0]],
+                imageIndices: Self.sortedIndices(indices, urls: urls)
+            )
+        }.sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
+
+        let filters = urls.map(ImageFilenameFilter.detect)
+        let indicesByFilter = Dictionary(grouping: urls.indices) {
+            filters[$0]?.id ?? "other"
+        }
+        filterGroups = indicesByFilter.map { filterID, indices in
+            ImageBrowserGroup(
+                id: "filter:" + filterID,
+                title: filters[indices[0]]?.title ?? "Other",
+                imageIndices: Self.sortedIndices(indices, urls: urls)
+            )
+        }.sorted {
+            if $0.id == "filter:other" { return false }
+            if $1.id == "filter:other" { return true }
+            return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+        }
+    }
+
+    func groups(for grouping: ImageBrowserGrouping) -> [ImageBrowserGroup] {
+        switch grouping {
+        case .path: pathGroups
+        case .filter: filterGroups
+        case .none: [ImageBrowserGroup(id: "all", title: "Images", imageIndices: Array(urls.indices))]
+        }
+    }
+
+    private static func commonDirectory(of parents: [URL]) -> URL? {
+        guard let first = parents.first else { return nil }
+        var components = first.pathComponents
+        for parent in parents.dropFirst() {
+            while !parent.pathComponents.starts(with: components) {
+                components.removeLast()
+            }
+        }
+        return URL(fileURLWithPath: NSString.path(withComponents: components), isDirectory: true)
+    }
+
+    private static func sortedIndices(_ indices: [Int], urls: [URL]) -> [Int] {
+        indices.sorted {
+            let nameOrder = urls[$0].lastPathComponent.localizedStandardCompare(urls[$1].lastPathComponent)
+            return nameOrder == .orderedSame
+                ? urls[$0].path.localizedStandardCompare(urls[$1].path) == .orderedAscending
+                : nameOrder == .orderedAscending
+        }
     }
 }

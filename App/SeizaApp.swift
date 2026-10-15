@@ -152,7 +152,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
-        panel.message = "Choose FITS, XISF, JPEG, PNG, or TIFF images, or a folder containing them."
+        panel.title = "Open Images or Folder"
+        panel.message = "Open Images or Folder"
         guard panel.runModal() == .OK else { return }
         open(panel.urls)
     }
@@ -337,6 +338,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             self.installViewer(
                 imageURLs: scan.images,
                 openedDirectory: scan.includesDirectory,
+                directories: scan.directories,
                 exportCoordinator: session.exportCoordinator,
                 editCoordinator: session.editCoordinator,
                 processingClipboardCoordinator: session.processingClipboardCoordinator,
@@ -411,6 +413,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 controller: controller,
                 imageURLs: scan.images,
                 openedDirectory: scan.includesDirectory,
+                directories: scan.directories,
                 window: window
             )
         }
@@ -423,6 +426,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private func installViewer(
         imageURLs: [URL],
         openedDirectory: Bool,
+        directories: [URL] = [],
         exportCoordinator: ImageExportCoordinator,
         editCoordinator: ImageEditCommandCoordinator,
         processingClipboardCoordinator: ImageProcessingClipboardCoordinator,
@@ -430,6 +434,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     ) {
         let view = ViewerView(
             urls: imageURLs,
+            directories: directories,
             showsImageBrowser: openedDirectory,
             exportCoordinator: exportCoordinator,
             editCoordinator: editCoordinator,
@@ -483,6 +488,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         controller: NSWindowController,
         imageURLs: [URL],
         openedDirectory: Bool,
+        directories: [URL] = [],
         window: NSWindow
     ) {
         documentWindows.removeValue(forKey: currentKey)
@@ -491,6 +497,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         installViewer(
             imageURLs: imageURLs,
             openedDirectory: openedDirectory,
+            directories: directories,
             exportCoordinator: session.exportCoordinator,
             editCoordinator: session.editCoordinator,
             processingClipboardCoordinator: session.processingClipboardCoordinator,
