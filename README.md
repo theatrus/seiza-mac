@@ -8,7 +8,7 @@ objects in it. Turn a finished image into a camera tour with depth, motion, and
 titles. Image processing and video encoding run locally; optional online
 stellar-distance lookup sends sky coordinates to astronomical catalogues.
 
-[**Download Seiza for Mac 0.8.2**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.2-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
+[**Download Seiza for Mac 0.8.3**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.3-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
 **Also from Seiza:** [Core, CLI, and libraries](https://github.com/theatrus/seiza) ·
 [Seiza for Windows](https://github.com/theatrus/seiza-win) ·
@@ -102,6 +102,9 @@ video-project recovery remains planned. See the
 ## Image viewing and folder review
 
 Open a FITS, XISF, JPEG, PNG, or TIFF image, or a directory of mixed formats.
+Directory browsing includes nested subfolders, with collapsible groups by
+folder path, file type, or filename filter. Repeated filenames show their
+parent paths, and unreadable locations have details in the browser.
 Drop a new file onto a viewer to replace its image. Move through hundreds of
 frames with the arrow keys and thumbnail drawer; local caching and nearby-image
 preloading keep review responsive, including on network folders.
@@ -271,7 +274,7 @@ and refits the whole frame as its window changes size.
 
 ## Download
 
-[**Download Seiza for Mac 0.8.2**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.2-universal.dmg), open it, and drag Seiza to Applications.
+[**Download Seiza for Mac 0.8.3**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.3-universal.dmg), open it, and drag Seiza to Applications.
 
 Or install with [Homebrew](https://brew.sh) from the
 [theatrus/homebrew-seiza tap](https://github.com/theatrus/homebrew-seiza):
