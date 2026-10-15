@@ -14,10 +14,11 @@ window.
 
 Opening a directory includes supported images in its nested subdirectories.
 The thumbnail drawer's **Group by** control defaults to **Folder Path**, with
-collapsible groups labeled by their relative paths. Choose **Filter** to group
-by astronomy filter names detected in filenames, or **None** for a flat list.
-Filter and flat views show each image's parent path to distinguish repeated
-filenames. The left and right arrow keys follow the displayed group order and
+collapsible groups labeled by their relative paths. Choose **File Type** to group
+by FITS, JPEG, PNG, TIFF, or XISF, **Filter** to group by astronomy filter names
+detected in filenames, or **None** for a flat list. File type, filter, and flat
+views show each image's parent path to distinguish repeated filenames.
+The left and right arrow keys follow the displayed group order and
 expand the next image's group when needed. Seiza remembers your grouping choice.
 
 ![The image browser grouping a sample capture session by nested folder paths](images/nested-directory-browser/folder-path.jpg)

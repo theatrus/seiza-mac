@@ -355,7 +355,7 @@ private struct ImageBrowserDrawer: View {
             .controlSize(.small)
             .padding(.horizontal, 12)
             .padding(.bottom, 10)
-            .help("Group images by folder path or filter detected in the filename")
+            .help("Group images by folder path, file type, or filter detected in the filename")
 
             Divider()
 
@@ -422,7 +422,7 @@ private struct ImageBrowserDrawer: View {
                 Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
                     .font(.caption2.weight(.semibold))
                     .frame(width: 10)
-                Image(systemName: grouping == .path ? "folder" : "camera.filters")
+                Image(systemName: grouping.systemImage)
                     .foregroundStyle(.secondary)
                 Text(group.title)
                     .lineLimit(1)

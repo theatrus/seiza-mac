@@ -170,6 +170,7 @@ enum ImageCollection {
 
 enum ImageBrowserGrouping: String, CaseIterable, Identifiable {
     case path
+    case fileType
     case filter
     case none
 
@@ -178,8 +179,40 @@ enum ImageBrowserGrouping: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .path: "Folder Path"
+        case .fileType: "File Type"
         case .filter: "Filter"
         case .none: "None"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .path: "folder"
+        case .fileType: "doc"
+        case .filter: "camera.filters"
+        case .none: "photo.on.rectangle"
+        }
+    }
+}
+
+enum ImageFileType: String, CaseIterable, Identifiable {
+    case fits
+    case xisf
+    case jpeg
+    case png
+    case tiff
+
+    var id: String { rawValue }
+    var title: String { rawValue.uppercased() }
+
+    static func detect(in url: URL) -> Self? {
+        switch url.pathExtension.lowercased() {
+        case "fits", "fit", "fts": .fits
+        case "xisf": .xisf
+        case "jpg", "jpeg", "jfif": .jpeg
+        case "png": .png
+        case "tif", "tiff": .tiff
+        default: nil
         }
     }
 }
@@ -195,6 +228,7 @@ struct ImageBrowserCollection {
     let urls: [URL]
     let parentPaths: [String]
     private let pathGroups: [ImageBrowserGroup]
+    private let fileTypeGroups: [ImageBrowserGroup]
     private let filterGroups: [ImageBrowserGroup]
 
     init(urls: [URL], directories: [URL] = []) {
@@ -226,6 +260,20 @@ struct ImageBrowserCollection {
             )
         }.sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
 
+        let fileTypes = urls.map(ImageFileType.detect)
+        let indicesByFileType = Dictionary(grouping: urls.indices) { fileTypes[$0] }
+        fileTypeGroups = indicesByFileType.map { fileType, indices in
+            ImageBrowserGroup(
+                id: "type:" + (fileType?.rawValue ?? "other"),
+                title: fileType?.title ?? "Other",
+                imageIndices: Self.sortedIndices(indices, urls: urls)
+            )
+        }.sorted {
+            if $0.id == "type:other" { return false }
+            if $1.id == "type:other" { return true }
+            return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+        }
+
         let filters = urls.map(ImageFilenameFilter.detect)
         let indicesByFilter = Dictionary(grouping: urls.indices) {
             filters[$0]?.id ?? "other"
@@ -246,6 +294,7 @@ struct ImageBrowserCollection {
     func groups(for grouping: ImageBrowserGrouping) -> [ImageBrowserGroup] {
         switch grouping {
         case .path: pathGroups
+        case .fileType: fileTypeGroups
         case .filter: filterGroups
         case .none: [ImageBrowserGroup(id: "all", title: "Images", imageIndices: Array(urls.indices))]
         }

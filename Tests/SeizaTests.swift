@@ -138,6 +138,22 @@ final class ImageCollectionTests: XCTestCase {
         ].map { directory.appendingPathComponent($0).standardizedFileURL })
     }
 
+    func testFileTypesRecognizeSupportedAliasesAndCase() {
+        let aliases: [(ImageFileType, [String])] = [
+            (.fits, ["fits", "FIT", "fts"]), (.xisf, ["XISF"]),
+            (.jpeg, ["jpg", "JPEG", "jfif"]), (.png, ["PNG"]),
+            (.tiff, ["tif", "TIFF"]),
+        ]
+        for (type, extensions) in aliases {
+            for ext in extensions {
+                let url = URL(fileURLWithPath: "/captures/frame.\(ext)")
+                XCTAssertEqual(ImageFileType.detect(in: url), type)
+                XCTAssertTrue(ImageCollection.isSupportedImage(url))
+            }
+        }
+        XCTAssertNil(ImageFileType.detect(in: URL(fileURLWithPath: "/captures/frame.svg")))
+    }
+
     func testPathGroupingKeepsRepeatedFilenamesDistinctAndNaturallyOrdersFolders() {
         let root = URL(fileURLWithPath: "/captures/night", isDirectory: true)
         let urls = [
@@ -152,6 +168,25 @@ final class ImageCollectionTests: XCTestCase {
         XCTAssertEqual(groups.map(\.imageIndices), [[3], [2, 1], [0]])
         XCTAssertEqual(Set(groups.map(\.id)).count, 3)
         XCTAssertEqual(collection.groups(for: .none).flatMap(\.imageIndices), [0, 1, 2, 3])
+    }
+
+    func testFileTypeGroupingCombinesAliasesAndPreservesEveryImageIndex() {
+        let urls = [
+            "Night10/frame2.FTS", "Night2/frame10.FIT", "Night2/frame2.fits",
+            "frame.JPEG", "frame.jpg", "frame.jfif", "frame.PNG",
+            "frame10.TIF", "frame2.tiff", "frame.XISF",
+        ].map { URL(fileURLWithPath: "/captures/\($0)") }
+        let collection = ImageBrowserCollection(urls: urls)
+
+        let groups = collection.groups(for: .fileType)
+
+        XCTAssertEqual(groups.map(\.title), ["FITS", "JPEG", "PNG", "TIFF", "XISF"])
+        XCTAssertEqual(groups.map(\.imageIndices), [[2, 0, 1], [5, 3, 4], [6], [8, 7], [9]])
+        XCTAssertEqual(groups.flatMap(\.imageIndices).sorted(), Array(urls.indices))
+        XCTAssertEqual(Set(groups.map(\.id)).count, groups.count)
+        XCTAssertEqual(collection.parentPaths[0], "Night10")
+        XCTAssertEqual(collection.parentPaths[2], "Night2")
+        XCTAssertEqual(collection.groups(for: .path).flatMap(\.imageIndices).sorted(), Array(urls.indices))
     }
 
     func testPathGroupingRetainsOpenedRootEvenWhenAllImagesAreDeeplyNested() {
