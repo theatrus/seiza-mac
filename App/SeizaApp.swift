@@ -92,6 +92,16 @@ struct SeizaApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
     let updateController = UpdateController()
+    private let collectionScanner: @Sendable ([URL]) async throws -> ImageCollection.Scan
+
+    override convenience init() {
+        self.init(collectionScanner: { try await ImageCollection.scanInBackground(from: $0) })
+    }
+
+    init(collectionScanner: @escaping @Sendable ([URL]) async throws -> ImageCollection.Scan) {
+        self.collectionScanner = collectionScanner
+        super.init()
+    }
 
     private final class DocumentWindowSession {
         var controller: NSWindowController?
@@ -320,10 +330,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
         guard directImages == nil else { return }
         let roots = request.roots
+        let scanner = collectionScanner
         session.collectionTask = Task { [weak self, weak session, weak window] in
-            let scan = await Task.detached(priority: .userInitiated) {
-                ImageCollection.scan(from: roots)
-            }.value
+            let scan: ImageCollection.Scan
+            do {
+                scan = try await scanner(roots)
+            } catch { return }
             guard !Task.isCancelled,
                   let self,
                   let session,
@@ -332,13 +344,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             session.collectionTask = nil
             guard !scan.images.isEmpty else {
                 window.close()
-                self.presentNoSupportedImagesAlert()
+                self.presentNoSupportedImagesAlert(issues: scan.issues)
                 return
             }
             self.installViewer(
                 imageURLs: scan.images,
                 openedDirectory: scan.includesDirectory,
                 directories: scan.directories,
+                scanIssues: scan.issues,
                 exportCoordinator: session.exportCoordinator,
                 editCoordinator: session.editCoordinator,
                 processingClipboardCoordinator: session.processingClipboardCoordinator,
@@ -390,30 +403,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         let previousTitle = window.title
         installCollectionLoadingView(for: request.roots, in: window)
         let roots = request.roots
-        current.value.collectionTask?.cancel()
-        current.value.collectionTask = Task { [weak self, weak window] in
-            let scan = await Task.detached(priority: .userInitiated) {
-                ImageCollection.scan(from: roots)
-            }.value
+        let currentKey = current.key
+        let currentSession = current.value
+        let scanner = collectionScanner
+        currentSession.collectionTask?.cancel()
+        currentSession.collectionTask = Task { [weak self, weak window, weak currentSession] in
+            let scan: ImageCollection.Scan
+            do {
+                scan = try await scanner(roots)
+            } catch { return }
             guard !Task.isCancelled,
                   let self,
                   let window,
-                  self.documentWindows[current.key] === current.value else { return }
-            current.value.collectionTask = nil
+                  let currentSession,
+                  self.documentWindows[currentKey] === currentSession else { return }
+            currentSession.collectionTask = nil
             guard !scan.images.isEmpty else {
                 window.contentViewController = previousController
                 window.title = previousTitle
-                self.presentNoSupportedImagesAlert()
+                self.presentNoSupportedImagesAlert(issues: scan.issues)
                 return
             }
             self.finishReplacingContents(
-                currentKey: current.key,
+                currentKey: currentKey,
                 newKey: windowKey,
                 session: replacement,
                 controller: controller,
                 imageURLs: scan.images,
                 openedDirectory: scan.includesDirectory,
                 directories: scan.directories,
+                scanIssues: scan.issues,
                 window: window
             )
         }
@@ -427,6 +446,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         imageURLs: [URL],
         openedDirectory: Bool,
         directories: [URL] = [],
+        scanIssues: [ImageCollection.ScanIssue] = [],
         exportCoordinator: ImageExportCoordinator,
         editCoordinator: ImageEditCommandCoordinator,
         processingClipboardCoordinator: ImageProcessingClipboardCoordinator,
@@ -435,6 +455,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         let view = ViewerView(
             urls: imageURLs,
             directories: directories,
+            scanIssues: scanIssues,
             showsImageBrowser: openedDirectory,
             exportCoordinator: exportCoordinator,
             editCoordinator: editCoordinator,
@@ -489,8 +510,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         imageURLs: [URL],
         openedDirectory: Bool,
         directories: [URL] = [],
+        scanIssues: [ImageCollection.ScanIssue] = [],
         window: NSWindow
     ) {
+        documentWindows[currentKey]?.collectionTask?.cancel()
         documentWindows.removeValue(forKey: currentKey)
         session.controller = controller
         documentWindows[newKey] = session
@@ -498,6 +521,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             imageURLs: imageURLs,
             openedDirectory: openedDirectory,
             directories: directories,
+            scanIssues: scanIssues,
             exportCoordinator: session.exportCoordinator,
             editCoordinator: session.editCoordinator,
             processingClipboardCoordinator: session.processingClipboardCoordinator,
@@ -672,15 +696,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         if let entry = documentWindows.first(where: {
             $0.value.controller?.window === window
         }) {
+            entry.value.collectionTask?.cancel()
             documentWindows.removeValue(forKey: entry.key)
         }
         refreshEditCommandAvailability()
     }
 
-    private func presentNoSupportedImagesAlert() {
+    private func presentNoSupportedImagesAlert(issues: [ImageCollection.ScanIssue] = []) {
         let alert = NSAlert()
         alert.messageText = "No Supported Images Found"
         alert.informativeText = "Choose a folder containing FITS, XISF, JPEG, PNG, or TIFF images."
+        if !issues.isEmpty {
+            let details = issues.prefix(8).map { "\($0.url.path): \($0.message)" }.joined(separator: "\n\n")
+            alert.informativeText += "\n\nSome files or folders could not be read:\n\n" + details
+            if issues.count > 8 {
+                alert.informativeText += "\n\nAnd \(issues.count - 8) more items."
+            }
+        }
         alert.alertStyle = .informational
         alert.runModal()
     }

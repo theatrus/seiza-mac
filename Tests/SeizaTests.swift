@@ -92,7 +92,7 @@ final class ImageCollectionTests: XCTestCase {
             withIntermediateDirectories: true
         )
 
-        let names = ImageCollection.collect(from: [directory]).map(\.lastPathComponent)
+        let names = try ImageCollection.collect(from: [directory]).map(\.lastPathComponent)
         XCTAssertEqual(
             names,
             ["frame2.FIT", "frame10.fits", "integration.XISF", "preview.jpg"]
@@ -125,7 +125,7 @@ final class ImageCollectionTests: XCTestCase {
         try FileManager.default.createSymbolicLink(
             at: directory.appendingPathComponent("lights/loop"), withDestinationURL: directory)
 
-        let scan = ImageCollection.scan(from: [
+        let scan = try ImageCollection.scan(from: [
             directory, directory.appendingPathComponent("lights/Ha"),
             directory.appendingPathComponent("frame10.fits"),
         ])
@@ -152,6 +152,120 @@ final class ImageCollectionTests: XCTestCase {
             }
         }
         XCTAssertNil(ImageFileType.detect(in: URL(fileURLWithPath: "/captures/frame.svg")))
+    }
+
+    func testDirectoryScanIncludesFileSymlinksButDoesNotFollowDirectoryLinks() throws {
+        let root = try makeScanDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let external = try makeScanDirectory()
+        defer { try? FileManager.default.removeItem(at: external) }
+        let target = external.appendingPathComponent("original.fits")
+        try Data().write(to: target)
+        let linkedImage = root.appendingPathComponent("linked.FIT")
+        try FileManager.default.createSymbolicLink(at: linkedImage, withDestinationURL: target)
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("directory.fits"), withDestinationURL: external)
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("loop"), withDestinationURL: root)
+
+        let scan = try ImageCollection.scan(from: [root])
+
+        XCTAssertEqual(scan.images, [linkedImage.standardizedFileURL])
+        XCTAssertTrue(scan.issues.isEmpty)
+        XCTAssertEqual(try ImageCollection.scan(from: [linkedImage]).images, scan.images)
+    }
+
+    func testDirectoryScanReportsBrokenImageLinksWithoutLosingReadableImages() throws {
+        let root = try makeScanDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let image = root.appendingPathComponent("readable.png")
+        try Data().write(to: image)
+        let broken = root.appendingPathComponent("broken.fits")
+        try FileManager.default.createSymbolicLink(
+            at: broken, withDestinationURL: root.appendingPathComponent("missing.fits"))
+
+        let scan = try ImageCollection.scan(from: [root])
+
+        XCTAssertEqual(scan.images, [image.standardizedFileURL])
+        XCTAssertEqual(scan.issues.map { $0.url.path }, [broken.path])
+        XCTAssertFalse(try XCTUnwrap(scan.issues.first).message.isEmpty)
+    }
+
+    func testDirectoryScanReportsUnreadableSubfoldersAndKeepsReadableImages() throws {
+        let root = try makeScanDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let image = root.appendingPathComponent("readable.fits")
+        try Data().write(to: image)
+        let restricted = root.appendingPathComponent("restricted", isDirectory: true)
+        try FileManager.default.createDirectory(at: restricted, withIntermediateDirectories: true)
+        try Data().write(to: restricted.appendingPathComponent("hidden.fits"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: restricted.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: restricted.path)
+        }
+
+        let scan = try ImageCollection.scan(from: [root, restricted])
+
+        XCTAssertEqual(scan.images, [image.standardizedFileURL])
+        XCTAssertEqual(scan.issues.map { $0.url.path }, [restricted.resolvingSymlinksInPath().path])
+        XCTAssertFalse(try XCTUnwrap(scan.issues.first).message.isEmpty)
+    }
+
+    func testUnreadableRootReportsAnIssueEvenWhenNoImagesCanBeRead() throws {
+        let root = try makeScanDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data().write(to: root.appendingPathComponent("hidden.fits"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: root.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path) }
+
+        let scan = try ImageCollection.scan(from: [root])
+
+        XCTAssertTrue(scan.images.isEmpty)
+        XCTAssertTrue(scan.includesDirectory)
+        XCTAssertEqual(scan.issues.map { $0.url.path }, [root.path])
+    }
+
+    func testAlreadyCanceledBackgroundScanDoesNotStartDiscovery() async throws {
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await ImageCollection.scanInBackground(from: []) { _ in
+                XCTFail("An already canceled scan must not start filesystem discovery")
+                return ImageCollection.Scan(images: [], directories: [], issues: [])
+            }
+        }
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {}
+    }
+
+    func testCancelingBackgroundScanCancelsWorkerAndDiscardsItsResult() async throws {
+        let started = expectation(description: "Worker started")
+        let proceed = DispatchSemaphore(value: 0)
+        let task = Task {
+            try await ImageCollection.scanInBackground(from: []) { _ in
+                started.fulfill()
+                proceed.wait()
+                XCTAssertTrue(Task.isCancelled)
+                // Even a scanner that returns after cancellation must not publish results.
+                return ImageCollection.Scan(images: [], directories: [], issues: [])
+            }
+        }
+        defer { task.cancel(); proceed.signal() }
+        await fulfillment(of: [started], timeout: 2)
+        task.cancel()
+        proceed.signal()
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation instead of a partial result")
+        } catch is CancellationError {}
+    }
+
+    private func makeScanDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.resolvingSymlinksInPath()
     }
 
     func testPathGroupingKeepsRepeatedFilenamesDistinctAndNaturallyOrdersFolders() {
@@ -2337,6 +2451,88 @@ final class CatalogSetupPayloadTests: XCTestCase {
 
 @MainActor
 final class DocumentWindowLifecycleTests: XCTestCase {
+    private final class BlockingScan: @unchecked Sendable {
+        let started = XCTestExpectation(description: "Discovery started")
+        let canceled = XCTestExpectation(description: "Discovery worker canceled")
+        private let proceed = DispatchSemaphore(value: 0)
+
+        func scan(_ roots: [URL]) async throws -> ImageCollection.Scan {
+            try await ImageCollection.scanInBackground(from: roots) { [self] roots in
+                started.fulfill()
+                proceed.wait()
+                if Task.isCancelled { canceled.fulfill() }
+                try Task.checkCancellation()
+                return try ImageCollection.scan(from: roots)
+            }
+        }
+
+        func release() { proceed.signal() }
+    }
+
+    func testClosingDirectoryWindowCancelsDiscoveryWorker() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let probe = BlockingScan()
+        defer { probe.release() }
+        let delegate = AppDelegate(collectionScanner: { try await probe.scan($0) })
+        delegate.open(root)
+        let window = try XCTUnwrap(delegate.documentWindow(for: root))
+        defer { if window.isVisible { window.close() } }
+        await fulfillment(of: [probe.started], timeout: 2)
+
+        window.close()
+        probe.release()
+
+        await fulfillment(of: [probe.canceled], timeout: 2)
+        XCTAssertNil(delegate.documentWindow(for: root))
+    }
+
+    func testClosingWindowCancelsReplacementDiscoveryWorker() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let image = root.appendingPathComponent("initial.png")
+        try Data().write(to: image)
+        let probe = BlockingScan()
+        defer { probe.release() }
+        let delegate = AppDelegate(collectionScanner: { try await probe.scan($0) })
+        delegate.open(image)
+        let window = try XCTUnwrap(delegate.documentWindow(for: image))
+        defer { if window.isVisible { window.close() } }
+        delegate.replaceContents(of: window, with: [root])
+        await fulfillment(of: [probe.started], timeout: 2)
+
+        window.close()
+        probe.release()
+
+        await fulfillment(of: [probe.canceled], timeout: 2)
+        XCTAssertNil(delegate.documentWindow(for: image))
+    }
+
+    func testReplacingLoadingDirectoryWithImageCancelsDiscoveryWorker() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let image = root.appendingPathComponent("replacement.png")
+        try Data().write(to: image)
+        let probe = BlockingScan()
+        defer { probe.release() }
+        let delegate = AppDelegate(collectionScanner: { try await probe.scan($0) })
+        delegate.open(root)
+        let window = try XCTUnwrap(delegate.documentWindow(for: root))
+        defer { if window.isVisible { window.close() } }
+        await fulfillment(of: [probe.started], timeout: 2)
+
+        delegate.replaceContents(of: window, with: [image])
+        probe.release()
+
+        await fulfillment(of: [probe.canceled], timeout: 2)
+        XCTAssertNil(delegate.documentWindow(for: root))
+        XCTAssertTrue(delegate.documentWindow(for: image) === window)
+        XCTAssertEqual(window.title, "replacement.png")
+    }
+
     func testDroppedImageReusesWindowAndRekeysDocumentSession() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             UUID().uuidString,

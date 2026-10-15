@@ -152,6 +152,7 @@ private extension DeepSkyCatalog {
 struct ViewerView: View {
     let urls: [URL]
     let browserCollection: ImageBrowserCollection
+    let scanIssues: [ImageCollection.ScanIssue]
     let showsImageBrowser: Bool
     let exportCoordinator: ImageExportCoordinator
     let editCoordinator: ImageEditCommandCoordinator
@@ -171,6 +172,7 @@ struct ViewerView: View {
     init(
         urls: [URL],
         directories: [URL] = [],
+        scanIssues: [ImageCollection.ScanIssue] = [],
         initialIndex: Int = 0,
         showsImageBrowser: Bool = false,
         exportCoordinator: ImageExportCoordinator,
@@ -181,6 +183,7 @@ struct ViewerView: View {
         onStackComplete: @escaping (ImageStackBatchResult) -> Void = { _ in }
     ) {
         self.urls = urls
+        self.scanIssues = scanIssues
         let collection = ImageBrowserCollection(urls: urls, directories: directories)
         browserCollection = collection
         let grouping = AppStorage(wrappedValue: ImageBrowserGrouping.path, "imageBrowserGrouping")
@@ -207,6 +210,7 @@ struct ViewerView: View {
             if showsImageBrowser && showImageBrowser {
                 ImageBrowserDrawer(
                     collection: browserCollection,
+                    scanIssues: scanIssues,
                     grouping: $browserGrouping,
                     selectedIndex: $selectedIndex,
                     select: select
@@ -328,11 +332,13 @@ struct ViewerView: View {
 
 private struct ImageBrowserDrawer: View {
     let collection: ImageBrowserCollection
+    let scanIssues: [ImageCollection.ScanIssue]
     @Binding var grouping: ImageBrowserGrouping
     @Binding var selectedIndex: Int
     let select: (Int) -> Void
 
     @State private var collapsedGroups = Set<String>()
+    @State private var showsScanIssues = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -356,6 +362,50 @@ private struct ImageBrowserDrawer: View {
             .padding(.horizontal, 12)
             .padding(.bottom, 10)
             .help("Group images by folder path, file type, or filter detected in the filename")
+
+            if !scanIssues.isEmpty {
+                Button {
+                    showsScanIssues = true
+                } label: {
+                    Label(
+                        "\(scanIssues.count) \(scanIssues.count == 1 ? "item" : "items") skipped",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.caption)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.orange)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 10)
+                .help("Some files or folders could not be read. Show details.")
+                .popover(isPresented: $showsScanIssues, arrowEdge: .leading) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Skipped Files and Folders")
+                            .font(.headline)
+                        Text("These items could not be read. Other images are still available.")
+                            .font(.callout)
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 12) {
+                                ForEach(scanIssues) { issue in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(issue.url.path)
+                                            .font(.caption.weight(.semibold))
+                                        Text(issue.message)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                        }
+                        .frame(maxHeight: 240)
+                    }
+                    .padding(16)
+                    .frame(width: 360)
+                }
+            }
 
             Divider()
 

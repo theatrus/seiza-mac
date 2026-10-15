@@ -13,6 +13,11 @@ select a directory or drop a new image or directory onto an existing viewer
 window.
 
 Opening a directory includes supported images in its nested subdirectories.
+Links to image files are supported; linked subdirectories are skipped. If a
+file or subfolder cannot be read, the drawer shows **items skipped** with
+details while retaining the readable images. Closing the window or replacing
+its contents cancels discovery.
+
 The thumbnail drawer's **Group by** control defaults to **Folder Path**, with
 collapsible groups labeled by their relative paths. Choose **File Type** to group
 by FITS, JPEG, PNG, TIFF, or XISF, **Filter** to group by astronomy filter names
@@ -50,6 +55,9 @@ pointer to zoom, drag or scroll to pan, and press **Command-0** to fit again.
 Open a directory with at least two FITS or XISF files, then click **Stack
 Images** in the toolbar. Raster files may stay in the directory, but Seiza does
 not include them in the stack.
+
+The frame list includes FITS and XISF images throughout the opened folder tree,
+across all sidebar groups, including collapsed groups.
 
 Choose which frames to use and pick the reference frame. The reference sets the
 output bounds and alignment coordinates. When filenames show two or more common

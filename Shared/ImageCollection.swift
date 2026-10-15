@@ -106,56 +106,132 @@ enum ImageFilenameFilter: Hashable, Identifiable, Sendable {
 }
 
 enum ImageCollection {
+    struct ScanIssue: Identifiable, Equatable, Sendable {
+        let url: URL
+        let message: String
+
+        var id: URL { url }
+    }
+
     struct Scan: Sendable {
         let images: [URL]
-        let includesDirectory: Bool
         let directories: [URL]
+        let issues: [ScanIssue]
+
+        var includesDirectory: Bool { !directories.isEmpty }
     }
 
-    static func collect(from roots: [URL]) -> [URL] {
-        scan(from: roots).images
+    static func collect(from roots: [URL]) throws -> [URL] {
+        try scan(from: roots).images
     }
 
-    static func scan(from roots: [URL]) -> Scan {
+    static func scanInBackground(
+        from roots: [URL],
+        scanner: @escaping @Sendable ([URL]) throws -> Scan = { try scan(from: $0) }
+    ) async throws -> Scan {
+        try Task.checkCancellation()
+        let worker = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let result = try scanner(roots)
+            try Task.checkCancellation()
+            return result
+        }
+        let result = try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+        try Task.checkCancellation()
+        return result
+    }
+
+    static func scan(from roots: [URL]) throws -> Scan {
         var images: [URL] = []
         var directories: [URL] = []
+        var issues: [ScanIssue] = []
+        var seenImages = Set<URL>()
+        var seenIssues = Set<URL>()
 
-        for root in roots {
-            let values = try? root.resourceValues(forKeys: [.isDirectoryKey])
-            if values?.isDirectory == true {
-                directories.append(root.standardizedFileURL)
-                guard let contents = FileManager.default.enumerator(
-                    at: root,
-                    includingPropertiesForKeys: [.isRegularFileKey],
-                    options: [.skipsHiddenFiles, .skipsPackageDescendants],
-                    errorHandler: { _, _ in true }
-                ) else { continue }
-                for case let url as URL in contents {
-                    guard !Task.isCancelled else { break }
-                    if isSupportedImage(url),
-                       (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
-                        images.append(url)
-                    }
-                }
-            } else if isSupportedImage(root) {
-                images.append(root)
+        func recordIssue(at url: URL, message: String) {
+            // Canonicalize the parent while preserving the name of a broken file link.
+            let url = url.deletingLastPathComponent().resolvingSymlinksInPath()
+                .appendingPathComponent(url.lastPathComponent, isDirectory: false)
+            if seenIssues.insert(url).inserted {
+                issues.append(ScanIssue(url: url, message: message))
             }
         }
 
-        var seenImages = Set<URL>()
-        let sortedImages = images
-            .map(\.standardizedFileURL)
-            .filter { seenImages.insert($0).inserted }
-            .sorted {
-                let nameOrder = $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent)
-                return nameOrder == .orderedSame
-                    ? $0.path.localizedStandardCompare($1.path) == .orderedAscending
-                    : nameOrder == .orderedAscending
+        func appendImage(at url: URL) {
+            guard isSupportedImage(url) else { return }
+            do {
+                let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                if values.isSymbolicLink == true {
+                    let target = url.resolvingSymlinksInPath()
+                    let targetValues = try target.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
+                    // Directory links are never image candidates or traversal roots here.
+                    if targetValues.isDirectory == true { return }
+                    guard targetValues.isRegularFile == true else {
+                        recordIssue(at: url, message: "The linked image does not point to a regular file.")
+                        return
+                    }
+                } else if values.isRegularFile != true {
+                    return
+                }
+                let image = url.standardizedFileURL
+                if seenImages.insert(image).inserted { images.append(image) }
+            } catch {
+                recordIssue(at: url, message: error.localizedDescription)
             }
+        }
+
+        for root in roots {
+            try Task.checkCancellation()
+            let values: URLResourceValues
+            do {
+                values = try root.resourceValues(forKeys: [.isDirectoryKey])
+            } catch {
+                recordIssue(at: root, message: error.localizedDescription)
+                continue
+            }
+            if values.isDirectory == true {
+                directories.append(root.standardizedFileURL)
+                guard let contents = FileManager.default.enumerator(
+                    at: root,
+                    includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+                    options: [.skipsHiddenFiles, .skipsPackageDescendants],
+                    errorHandler: { url, error in
+                        recordIssue(at: url, message: error.localizedDescription)
+                        return !Task.isCancelled
+                    }
+                ) else {
+                    recordIssue(at: root, message: "The folder could not be read.")
+                    continue
+                }
+                for case let url as URL in contents {
+                    try Task.checkCancellation()
+                    appendImage(at: url)
+                }
+            } else {
+                appendImage(at: root)
+            }
+        }
+
+        try Task.checkCancellation()
+        let sortedImages = try images.sorted {
+            try Task.checkCancellation()
+            let nameOrder = $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent)
+            return nameOrder == .orderedSame
+                ? $0.path.localizedStandardCompare($1.path) == .orderedAscending
+                : nameOrder == .orderedAscending
+        }
+        try Task.checkCancellation()
         return Scan(
             images: sortedImages,
-            includesDirectory: !directories.isEmpty,
-            directories: directories
+            directories: directories,
+            issues: try issues.sorted {
+                try Task.checkCancellation()
+                return $0.url.path.localizedStandardCompare($1.url.path) == .orderedAscending
+            }
         )
     }
 
