@@ -226,11 +226,12 @@ jobs:
             '' \
             "### New in ${version}" \
             '' \
-            '- Generate editable tours on a prepared scene, framing targets at the depths of its nebulae, dust clouds, custom planes and distance overrides.' \
-            '- Lift objects onto automatic depth planes, give any catalogue object a distance, and import painted masks with editable names and distances.' \
-            '- Preserve explicit per-stop depths through tour import, editing, save and rendering, or choose Follow scene depth.' \
-            '- Add a logo and credit in any corner, opening and closing title cards, and a custom card for each tour stop.' \
-            '- Keep scene-aware tour candidates consistent with scene edits, output-size changes and undo/redo while reusing the prepared scene for camera edits.' \
+            '- Open a capture folder recursively and browse images throughout its nested subfolders.' \
+            '- Group the sidebar by Folder Path, File Type, filename filter, or None, with collapsible groups and parent paths for duplicate filenames.' \
+            '- Preserve the current image and adjustments while regrouping, with navigation following the displayed group order.' \
+            '- Stack FITS and XISF frames across the whole opened folder tree, including collapsed sidebar groups.' \
+            '- Cancel discovery when closing or replacing a viewer, support valid image file links, and show details for unreadable locations.' \
+            '- Use the shorter Open Images or Folder dialog heading.' \
             '- Uses published Seiza/C ABI 0.30.1, parallax 0.7.0, stacking 0.32.0 and image I/O 0.5.0.' \
             '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
@@ -249,10 +250,12 @@ jobs:
             '- 8- and 16-bit image export with optional overlays' \
             '- Editable parallax tours and native H.264/HEVC video export' \
             '- Finder content thumbnails and Quick Look previews for FITS and XISF' \
-            '- Mixed-format folder browsing with cached thumbnails' \
+            '- Recursive mixed-format folder browsing with collapsible groups and cached thumbnails' \
             '- Signed in-app updates with user-controlled checks and installs' \
             '' \
             "![Seiza folder browser and live stretch editor](${screenshot_base}/seiza-directory-stretch.png)" \
+            '' \
+            "![Seiza nested folder grouping](${screenshot_base}/nested-directory-browser/folder-path.jpg)" \
             '' \
             "![Seiza plate-solved FITS view](${screenshot_base}/seiza-solved-overlays.png)" \
             '' \
