@@ -12,8 +12,23 @@ Choose **File > Open** and select a FITS, XISF, JPEG, PNG, or TIFF image. You ca
 select a directory or drop a new image or directory onto an existing viewer
 window.
 
-Directory windows include a thumbnail drawer and accept the left and right
-arrow keys. Seiza caches thumbnails locally and preloads nearby entries, so
+Opening a directory includes supported images in its nested subdirectories.
+Links to image files are supported; linked subdirectories are skipped. If a
+file or subfolder cannot be read, the drawer shows **items skipped** with
+details while retaining the readable images. Closing the window or replacing
+its contents cancels discovery.
+
+The thumbnail drawer's **Group by** control defaults to **Folder Path**, with
+collapsible groups labeled by their relative paths. Choose **File Type** to group
+by FITS, JPEG, PNG, TIFF, or XISF, **Filter** to group by astronomy filter names
+detected in filenames, or **None** for a flat list. File type, filter, and flat
+views show each image's parent path to distinguish repeated filenames.
+The left and right arrow keys follow the displayed group order and
+expand the next image's group when needed. Seiza remembers your grouping choice.
+
+![The image browser grouping a sample capture session by nested folder paths](images/nested-directory-browser/folder-path.jpg)
+
+Seiza caches thumbnails locally and preloads nearby entries, so
 moving through a long sequence does not require each thumbnail to be decoded
 again. Seiza reads directory entries away from the main thread, so a slow
 network share does not freeze the app. A directory may mix FITS, XISF, and
@@ -40,6 +55,9 @@ pointer to zoom, drag or scroll to pan, and press **Command-0** to fit again.
 Open a directory with at least two FITS or XISF files, then click **Stack
 Images** in the toolbar. Raster files may stay in the directory, but Seiza does
 not include them in the stack.
+
+The frame list includes FITS and XISF images throughout the opened folder tree,
+across all sidebar groups, including collapsed groups.
 
 Choose which frames to use and pick the reference frame. The reference sets the
 output bounds and alignment coordinates. When filenames show two or more common
