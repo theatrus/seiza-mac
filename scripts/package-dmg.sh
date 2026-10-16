@@ -27,7 +27,17 @@ trap cleanup EXIT
 
 ditto "$app_path" "$staging_directory/Seiza.app"
 ln -s /Applications "$staging_directory/Applications"
+
+# Size for logical file contents and leave room for filesystem metadata and
+# extended attributes. Compressed or sparse files can grow when copied.
+payload_bytes="$(
+  find "$staging_directory" -type f -exec stat -f '%z' {} + \
+    | awk '{ size += $1 } END { printf "%.0f\n", size }'
+)"
+payload_kib=$(( (payload_bytes + 1023) / 1024 ))
+image_kib=$(( payload_kib + (payload_kib + 3) / 4 + 65536 ))
 hdiutil create \
+  -size "${image_kib}k" \
   -volname "Seiza $version" \
   -srcfolder "$staging_directory" \
   -format UDZO \
