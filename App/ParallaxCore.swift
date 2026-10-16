@@ -700,7 +700,7 @@ enum ParallaxCore {
     // Keep the original file's astrometric headers. The full-size snapshot and
     // confirmed, aligned stars layer preserve the same source geometry.
     static func resolvingWCS(_ request: ParallaxRequest, allowStarsFallback: Bool = true,
-                            originalURL: URL? = nil, didSolve: ((SolveResult) -> Void)? = nil,
+                            originalURL: URL? = nil, sourceIsStarless: Bool = false, didSolve: ((SolveResult) -> Void)? = nil,
                             cancellation: ParallaxCancellation, events: (ParallaxEvent) -> Void,
                             solve: ((URL, URL?, Double, Double) throws -> WCSResult)? = nil) throws -> ParallaxRequest {
         try cancellation.check()
@@ -729,6 +729,18 @@ enum ParallaxCore {
             return wcs
         }
         var resolved = request
+        if sourceIsStarless {
+            guard let stars = request.inputs.stars else {
+                throw SeizaCoreError.message("The opened image is starless. Choose an aligned Stars image in Source before solving.")
+            }
+            guard allowStarsFallback else {
+                throw SeizaCoreError.message("The opened image is starless. Enable Layers match source alignment and stretch in Source to solve using the selected stars image.")
+            }
+            events(ParallaxEvent(kind: "note", message: "The source is starless. Plate-solving the aligned stars layer…", fraction: nil))
+            resolved.inputs.wcs = try attempt(stars)
+            events(ParallaxEvent(kind: "note", message: "Sky coordinates recovered from the stars layer.", fraction: nil))
+            return resolved
+        }
         if let originalURL, originalURL.path != request.inputs.image {
             events(ParallaxEvent(kind: "note", message: "Plate-solving the original file using its headers…", fraction: nil))
             do {
@@ -746,7 +758,10 @@ enum ParallaxCore {
         } catch {
             try cancellation.check()
             if error is CancellationError { throw error }
-            guard allowStarsFallback, let stars = request.inputs.stars, stars != request.inputs.image else { throw error }
+            guard let stars = request.inputs.stars, stars != request.inputs.image else { throw error }
+            guard allowStarsFallback else {
+                throw SeizaCoreError.message("Source image solve failed: \(error.localizedDescription). Enable Layers match source alignment and stretch in Source to solve using the selected stars image.")
+            }
             let sourceError = error.localizedDescription
             events(ParallaxEvent(kind: "warning",
                 message: "Source image solve failed: \(sourceError). Retrying with the aligned stars layer…", fraction: nil))
@@ -805,20 +820,20 @@ enum ParallaxCore {
         return result
     }
 
-    static func prepare(_ request: ParallaxRequest, originalURL: URL? = nil,
+    static func prepare(_ request: ParallaxRequest, originalURL: URL? = nil, sourceIsStarless: Bool = false,
                         didSolve: ((SolveResult) -> Void)? = nil, cancellation: ParallaxCancellation,
                         events: @escaping (ParallaxEvent) -> Void) throws -> ParallaxVideo {
         try cancellation.check()
         // Imported pairs have already been confirmed aligned by the workspace.
         // Automatic separation keeps the upstream solve/separation path.
         var resolved = request
-        if originalURL != nil || request.inputs.stars != nil {
+        if sourceIsStarless || originalURL != nil || request.inputs.stars != nil {
             do {
-                resolved = try resolvingWCS(request, originalURL: originalURL, didSolve: didSolve,
+                resolved = try resolvingWCS(request, originalURL: originalURL, sourceIsStarless: sourceIsStarless, didSolve: didSolve,
                     cancellation: cancellation, events: events)
             } catch {
                 try cancellation.check()
-                guard !(error is CancellationError), request.inputs.stars == nil,
+                guard !(error is CancellationError), !sourceIsStarless, request.inputs.stars == nil,
                       request.inputs.rcAstroExecutable != nil else { throw error }
                 events(ParallaxEvent(kind: "warning", message: "Source solve failed; trying the automatically separated stars layer.", fraction: nil))
             }

@@ -78,7 +78,7 @@ names and distances, with controls to replace, reload or remove each mask.
 
 1. **Open your finished image** and choose **File → Parallax Video…** or the
    film toolbar button. In **Source**, import matching, stretched starless and
-   unscreened stars PNG/TIFF layers and confirm their alignment. An installed,
+   unscreened stars PNG/TIFF layers. Matching alignment is enabled by default. An installed,
    licensed StarXTerminator CLI is also supported.
 2. **Give the scene depth.** Download solving catalogues and **Offline parallax**
    data in Settings. The Source inspector also offers the offline distance

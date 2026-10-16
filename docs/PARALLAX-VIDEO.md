@@ -107,12 +107,32 @@ can be added, duplicated, removed, moved earlier/later, and picked or entered in
 filmed-image coordinates. Edits and applying a generated tour support undo/redo.
 Switching to Fly In retains the tour draft.
 
+Adding, duplicating, moving or removing a stop seeks the selected stop's arrival,
+so the inspector and preview show the same destination. **Pull Back** resets its
+Dolly, Zoom, Pan and Push while retaining its point, name, depth and timing.
+Zoom controls use sliders, multiplier readouts, tooltips and a **1×** reset.
+A new custom point starts with Dolly 0 and Zoom 1 rather than inferring a close
+target extent. Its Dolly slider covers 0–99% with a percent readout and 0% reset.
+A stop can widen below 1×, including 0.5×; overall/opening/end zoom retain the
+native minimum of 1×. Dolly moves through depth; Zoom changes lens magnification.
+Fill Frame can tighten fitted framing to hide edges, while Show Whole Image
+allows black space and preserves a wider stop.
+
+![Per-stop Dolly and Zoom sliders with a wider custom point](images/parallax-framing/tour-point-controls.jpg)
+
 Generation returns a candidate, which can be applied or discarded. It needs
 matching WCS and object catalogues, but can run before separating stars or
 fetching their distances. Without WCS, the app solves first, respecting the
 configured scale bounds. The original file is tried first, preserving FITS and
 PixInsight XISF headers, then the full-size snapshot, then an imported stars
-layer only after the user confirms its alignment.
+layer when **Layers match source alignment and stretch** is enabled (the default).
+Selecting or replacing a layer preserves that choice. If it is turned off,
+preview explains that the pair cannot be prepared, and a failed solve explains
+how to enable the stars-layer fallback. Opening a starless source is supported:
+when the opened file is the selected starless layer, the aligned stars layer is
+solved directly for tour generation, preview and export. The starless original
+and snapshot are never tried. Missing or disabled aligned stars produce an
+immediate explanation instead of spending minutes in futile blind solves.
 Preview and export use the same fallback, and the activity log records the retry
 and outcome. Existing WCS is reused without solving again, including viewer
 solves made after opening the video window. A solve from Parallax is shared
@@ -144,7 +164,7 @@ The current workspace includes [dust maps](#dust-maps), introduced in Seiza
 | Area | Controls / contract |
 | --- | --- |
 | Source | Imported stretched, aligned starless and unscreened stars PNG/TIFF, or an optional installed, licensed `rc-astro` executable for StarXTerminator. The integrator name is fixed to `seiza-mac`. |
-| Geometry | Original-file WCS and header-aware solve, minimum/maximum arcseconds per pixel, crop rectangle with optional frame-aspect lock, and crop-aware point editing. Imported layers remain full size and have no orientation transform; the user confirms matching stretch/alignment. |
+| Geometry | Original-file WCS and header-aware solve, minimum/maximum arcseconds per pixel, crop rectangle with optional frame-aspect lock, and crop-aware point editing. Imported layers remain full size and have no orientation transform; matching stretch/alignment defaults on and can be turned off. |
 | Distances | Separate source-point distance reference, manual background and unmatched-star parsecs, Gaia magnitude limit, opt-in online lookup, app-managed distance cache. |
 | Scene | Moving-star limit, remaining stars as background field or dropped, keep galaxies in background, dust and dust opacity, and a dust map (PNG, JPEG, TIFF, FITS or XISF) that replaces the counted dust. |
 | Depth planes | Automatic planes for nebulae and dust clouds; distance overrides for any catalogue object by name; custom mask images with names and distances, replacement, reload and removal. |

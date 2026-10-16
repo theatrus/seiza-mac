@@ -60,7 +60,9 @@ struct ParallaxWorkspace: View {
                 Button(action: session.redo) { Image(systemName: "arrow.uturn.forward") }
                     .help("Redo video edit").disabled(!session.canRedo || session.isBusy)
                 Button(session.hasScene ? "Update Preview" : "Prepare Preview", action: session.preparePreview).disabled(!session.canPrepare)
+                    .help(session.preparationIssue ?? "Prepare the selected images and camera for preview")
                 Button("Export Video…", action: session.exportVideo).disabled(!session.canPrepare)
+                    .help(session.preparationIssue ?? "Export the video at the selected output resolution")
                     .buttonStyle(.borderedProminent)
             }.padding(12)
             Divider()
@@ -245,7 +247,7 @@ struct ParallaxWorkspace: View {
     @ViewBuilder private var sourceInspector: some View {
         Section("Source snapshot") {
             Text("\(Int(session.composition.filmedBounds.width)) × \(Int(session.composition.filmedBounds.height)) pixels")
-            Text(session.hasWCS ? "Sky coordinates available" : "The original file is solved first using its astrometric headers, followed by the snapshot and an aligned stars layer when needed.")
+            Text(session.solvingDescription)
                 .font(.caption).foregroundStyle(.secondary)
             Text("Uses the current image adjustments. Imported layers must use the same stretch and alignment.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -285,6 +287,11 @@ struct ParallaxWorkspace: View {
                 Text("PNG or TIFF, full size. Stars must be unscreened.").font(.caption).foregroundStyle(.secondary)
                 Toggle("Layers match source alignment and stretch", isOn: $session.layersAligned)
                     .disabled(session.starlessName == nil || session.starsName == nil)
+                    .help("Enabled by default. Turning this off prevents stars-layer solving and preview preparation for this pair.")
+                if !session.layersAligned {
+                    Text("Stars-layer solving and preview are disabled. Enable this for an aligned pair; a starless source will not be plate solved.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
             }
         }
         Section("Scene depth") {
@@ -416,7 +423,11 @@ struct ParallaxWorkspace: View {
             Text("Motion \(session.tourOptions.motion, specifier: "%.1f")× · 0 removes generated roll and pan")
                 .font(.caption).foregroundStyle(.secondary)
             Button(session.hasWCS ? "Generate Tour" : "Solve & Generate Tour", action: session.generateTour)
-                .disabled(!session.sourceReady || setup.isRunning)
+                .disabled(!session.sourceReady || setup.isRunning || session.tourSolveIssue != nil)
+                .help(session.tourSolveIssue ?? "Use the available solution, or solve the source and plan a tour")
+            if let issue = session.tourSolveIssue {
+                Text(issue).font(.caption).foregroundStyle(.orange)
+            }
             if session.hasScene {
                 Text("Plans on the prepared scene, including its depth planes and distance overrides. Applying the tour reuses that scene.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -444,8 +455,10 @@ struct ParallaxWorkspace: View {
                 TextField("Start roll (°)", value: compositionBinding(\.rotationStart), format: .number)
                 TextField("End roll (°)", value: compositionBinding(\.rotation), format: .number)
                 rollExplanation
-                TextField("Opening zoom", value: compositionBinding(\.zoom), format: .number)
-                TextField("End lens multiplier", value: compositionBinding(\.zoomEnd), format: .number)
+                zoomControl("Opening zoom", value: compositionBinding(\.zoom), minimum: 1,
+                    help: "Lens magnification at the opening. Dolly moves the camera through depth instead.")
+                zoomControl("End lens multiplier", value: compositionBinding(\.zoomEnd), minimum: 1,
+                    help: "Additional lens magnification at the end of the fly-in.")
                 TextField("Sideways swing", value: compositionBinding(\.truck), format: .number)
                 TextField("Swing direction (°)", value: compositionBinding(\.truckAngleDegrees), format: .number)
                 Picker("Easing", selection: compositionBinding(\.easing)) {
@@ -477,8 +490,24 @@ struct ParallaxWorkspace: View {
                 TextField("Travel to stop (s)", value: stopBinding(\.travel), format: .number).disabled(index == 0)
                 TextField("Hold (s)", value: stopBinding(\.hold), format: .number)
                 Text("Set hold to 0 to pass straight through. Glide, spin and push can keep a held stop moving.").font(.caption).foregroundStyle(.secondary)
-                Slider(value: stopBinding(\.dolly), in: 0...0.95) { Text("Dolly") }
-                TextField("Zoom", value: stopBinding(\.zoom), format: .number)
+                HStack {
+                    Text("Dolly")
+                    Slider(value: stopBinding(\.dolly), in: 0...max(0.99, session.composition.stops[index].dolly), step: 0.01)
+                        .accessibilityLabel("Dolly camera travel")
+                        .help("Camera travel through depth: 0% returns to the starting distance; higher values move toward the background and create parallax. Zoom controls lens magnification separately.")
+                    Text("\(session.composition.stops[index].dolly * 100, specifier: "%.0f")%").monospacedDigit()
+                    Button("0%") { session.editStop { $0.dolly = 0 } }.help("Reset camera travel to the starting distance")
+                }
+                zoomControl("Zoom", value: stopBinding(\.zoom), minimum: 0.1,
+                    help: "Lens magnification: 0.5× gives a wider view, 1× is the base view, and 2× magnifies it. Dolly moves through depth instead. Overall zoom and camera fitting also apply.")
+                Button("Pull Back", action: session.pullBack)
+                    .help("Reset camera travel and lens zoom at this destination without changing the target or point.")
+                Text("Dolly moves through scene depth; Zoom changes lens magnification. Fill Frame can tighten a wider view to hide image edges; Show Whole Image allows them.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if session.composition.framing == "fill", session.composition.stops[index].zoom < 1 {
+                    Button("Use Show Whole Image for wider views") { session.edit { $0.framing = "fit" } }
+                        .help("Changes Output framing for the entire video so wide stops can show image edges instead of being zoomed back in.")
+                }
                 Slider(value: stopBinding(\.pan), in: 0...1) { Text("Pan") }
                 TextField("Roll (°)", value: stopBinding(\.rotateDegrees), format: .number)
                 HStack {
@@ -508,8 +537,8 @@ struct ParallaxWorkspace: View {
         } else { Text("Select a stop below the image to edit its camera and timing.").foregroundStyle(.secondary) }
         if session.composition.motion == .tour {
             Section("Tour motion") {
-                TextField("Overall zoom", value: compositionBinding(\.zoom), format: .number)
-                    .help("Multiplies every stop's zoom, including the opening stop.")
+                zoomControl("Overall zoom", value: compositionBinding(\.zoom), minimum: 1,
+                    help: "Multiplies every stop's zoom, including the opening stop. Use a stop's Zoom to go below 1×; reset Overall zoom to 1× for no extra magnification.")
                 TextField("Glide through holds", value: compositionBinding(\.tourGlide), format: .number)
                 Text("A fraction of travel speed: 0 pauses, 0.2 glides gently. Spinning stops turn around their own destination.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -540,6 +569,17 @@ struct ParallaxWorkspace: View {
     private var rollExplanation: some View {
         Text("Positive roll and spin turn counterclockwise. Roll defines travel between stops; spin adds a turn around a held stop. Pan turns toward the destination; 0 uses translation only.")
             .font(.caption).foregroundStyle(.secondary)
+    }
+
+    private func zoomControl(_ title: String, value: Binding<Double>, minimum: Double, help: String) -> some View {
+        HStack {
+            Text(title)
+            Slider(value: value, in: min(minimum, value.wrappedValue)...max(8, value.wrappedValue), step: 0.05)
+                .accessibilityLabel(title + " lens magnification")
+                .help(help)
+            Text("\(value.wrappedValue, specifier: "%.2f")×").monospacedDigit()
+            Button("1×") { value.wrappedValue = 1 }.help("Reset \(title.lowercased()) to 1×")
+        }
     }
 
     private var destinationCoordinates: some View {
@@ -612,6 +652,7 @@ struct ParallaxWorkspace: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(session.composition.validationMessage ??
+                    (!session.isBusy && !session.isReconfiguring ? session.preparationIssue : nil) ??
                     (session.isBusy && !session.activity.cancellationRequested ? session.activity.networkPhase : nil) ?? session.status)
                     .font(.caption).lineLimit(2)
                 if session.isBusy || session.isReconfiguring {
