@@ -520,6 +520,15 @@ final class ImageDocumentModel: ObservableObject {
         }
     }
 
+    func adoptParallaxSolution(_ solution: SolveResult) {
+        // A solve requested in the viewer keeps precedence over a background
+        // solve from a video window for the same original file.
+        switch solveState {
+        case .solving, .solved: return
+        default: solveState = .solved(solution)
+        }
+    }
+
     func solve(catalogDirectory: URL?) {
         solveState = .solving
         let url = url

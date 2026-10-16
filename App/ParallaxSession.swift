@@ -88,6 +88,8 @@ final class ParallaxSession: ObservableObject {
     private var starless: URL?
     private var stars: URL?
     private var wcs: WCSResult?
+    private let originalSource: ParallaxScopedURL
+    private weak var document: ImageDocumentModel?
     private var prepared: ParallaxVideo?
     private var sceneVideo: ParallaxVideo?
     // Catalogue labels are loaded lazily on the first overlay reconfiguration.
@@ -115,12 +117,14 @@ final class ParallaxSession: ObservableObject {
         let wcs: WCSResult?
         if case .solved(let solution) = model.solveState { wcs = solution.wcs } else { wcs = nil }
         self.init(sourceURL: model.url, processing: model.processingConfiguration, wcs: wcs, preview: model.exportImage)
+        document = model
     }
 
     init(sourceURL: URL, processing: FITSImageProcessingConfiguration, wcs: WCSResult?, preview: CGImage? = nil) {
         sourceName = sourceURL.lastPathComponent
         sourceImage = preview; self.wcs = wcs
         let source = ParallaxScopedURL(sourceURL)
+        originalSource = source
         isBusy = true
         task = Task {
             do {
@@ -136,8 +140,9 @@ final class ParallaxSession: ObservableObject {
                 guard !closed else { return }
                 sourceImage = rendered
                 width = rendered.width; height = rendered.height
+                composition.sourceWidth = width; composition.sourceHeight = height
                 // Keep a stable scene reference when manually editing a tour.
-                composition.scene.distanceFocus = [Double(width - 1) / 2, Double(height - 1) / 2]
+                composition.scene.distanceFocus = composition.imageCenter
                 sourceReady = true
                 status = "Choose aligned starless and unscreened stars images."
             } catch { self.error = error.localizedDescription; status = "Source snapshot failed." }
@@ -146,7 +151,10 @@ final class ParallaxSession: ObservableObject {
         }
     }
 
-    var hasWCS: Bool { wcs != nil }
+    var hasWCS: Bool {
+        if let document, case .solved = document.solveState { return true }
+        return wcs != nil
+    }
     var hasPreview: Bool { prepared != nil }
     var hasScene: Bool { sceneVideo != nil }
     var selectedIndex: Int? { composition.stops.firstIndex { $0.id == selectedStop } }
@@ -189,7 +197,7 @@ final class ParallaxSession: ObservableObject {
     private func updateHistory() { canUndo = !undoStates.isEmpty; canRedo = !redoStates.isEmpty }
 
     private func invalidate(scene: Bool = false) {
-        if candidateOnScene && (scene || candidateFrame != "\(composition.width)x\(composition.height)") { discardCandidate() }
+        if candidateOnScene && (scene || candidateFrame != composition.frameKey) { discardCandidate() }
         revision += 1; frameRevision += 1; framePending = nil
         refitSignal?.cancel(); refitRequested = false
         prepared = nil; summary = nil
@@ -315,11 +323,20 @@ final class ParallaxSession: ObservableObject {
         let (signal, generation) = begin(message)
         let events = eventHandler(generation)
         let path = map?.url.path
+        let crop = composition.scene.crop, sourceWidth = width, sourceHeight = height, files = files
         task = Task {
             do {
                 let video = try await Task.detached(priority: .userInitiated) {
-                    try withExtendedLifetime((map, access)) {
-                        let painted = try ParallaxCore.withDustMap(source, path: path, cancellation: signal, events: events)
+                    try withExtendedLifetime((map, access, files)) {
+                        var mappedPath = path
+                        if let crop, let path, let files {
+                            let cropped = files.directory.appendingPathComponent(UUID().uuidString + ".fits")
+                            try ParallaxCore.transformDustMap(path: path, to: cropped,
+                                sourceWidth: sourceWidth, sourceHeight: sourceHeight, crop: crop, expand: false)
+                            mappedPath = cropped.path
+                        }
+                        try signal.check()
+                        let painted = try ParallaxCore.withDustMap(source, path: mappedPath, cancellation: signal, events: events)
                         if let settings {
                             return try ParallaxCore.reconfigure(painted, settings: settings, cancellation: signal, events: events)
                         }
@@ -349,12 +366,23 @@ final class ParallaxSession: ObservableObject {
     func exportDustMap(to destination: URL) {
         guard !closed, canExportDustMap, let video = prepared ?? sceneVideo else { return }
         let access = ParallaxScopedURL(destination)
+        let crop = composition.scene.crop, sourceWidth = width, sourceHeight = height
+        let files = files, baseMap = selectedInputs[.dustMap]
         let (signal, generation) = begin("Writing dust map…")
         task = Task {
             do {
                 let written = try await Task.detached(priority: .userInitiated) {
-                    try withExtendedLifetime(access) {
+                    try withExtendedLifetime((access, files, baseMap)) {
                         try signal.check()
+                        if let crop, let files {
+                            let cropped = files.directory.appendingPathComponent(UUID().uuidString + ".fits")
+                            guard try video.writeDustMap(to: cropped) else { return false }
+                            try signal.check()
+                            try ParallaxCore.transformDustMap(path: cropped.path, to: access.url,
+                                sourceWidth: sourceWidth, sourceHeight: sourceHeight, crop: crop,
+                                expand: true, base: baseMap?.url.path)
+                            return true
+                        }
                         return try video.writeDustMap(to: access.url)
                     }
                 }.value
@@ -471,7 +499,7 @@ final class ParallaxSession: ObservableObject {
 
     func addStop(whole: Bool = false) {
         var stop = ParallaxStop(name: whole ? "Whole Image" : "Custom Point",
-            focus: whole ? nil : [Double(width) / 2, Double(height) / 2], dolly: whole ? 0 : 0.4)
+            focus: whole ? nil : composition.imageCenter, dolly: whole ? 0 : 0.4)
         stop.rotateDegrees = selectedIndex.map { composition.stops[$0].rotateDegrees } ?? 0
         let index = selectedIndex.map { $0 + 1 } ?? composition.stops.count
         edit { $0.stops.insert(stop, at: index) }
@@ -498,6 +526,7 @@ final class ParallaxSession: ObservableObject {
         requestFrame()
     }
     func pick(x: Double, y: Double) {
+        guard composition.filmedBounds.contains(CGPoint(x: x, y: y)) else { return }
         if pickingDistance {
             edit { $0.scene.distanceFocus = [x, y]; $0.distanceName = "Custom point" }
             pickingDistance = false; return
@@ -526,11 +555,28 @@ final class ParallaxSession: ObservableObject {
             rcAstroHost: rcAstroHost.isEmpty ? nil : rcAstroHost,
             // The core refuses a dust map with the dust off.
             dustMap: composition.scene.dust ? selectedInputs[.dustMap]?.url.path : nil)
-        return ParallaxRequest(inputs: inputs, scene: composition.scene, video: composition.videoSettings(preview: preview))
+        return ParallaxRequest(inputs: inputs, scene: composition.sceneSettings(), video: composition.videoSettings(preview: preview))
     }
 
     private func resources() -> [ParallaxScopedURL] {
-        Array(selectedInputs.values) + Array(maskFiles.values) + [CatalogAccess.resolve().map(ParallaxScopedURL.init)].compactMap { $0 }
+        [originalSource] + Array(selectedInputs.values) + Array(maskFiles.values) + [CatalogAccess.resolve().map(ParallaxScopedURL.init)].compactMap { $0 }
+    }
+
+    private func synchronizeDocumentSolution() {
+        guard let document, case .solved(let solution) = document.solveState, solution.wcs != wcs else { return }
+        wcs = solution.wcs
+        invalidate(scene: true)
+    }
+
+    private func solutionHandler(_ generation: Int, cancellation: ParallaxCancellation) -> (SolveResult) -> Void {
+        { [weak self] solution in
+            Task { @MainActor in
+                guard let self, !self.closed, self.revision == generation,
+                      !cancellation.isCancelled else { return }
+                self.wcs = solution.wcs
+                self.document?.adoptParallaxSolution(solution)
+            }
+        }
     }
 
     private func begin(_ message: String) -> (ParallaxCancellation, Int) {
@@ -571,6 +617,7 @@ final class ParallaxSession: ObservableObject {
 
     func generateTour() {
         guard !closed, sourceReady, !isBusy, !CatalogSetupController.shared.isRunning else { return }
+        synchronizeDocumentSolution()
         guard tourOptions.hold.isFinite, tourOptions.hold >= 0,
               tourOptions.motion.isFinite, tourOptions.motion >= 0 else {
             error = "Tour hold and motion must be finite, nonnegative numbers."; return
@@ -578,19 +625,22 @@ final class ParallaxSession: ObservableObject {
         // With a prepared scene, plan on it: stops on depth planes are framed
         // at their planes' depths, as an automatic tour of the scene would be.
         if let scene = sceneVideo {
-            let settings = ParallaxScenePlanSettings(size: "\(composition.width)x\(composition.height)", autoTour: tourOptions)
+            let size = composition.outputSize
+            let settings = ParallaxScenePlanSettings(size: "\(size.width)x\(size.height)", framing: composition.framing, autoTour: tourOptions)
+            let frameKey = composition.frameKey, crop = composition.scene.crop
             let access = sceneResources, files = files
             let (signal, generation) = begin("Planning tour on the prepared scene…")
             task = Task {
                 do {
-                    let plan = try await Task.detached(priority: .userInitiated) {
+                    var plan = try await Task.detached(priority: .userInitiated) {
                         try withExtendedLifetime((files, access)) {
                             try ParallaxCore.planOnScene(scene, settings: settings, cancellation: signal)
                         }
                     }.value
                     try signal.check()
                     guard !closed, generation == revision else { return }
-                    candidate = plan; candidateOnScene = true; candidateFrame = settings.size
+                    plan.crop = crop
+                    candidate = plan; candidateOnScene = true; candidateFrame = frameKey
                     status = "Generated \(plan.tour.count) stops on the prepared scene. Apply the tour or keep your draft."
                     finish(signal, error: nil)
                 } catch { finish(signal, error: error) }
@@ -606,14 +656,18 @@ final class ParallaxSession: ObservableObject {
             let allowStarsFallback = layersAligned
             let (signal, generation) = begin(hasWCS ? "Planning tour…" : "Solving image and planning tour…")
             let events = eventHandler(generation)
+            let originalURL = originalSource.url, didSolve = solutionHandler(generation, cancellation: signal)
             task = Task {
                 do {
                     let result = try await Task.detached(priority: .userInitiated) { () -> (ParallaxTourPlan, WCSResult?) in
                         try withExtendedLifetime((files, access)) {
                             let request = try ParallaxCore.resolvingWCS(request, allowStarsFallback: allowStarsFallback,
+                                originalURL: originalURL, didSolve: didSolve,
                                 cancellation: signal, events: events)
                             try signal.check()
-                            return (try ParallaxCore.plan(request, cancellation: signal, events: events), request.inputs.wcs)
+                            var plan = try ParallaxCore.plan(request, cancellation: signal, events: events)
+                            plan.crop = request.scene.crop
+                            return (plan, request.inputs.wcs)
                         }
                     }.value
                     try signal.check()
@@ -638,17 +692,20 @@ final class ParallaxSession: ObservableObject {
 
     func preparePreview() {
         guard canPrepare else { return }
+        synchronizeDocumentSolution()
         if sceneVideo != nil { scheduleRefit(force: true); return }
         do {
             let request = try request(preview: true), files = files!
             let access = resources()
             let (signal, generation) = begin(hasWCS ? "Loading images and finding stars…" : "Loading images, solving sky coordinates and finding stars…")
             let events = eventHandler(generation)
+            let originalURL = originalSource.url, didSolve = solutionHandler(generation, cancellation: signal)
             task = Task {
                 do {
                     let video = try await Task.detached(priority: .userInitiated) {
                         try withExtendedLifetime((files, access)) {
-                            try ParallaxCore.prepare(request, cancellation: signal, events: events)
+                            try ParallaxCore.prepare(request, originalURL: originalURL, didSolve: didSolve,
+                                cancellation: signal, events: events)
                         }
                     }.value
                     try signal.check()
@@ -730,9 +787,12 @@ final class ParallaxSession: ObservableObject {
         panel.nameFieldStringValue = "Tour.json"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            let plan = ParallaxTourPlan(focus: composition.scene.distanceFocus ?? [Double(width - 1) / 2, Double(height - 1) / 2],
-                focusName: composition.distanceName, seconds: composition.duration, tour: composition.stops,
-                tourGlide: composition.tourGlide, tourTitles: composition.tourTitles, tourLoop: composition.tourLoop)
+            var stops = composition.stops
+            for index in stops.indices { stops[index].focus = stops[index].focus.map(composition.videoPoint) }
+            let plan = ParallaxTourPlan(focus: composition.videoPoint(composition.scene.distanceFocus ?? composition.imageCenter),
+                focusName: composition.distanceName, seconds: composition.duration, tour: stops,
+                tourGlide: composition.tourGlide, tourTitles: composition.tourTitles, tourLoop: composition.tourLoop,
+                crop: composition.scene.crop)
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let access = ParallaxScopedURL(url)
             try withExtendedLifetime(access) { try encoder.encode(plan).write(to: url, options: .atomic) }
@@ -782,6 +842,7 @@ final class ParallaxSession: ObservableObject {
 
     func exportVideo() {
         guard canPrepare else { return }
+        synchronizeDocumentSolution()
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.mpeg4Movie]
         panel.nameFieldStringValue = (sourceName as NSString).deletingPathExtension + "-parallax.mp4"
@@ -793,6 +854,7 @@ final class ParallaxSession: ObservableObject {
             let retainedAccess = existing == nil ? resources() : sceneResources
             let (signal, generation) = begin(existing == nil ? "Preparing full-resolution video…" : "Fitting full-resolution video…")
             let events = eventHandler(generation)
+            let originalURL = originalSource.url, didSolve = solutionHandler(generation, cancellation: signal)
             task = Task {
                 do {
                     let video = try await Task.detached(priority: .userInitiated) {
@@ -800,7 +862,8 @@ final class ParallaxSession: ObservableObject {
                             if let existing {
                                 return try ParallaxCore.reconfigure(existing, settings: request.video, cancellation: signal, events: events)
                             }
-                            return try ParallaxCore.prepare(request, cancellation: signal, events: events)
+                            return try ParallaxCore.prepare(request, originalURL: originalURL, didSolve: didSolve,
+                                cancellation: signal, events: events)
                         }
                     }.value
                     try signal.check()

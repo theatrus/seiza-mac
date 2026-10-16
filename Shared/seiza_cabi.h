@@ -42,6 +42,7 @@
  *          Videos reconfigured from one preparation share its scene, which
  *          lives until the last of them is freed; free them in any order.
  *   - char* returned by seiza_catalog_status_json, seiza_solve_image_json,
+ *     seiza_solve_image_with_limits_json,
  *     seiza_probe_frame_json, seiza_calibration_plan_json,
  *     seiza_calibration_build_master_json, seiza_live_stacker_state_json, and
  *     seiza_live_stacker_push_*_json, seiza_parallax_summary_json,
@@ -320,9 +321,12 @@ typedef struct {
 
  Every field is optional: set a `SEIZA_TOLERANCE_HAS_*` bit to override that
  tolerance, leave it clear to take the default. A zeroed struct therefore
- means "all defaults", and passing a null pointer anywhere one of these is
- accepted means the same. An override that is negative or not a number is
- ignored in favour of the default.
+ means "all defaults", and so does a null pointer, except where a live
+ stacker call says null means the stack's own gate. An override that is
+ negative, not a number, infinite, or a rotation above 180 degrees is
+ ignored in favour of the default. Unset fields always take the built-in
+ defaults, never the stack's own gate: a non-null struct replaces it
+ whole.
 
  The defaults are what a rig's own scatter needs rather than what a
  specification promises. [`seiza_match_tolerances_default`] fills one in if
@@ -786,8 +790,11 @@ char *seiza_stack_choose_reference_json(const char *paths_json,
  example, `"demosaic": "vng" | "mhc" | "bilinear"`,
  `"interpolation": "bilinear" | "lanczos3"`,
  `"normalization": {"mode": "local-background", "options": {"tile_size": 256}}`,
- `"weighting": {"mode": "inverse-noise-variance"}`, or
- `"registration": {"model": "quadratic"}`. All files
+ `"weighting": {"mode": "inverse-noise-variance"}`,
+ `"registration": {"model": "quadratic"}`, or
+ `"match_tolerances": {"rotation_deg": 5.0}`, the gate the reference and
+ every pushed light are judged under against the masters (tolerances left
+ out keep their defaults). All files
  are fully read during this call and are not kept open afterward.
 
  # Safety
@@ -905,9 +912,11 @@ bool seiza_live_stacker_save_context(const SeizaLiveStacker *stacker,
  JSON shape: `{"schemaVersion":1,"kept":["bias","dark"],"dropped":
  [{"kind":"flat","reason":"flat set aside: rotation light=..."}]}` — `kept`
  lists only masters that are loaded and acceptable; a master that was never
- loaded appears in neither list. `tolerances` may be null for the defaults.
- Returns a string released with [`seiza_string_free`], or null with
- `error_out` set.
+ loaded appears in neither list. `tolerances` may be null for the stack's
+ own: those it opened with (`match_tolerances` in its options JSON) or
+ was last given by [`seiza_live_stacker_set_match_tolerances`]. Returns a
+ string released with [`seiza_string_free`], or null with `error_out`
+ set.
 
  # Safety
 
@@ -921,6 +930,74 @@ char *seiza_live_stacker_compatible_calibration_json(const SeizaLiveStacker *sta
                                                      const SeizaFrameSignature *signature,
                                                      const SeizaMatchTolerances *tolerances,
                                                      char **error_out);
+
+/*
+ Whether every active master of the stacker accepts a prospective light:
+ the yes-or-no form of [`seiza_live_stacker_compatible_calibration_json`],
+ asking exactly the same questions, so it answers 1 exactly when that
+ drops nothing.
+
+ Returns 1 when the light is acceptable (and always with no masters
+ loaded), 0 when a master refuses it — with `error_out` set to why,
+ naming the reading and, for a measured gap, the tolerance in force, as
+ in `master flat does not match the light frame's optical configuration:
+ rotation light=113.8deg master=3.2deg (110.60 deg apart, tolerance
+ 2.00)` — and -1 with `error_out` set when an argument is invalid.
+
+ `tolerances` may be null for the stack's own, as in
+ [`seiza_live_stacker_compatible_calibration_json`]. A host that widened
+ a gate to choose its masters asks with the same gate here.
+
+ # Safety
+
+ As [`seiza_live_stacker_compatible_calibration_json`].
+ */
+int32_t seiza_live_stacker_validate_calibration(const SeizaLiveStacker *stacker,
+                                                const SeizaFrameSignature *signature,
+                                                const SeizaMatchTolerances *tolerances,
+                                                char **error_out);
+
+/*
+ Judge the lights pushed from now on under `tolerances`: how close a
+ light's readings must be to the masters' for them to calibrate it. A
+ host that widened a gate to choose its masters — a rotator that scatters
+ more than two degrees, or a flat taken from the nearest other angle on
+ purpose — sets the same gate here, or the light is refused when it is
+ pushed. To judge the reference under it too, open the stack with
+ `match_tolerances` in its options JSON instead.
+
+ Frames already admitted keep the gate they were admitted under, and a
+ reintegration judges each by its own, so a gate can be widened for one
+ light and narrowed again after it. A saved context keeps it, and the
+ configuration fingerprint changes with it. Null, a zeroed struct and any
+ cleared flag mean the defaults, as everywhere a `SeizaMatchTolerances`
+ is taken. Returns false with `error_out` set for a stack created from
+ prepared arrays, whose frames are never calibrated.
+
+ # Safety
+
+ `stacker` must be a live stacker from this library, with this call
+ externally synchronized against every other operation on it.
+ `tolerances` must be null or reference an initialized
+ `SeizaMatchTolerances`. When non-null, `error_out` must point to
+ writable storage for one pointer.
+ */
+bool seiza_live_stacker_set_match_tolerances(SeizaLiveStacker *stacker,
+                                             const SeizaMatchTolerances *tolerances,
+                                             char **error_out);
+
+/*
+ Fill `tolerances` with the stack's own, every flag set: the gate its
+ lights are judged under now.
+
+ # Safety
+
+ `stacker` must be a live stacker from this library, with this read
+ externally synchronized against mutable operations. `tolerances` must
+ point at writable storage for one `SeizaMatchTolerances`.
+ */
+bool seiza_live_stacker_match_tolerances(const SeizaLiveStacker *stacker,
+                                         SeizaMatchTolerances *tolerances);
 
 /*
  Returns an owned JSON snapshot of the live stack's resumable identity and
@@ -1740,6 +1817,26 @@ char *seiza_solve_image_json(const char *path,
                              char **error_out);
 
 /*
+ [`seiza_solve_image_json`] that gives up after `time_limit_seconds`
+ (zero for no limit) or when `cancel` is cancelled. A solve that stops
+ returns null with `error_out` set to `solve stopped at its time limit` or
+ `cancelled by the caller`. Detection and loading are not counted against
+ the limit; the solve checks it between windows and hypotheses.
+
+ # Safety
+ As [`seiza_solve_image_json`]. `cancel` must be null or a live
+ [`SeizaCancelSignal`] retained until this call returns.
+ */
+char *seiza_solve_image_with_limits_json(const char *path,
+                                         const char *catalog_directory,
+                                         double minimum_scale_arcsec_per_pixel,
+                                         double maximum_scale_arcsec_per_pixel,
+                                         uint8_t sip_order,
+                                         double time_limit_seconds,
+                                         const SeizaCancelSignal *cancel,
+                                         char **error_out);
+
+/*
  # Safety
  `value` must be null or a string returned by this library that has not
  already been freed.
@@ -2176,8 +2273,13 @@ char *seiza_rc_astro_process_file_json(const char *request_json,
  image stays with the nebula unless given a distance, and so do the
  nebulae inside a nebula that stays), `distanceOverrides` (`[{object, distanceParsecs}]`:
  distances for catalogued objects, by name, in place of the catalogue's,
- for the nebula's distance and the automatic planes), `start` ("focus",
- "whole"), `dolly`, `truck`, `truckAngleDegrees`,
+ for the nebula's distance and the automatic planes), `crop` (`[x, y,
+ width, height]` in image pixels: film that part of the image, every
+ other image point counting in it), `start` ("focus", "whole"),
+ `framing` ("fill", the default, fills the frame and cuts the ends of
+ the image's longer side when the image and frame differ in shape;
+ "fit" shows all the image at the widest, with black beside it),
+ `dolly`, `truck`, `truckAngleDegrees`,
  `pan`, `zoom`, `zoomEnd`, `rotateDegrees` `[first, last]`, `easing`
  ("inOut", "linear"), `quality` ("standard", "high"), `growthLimit`,
  `fadeFrom`, `tour` (stops `[{focus, dolly, zoom, rotateDegrees, pan,
@@ -2194,7 +2296,9 @@ char *seiza_rc_astro_process_file_json(const char *request_json,
  and out), `tourLoop` (end where the tour began, adding a last stop at
  the first's view unless it ends there, so the last frame leads into the
  first), `size` ("720p", "1080p", "1440p", "4k", each with
- "-portrait", or "WIDTHxHEIGHT"), `seconds`, `fps`, `overlay`,
+ "-portrait", or with "-image" for the image's own shape with that
+ longer side, so "4k-image" films a 4:3 image at 3840x2880, all of it;
+ or "WIDTHxHEIGHT"), `seconds`, `fps`, `overlay`,
  `overlayDensity`, `labels` (`[{x, y, radius, text}]`), `labelColor`
  ("#RRGGBB"), `watermark` (true, the text, or `{text, image, corner,
  size, opacity}`: `text` true or the text, `image` a picture such as a
@@ -2232,8 +2336,9 @@ SeizaParallax *seiza_parallax_prepare_json(const char *request_json,
  Plan a tour of the catalogued objects in an image, for the caller to
  edit before making the video. The request is
  [`seiza_parallax_prepare_json`]'s: the image (`image`, else `stars` or
- `starless`) gives the size, and is blind-solved without `wcs`; `size`
- is the video's frame; `objects` or `catalogDirectory` the object
+ `starless`) gives the size, and is blind-solved without `wcs`; `crop`
+ the part filmed; `size` and `framing` the video's frame; `objects` or
+ `catalogDirectory` the object
  catalog; and `autoTour` (`{targets, hold, motion}`, each optional) how
  to plan. Returns JSON, released with `seiza_string_free`:
  `{"focus": [x, y], "focusName", "seconds", "tour": [{name, focus,
@@ -2263,10 +2368,11 @@ char *seiza_parallax_plan_tour_json(const char *request_json,
  same scene would be. [`seiza_parallax_plan_tour_json`] plans from the
  catalogue alone, without the scene's planes.
 
- `settings_json` is `{"size", "autoTour": {targets, hold, motion}}`, each
- optional: `size` the frame the tour is for ("720p", "1080p", "1440p",
- "4k", each with "-portrait", or "WIDTHxHEIGHT"; the video's own if
- absent), and `autoTour` how to plan. Returns
+ `settings_json` is `{"size", "framing", "autoTour": {targets, hold,
+ motion}}`, each optional: `size` the frame the tour is for ("720p",
+ "1080p", "1440p", "4k", each with "-portrait" or "-image", or
+ "WIDTHxHEIGHT"; the video's own if absent), `framing` "fill" or "fit"
+ (the video's own if absent), and `autoTour` how to plan. Returns
  [`seiza_parallax_plan_tour_json`]'s JSON, released with
  `seiza_string_free`, its stops carrying their planes' `depthParsecs`.
  Its `tour`, with any stops or titles dropped, moved or changed, goes
@@ -2294,8 +2400,8 @@ char *seiza_parallax_plan_scene_tour_json(const SeizaParallax *video,
 
  `settings_json` is a complete set of the video's settings, as in
  [`seiza_parallax_prepare_json`] but for the scene's: the single move
- (`focus`, `start`, `dolly`, `truck`, `truckAngleDegrees`, `pan`, `zoom`,
- `zoomEnd`, `rotateDegrees`, `easing`), a tour (`tour`, `autoTour`,
+ (`focus`, `start`, `framing`, `dolly`, `truck`, `truckAngleDegrees`,
+ `pan`, `zoom`, `zoomEnd`, `rotateDegrees`, `easing`), a tour (`tour`, `autoTour`,
  `tourGlide`, `tourTitles`, `tourLoop`), the output (`size`, `seconds`, `fps`, `quality`,
  `growthLimit`, `fadeFrom`), the labels (`overlay`, `overlayDensity`,
  `labels`, `labelColor`, `watermark`) and the cards (`introCard`,
@@ -2303,7 +2409,7 @@ char *seiza_parallax_plan_scene_tour_json(const SeizaParallax *video,
  defaults, not the first video's. Turns are taken as given, unwrapped:
  `rotateDegrees` [0, 360] turns once anticlockwise and [0, -360] once
  clockwise, and a stop's `rotateDegrees` likewise. A field that would
- change the scene (the images, plate solution, catalogs, distances,
+ change the scene (the images, crop, plate solution, catalogs, distances,
  `distanceFocus`, star placement, galaxies, depth planes or dust) is
  refused: those
  need a new preparation, except a dust map, which
@@ -2353,7 +2459,10 @@ SeizaParallax *seiza_parallax_reconfigure_json(const SeizaParallax *video,
  the dust
  (`dustTransmission` `{median, thickest}`, `dustGiven` when a map gave
  it, and `starsInFrontOfDust`, the stars it brought in front), objects
- labelled, the WCS used, and `fit`, how fitting the camera to the
+ labelled, `wcs`, the plate solution of the image as given (before any
+ crop, so it goes back into a request with the same images as it is),
+ `crop`, the part filmed (`[x, y, width, height]`, or null), and `fit`,
+ how fitting the camera to the
  image changed the framing asked for: `zoom`, `pan`, `lead` and `truck`
  for the single move and `stops[].zoom`, `stops[].pan` and
  `stops[].dolly` for a tour, each `{asked, used}`, and `inside`, false

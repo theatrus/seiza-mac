@@ -1058,6 +1058,8 @@ struct ImageStatistics: Decodable {
 }
 
 struct SolveResult: Decodable {
+    let solvedFrom: String?
+    let falseMatchProbability: Double?
     let centerRaDegrees: Double
     let centerDecDegrees: Double
     let scaleArcsecPerPixel: Double
@@ -1074,6 +1076,16 @@ struct SolveResult: Decodable {
     let overlayUnavailableReasons: [String: String]?
     let overlayCounts: [String: Int]?
     let wcs: WCSResult
+
+    var provenanceDescription: String? {
+        switch solvedFrom {
+        case "header-checked": "Solved from the file's own solution"
+        case "header-hint": "Solved near the file's pointing"
+        case "blind": "Solved blind"
+        case "header-unchecked": "Using the file's own solution; no stars confirmed it."
+        default: nil
+        }
+    }
 }
 
 struct SolveImagePoint: Decodable {
@@ -1193,14 +1205,15 @@ struct SolveObjectContour: Decodable {
     let points: [[Double]]
 }
 
-struct WCSResult: Codable {
+struct WCSResult: Codable, Equatable {
     let crval: [Double]
     let crpix: [Double]
     let cd: [[Double]]
     let sip: SIPResult?
+    var pixelOrigin: Int?
 }
 
-struct SIPResult: Codable {
+struct SIPResult: Codable, Equatable {
     let order: Int
     let a: [Double]
     let b: [Double]
@@ -1527,28 +1540,34 @@ enum SeizaCore {
         catalogDirectory: URL?,
         minimumScale: Double = 0.1,
         maximumScale: Double = 20,
-        sipOrder: UInt8 = 0
+        sipOrder: UInt8 = 0,
+        timeLimitSeconds: Double = 0,
+        cancellation: OpaquePointer? = nil
     ) throws -> SolveResult {
         var errorPointer: UnsafeMutablePointer<CChar>?
         let resultPointer: UnsafeMutablePointer<CChar>? = url.path.withCString { path in
             if let catalogDirectory {
                 return catalogDirectory.path.withCString { catalogPath in
-                    seiza_solve_image_json(
+                    seiza_solve_image_with_limits_json(
                         path,
                         catalogPath,
                         minimumScale,
                         maximumScale,
                         sipOrder,
+                        timeLimitSeconds,
+                        cancellation,
                         &errorPointer
                     )
                 }
             }
-            return seiza_solve_image_json(
+            return seiza_solve_image_with_limits_json(
                 path,
                 nil,
                 minimumScale,
                 maximumScale,
                 sipOrder,
+                timeLimitSeconds,
+                cancellation,
                 &errorPointer
             )
         }

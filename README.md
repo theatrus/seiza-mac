@@ -57,6 +57,9 @@ distance, which is preserved when saving and loading tours.
 
 Export a silent MP4 in **H.264 or HEVC** with the Mac's native video encoder.
 Choose 720p through 4K presets, portrait or landscape, or custom dimensions.
+Use **Show Whole Image** to retain the complete photograph with black space
+beside it, or **Match image shape** for a square or tall video without cropping
+its edges. Draw a crop in Source when you want to film a particular region.
 Save and load tour itineraries as JSON to revisit the route later.
 
 In **Source → Stars and dust**, choose a dust map painted white where dust is
@@ -94,7 +97,7 @@ names and distances, with controls to replace, reload or remove each mask.
 ![Seiza's Output inspector beside the Iris Nebula tour, with resolution presets, orientation, frame rate, codec, quality, and MP4 export controls](docs/images/seiza-parallax-output.jpg)
 
 Use **Save…** and **Load…** in the Tour Stops strip to exchange JSON itineraries.
-An itinerary saves the route and tour motion options; it does not include source
+An itinerary saves the route, crop, and tour motion options; it does not include source
 images, overall zoom, scene settings, labels, or export preferences. Full
 video-project recovery remains planned. See the
 [implementation scope and remaining work](docs/PARALLAX-VIDEO.md).

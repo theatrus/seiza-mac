@@ -3714,6 +3714,13 @@ private struct InspectorView: View {
                 }
             }
         case .solved(let solution):
+            if let provenance = solution.provenanceDescription {
+                if solution.solvedFrom == "header-unchecked" {
+                    Label(provenance, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                } else {
+                    Text(provenance).font(.callout)
+                }
+            }
             LabeledContent(
                 "Elapsed",
                 value: (Double(solution.elapsedMilliseconds) / 1_000).formatted(
