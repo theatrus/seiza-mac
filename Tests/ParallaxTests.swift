@@ -361,6 +361,68 @@ final class ParallaxTests: XCTestCase {
         XCTAssertEqual(repeated.summary.wcs.crpix, original.inputs.wcs?.crpix)
     }
 
+    func testCroppedDustUsesSourceCoordinatesAcrossPreparePaintExportAndReset() throws {
+        let (files, original) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        var request = original
+        let crop = ParallaxCrop(x: 16, y: 8, width: 48, height: 48)
+        request.scene.crop = crop; request.video.focus = nil; request.video.tour = []
+        request.video.seconds = 0.5
+        let plain = try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in })
+        let originalPixels = try XCTUnwrap(plain.frame(1).dataProvider?.data as Data?)
+        let painted = files.directory.appendingPathComponent("coarse-source-dust.png")
+        var rgba = Data()
+        for y in 0..<8 {
+            for x in 0..<12 {
+                let opacity: UInt8 = x < 6 ? 0 : (y < 4 ? 255 : 128)
+                rgba.append(contentsOf: [opacity, opacity, opacity, 255])
+            }
+        }
+        try ImageFileWriter.write(XCTUnwrap(SeizaCore.makeRGBA8Image(data: rgba, width: 12, height: 8)), to: painted, format: .png)
+        request.inputs.dustMap = painted.path
+        let prepared = try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in })
+        let swapped = try ParallaxCore.withDustMap(plain, path: painted.path, cancellation: ParallaxCancellation(), events: { _ in })
+        XCTAssertEqual(try prepared.frame(1).dataProvider?.data as Data?,
+                       try swapped.frame(1).dataProvider?.data as Data?, "Prepare and replacement must sample the same source grid")
+        let map = try XCTUnwrap(swapped.dustMap(width: 96, height: 64))
+        XCTAssertEqual(map[20 * 96 + 24], 0, accuracy: 1e-4)
+        XCTAssertGreaterThan(map[20 * 96 + 60], 0.99)
+        XCTAssertEqual(map[48 * 96 + 60], Float(128.0 / 255.0), accuracy: 0.01)
+        for y in 0..<64 {
+            for x in 0..<96 where x < crop.x || x >= crop.x + crop.width || y < crop.y || y >= crop.y + crop.height {
+                XCTAssertEqual(map[y * 96 + x], 0, "Unfilmed pixels must stay clear")
+            }
+        }
+        // Every offered output format preserves source size and painted alignment.
+        for ext in ["png", "tiff", "fits", "xisf"] {
+            let exported = files.directory.appendingPathComponent("source-dust.\(ext)")
+            XCTAssertTrue(try swapped.writeDustMap(to: exported))
+            let image = try SeizaCore.render(url: exported).metadata
+            XCTAssertEqual(image.width, 96); XCTAssertEqual(image.height, 64)
+            let reloaded = try ParallaxCore.withDustMap(plain, path: exported.path, cancellation: ParallaxCancellation(), events: { _ in })
+            let again = try XCTUnwrap(reloaded.dustMap(width: 96, height: 64))
+            XCTAssertEqual(again[20 * 96 + 24], 0, accuracy: 1e-4)
+            XCTAssertGreaterThan(again[20 * 96 + 60], 0.99)
+            XCTAssertEqual(again[0], 0)
+            var anotherCrop = original
+            anotherCrop.video = request.video
+            anotherCrop.scene.crop = ParallaxCrop(x: 48, y: 16, width: 32, height: 32)
+            anotherCrop.inputs.dustMap = exported.path
+            let reused = try ParallaxCore.prepare(anotherCrop, cancellation: ParallaxCancellation(), events: { _ in })
+            let other = try XCTUnwrap(reused.dustMap(width: 96, height: 64))
+            XCTAssertGreaterThan(other[20 * 96 + 60], 0.99)
+            XCTAssertEqual(other[20 * 96 + 24], 0)
+        }
+        let square = files.directory.appendingPathComponent("crop-shaped.png")
+        try ImageFileWriter.write(XCTUnwrap(SeizaCore.makeRGBA8Image(data: Data(repeating: 255, count: 24 * 24 * 4), width: 24, height: 24)), to: square, format: .png)
+        XCTAssertThrowsError(try ParallaxCore.withDustMap(plain, path: square.path, cancellation: ParallaxCancellation(), events: { _ in }))
+        let reset = try ParallaxCore.withDustMap(swapped, path: nil, cancellation: ParallaxCancellation(), events: { _ in })
+        XCTAssertNil(try reset.dustMap(width: 96, height: 64))
+        XCTAssertEqual(try reset.frame(1).dataProvider?.data as Data?, originalPixels)
+        XCTAssertEqual(try plain.frame(1).dataProvider?.data as Data?, originalPixels)
+        XCTAssertEqual(try swapped.dustMap(width: 96, height: 64), map)
+    }
+
     @MainActor
     func testCroppedDustMapsExportAtSourceSizeAndReloadWithAlignment() async throws {
         let (files, request) = try fixture()
@@ -380,7 +442,16 @@ final class ParallaxTests: XCTestCase {
         session.preparePreview()
         try await waitUntil { !session.isBusy }
         XCTAssertTrue(session.hasScene, session.error ?? "Cropped scene failed")
-        session.chooseDustMap(ParallaxScopedURL(URL(fileURLWithPath: request.inputs.stars!)))
+        let painted = files.directory.appendingPathComponent("session-source-dust.png")
+        var rgba = Data()
+        for _ in 0..<8 {
+            for x in 0..<12 {
+                let opacity: UInt8 = x < 6 ? 0 : 255
+                rgba.append(contentsOf: [opacity, opacity, opacity, 255])
+            }
+        }
+        try ImageFileWriter.write(XCTUnwrap(SeizaCore.makeRGBA8Image(data: rgba, width: 12, height: 8)), to: painted, format: .png)
+        session.chooseDustMap(ParallaxScopedURL(painted))
         try await waitUntil { !session.isBusy }
         XCTAssertNil(session.error)
         XCTAssertEqual(session.summary?.dustGiven, true)
@@ -391,7 +462,17 @@ final class ParallaxTests: XCTestCase {
         let source = try XCTUnwrap(CGImageSourceCreateWithURL(output as CFURL, nil))
         let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
         XCTAssertEqual(image.width, 96); XCTAssertEqual(image.height, 64)
+        var readRequest = request
+        readRequest.inputs.dustMap = output.path
+        let read = try ParallaxCore.prepare(readRequest, cancellation: ParallaxCancellation(), events: { _ in })
+        let map = try XCTUnwrap(read.dustMap(width: 96, height: 64))
+        XCTAssertEqual(map[0], 0, "Export must clear prior paint outside the crop")
+        XCTAssertEqual(map[30 * 96 + 20], 0, accuracy: 1e-4)
+        XCTAssertGreaterThan(map[30 * 96 + 68], 0.99)
         session.chooseDustMap(ParallaxScopedURL(output))
+        try await waitUntil { !session.isBusy }
+        XCTAssertNil(session.error)
+        session.reloadDustMap()
         try await waitUntil { !session.isBusy }
         XCTAssertNil(session.error)
         session.edit { $0.setCrop(ParallaxCrop(x: 16, y: 8, width: 64, height: 48)) }

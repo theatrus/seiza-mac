@@ -676,25 +676,6 @@ private let parallaxEventCallback: SeizaParallaxEventCallback = { json, context 
 }
 
 enum ParallaxCore {
-    private struct DustMapTransform: Encodable {
-        var path: String
-        var output: String
-        var sourceWidth: Int
-        var sourceHeight: Int
-        var crop: ParallaxCrop
-        var expand: Bool
-        var base: String?
-    }
-
-    static func transformDustMap(path: String, to output: URL, sourceWidth: Int, sourceHeight: Int,
-                                 crop: ParallaxCrop, expand: Bool, base: String? = nil) throws {
-        let request = DustMapTransform(path: path, output: output.path, sourceWidth: sourceWidth,
-            sourceHeight: sourceHeight, crop: crop, expand: expand, base: base)
-        var failure: UnsafeMutablePointer<CChar>?
-        let success = try json(request).withCString { seiza_mac_dust_map_transform_json($0, &failure) }
-        guard success else { throw error(failure) }
-    }
-
     static func error(_ pointer: UnsafeMutablePointer<CChar>?) -> Error {
         guard let pointer else { return SeizaCoreError.invalidCABIResponse }
         defer { seiza_string_free(pointer) }
@@ -952,7 +933,8 @@ final class ParallaxVideo: @unchecked Sendable {
 
     /// The dust as a `width` × `height` map over the whole image, row by row,
     /// 0 clear to 1 opaque: the dust in use, or the dust counted from the
-    /// stars even while a given map takes its place. Nil when there is none.
+    /// stars even while a given map takes its place. This spans the original
+    /// source, with clear pixels outside the crop. Nil when there is none.
     func dustMap(width: Int, height: Int, counted: Bool = false) throws -> [Float]? {
         guard width > 0, height > 0 else { throw SeizaCoreError.message("The dust map needs a width and height.") }
         var opacity = [Float](repeating: 0, count: width * height)
@@ -968,7 +950,8 @@ final class ParallaxVideo: @unchecked Sendable {
 
     /// Write the dust to `url`, white opaque, in the format its extension
     /// names: 16-bit PNG or TIFF, or 32-bit float FITS or XISF, the size of
-    /// the image. False when there is no such dust to write.
+    /// the original source, with clear pixels outside the crop. False when
+    /// there is no such dust to write.
     func writeDustMap(to url: URL, counted: Bool = false) throws -> Bool {
         var failure: UnsafeMutablePointer<CChar>?
         let request = try ParallaxCore.json(ParallaxDustMapWrite(path: url.path, counted: counted))

@@ -1,5 +1,4 @@
 mod catalogs;
-mod dust_maps;
 
 use std::ffi::c_char;
 

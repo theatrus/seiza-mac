@@ -41,12 +41,18 @@
  *       -> release with seiza_parallax_free() once no call using it runs.
  *          Videos reconfigured from one preparation share its scene, which
  *          lives until the last of them is freed; free them in any order.
+ *   - SeizaSatelliteCatalog* returned by the seiza_satellite_catalog_open,
+ *     _from_omm_json, _from_tle_text, _fetch_celestrak and _resolve_json
+ *     functions -> release with seiza_satellite_catalog_free() once no call
+ *     using it runs.
  *   - char* returned by seiza_catalog_status_json, seiza_solve_image_json,
  *     seiza_solve_image_with_limits_json,
  *     seiza_probe_frame_json, seiza_calibration_plan_json,
  *     seiza_calibration_build_master_json, seiza_live_stacker_state_json, and
  *     seiza_live_stacker_push_*_json, seiza_parallax_summary_json,
- *     seiza_parallax_plan_tour_json, seiza_parallax_plan_scene_tour_json, plus
+ *     seiza_parallax_plan_tour_json, seiza_parallax_plan_scene_tour_json,
+ *     seiza_satellite_catalog_info_json, seiza_satellite_catalog_tracks_json,
+ *     plus
  *     any
  *     char* stored into an
  *     `error_out` argument on failure
@@ -170,6 +176,22 @@
 #define SEIZA_TOLERANCE_HAS_EXPOSURE_FRACTION (1 << 6)
 
 /*
+ The light's recorded rotator angle is compared, as for any frame.
+ */
+#define SEIZA_LIGHT_ROTATION_RECORDED 0
+
+/*
+ An angle the host measured is compared in place of the recorded one.
+ */
+#define SEIZA_LIGHT_ROTATION_MEASURED 1
+
+/*
+ The host has measured that the angle does not decide the light's flats:
+ any flat angle passes.
+ */
+#define SEIZA_LIGHT_ROTATION_UNKNOWN 2
+
+/*
  Frame pixels as 3 bytes each, red, green, blue.
  */
 #define SEIZA_PIXEL_FORMAT_RGB8 0
@@ -250,6 +272,14 @@ typedef struct SeizaRenderedImage SeizaRenderedImage;
  pointer; release it with [`seiza_rendered_image16_free`].
  */
 typedef struct SeizaRenderedImage16 SeizaRenderedImage16;
+
+/*
+ An opaque set of satellite orbital elements, with where they came from.
+ Release it with [`seiza_satellite_catalog_free`]. It is read-only once
+ made, so several threads may predict tracks from it at once; do not free
+ it while any call using it is running.
+ */
+typedef struct SeizaSatelliteCatalog SeizaSatelliteCatalog;
 
 /*
  A compact immutable live-stack result for non-destructive output. It owns
@@ -523,6 +553,109 @@ char *seiza_color_crop_report_json(const char *const *names,
                                    char **error_out);
 
 /*
+ Combines aligned red, green and blue mono stacks into one RGB image and
+ writes it, as `seiza color rgb` does without registering the channels.
+
+ `request_json` is an object with the `red`, `green` and `blue` FITS or
+ XISF paths, all on one pixel grid, and the `output` path, written as XISF
+ for a `.xisf` name and FITS otherwise. The output carries the red stack's
+ WCS, moved by any crop. Optional fields:
+ - `luminanceMode`: `"native"` (the default) keeps the channels as they
+   are; `"super"` scales each pixel to a synthetic luminance of R + G + B,
+   which may exceed one.
+ - `normalization`: `"percentile"` (the default) maps each channel's
+   `blackPercentile` (0.001) and `whitePercentile` (0.995), estimated from
+   up to `normalizationSamples` (1000000) samples, to 0 and 1; `"none"`
+   keeps the samples.
+ - `crop`: `"none"` (the default), `"bounds"` or `"inscribed"`, as in
+   [`seiza_color_crop_report_json`].
+
+ Returns owned schema-1 JSON: the `label` written to `SEIZACLR` (`RGB` or
+ `SUPER-RGB`), the `transfer` of the samples (`"linear"` here), the
+ `region` of the grid the output covers, and `crop`, the object
+ [`seiza_color_crop_report_json`] returns, when a crop was asked for (null
+ otherwise). Free it with [`seiza_string_free`]. `cancel` is checked before
+ each stack is read and before the output is written.
+
+ # Safety
+ `request_json` must be a valid NUL-terminated string. `cancel` must be
+ null or a live [`SeizaCancelSignal`] retained until this call returns.
+ When non-null, `error_out` must point to writable storage for one pointer.
+ */
+char *seiza_color_combine_rgb_json(const char *request_json,
+                                   const SeizaCancelSignal *cancel,
+                                   char **error_out);
+
+/*
+ Combines aligned luminance, red, green and blue mono stacks into one LRGB
+ image and writes it, as `seiza color lrgb` does without registering the
+ channels.
+
+ `request_json` is an object with the `luminance`, `red`, `green` and
+ `blue` paths and the `output` path, as in
+ [`seiza_color_combine_rgb_json`]; the output carries the luminance
+ stack's WCS. `luminanceMode` `"replace"` (the default) swaps in the
+ luminance, weighted by `luminanceWeight` from 0 (RGB alone) to 1 (the
+ default, L alone); `"super"` targets the additive L + R + G + B, which may
+ exceed one, and takes no weight. `normalization`, `blackPercentile`,
+ `whitePercentile`, `normalizationSamples` and `crop` are those of
+ [`seiza_color_combine_rgb_json`], and so are the returned JSON (with the
+ label `LRGB` or `SUPER-LRGB`) and `cancel`.
+
+ # Safety
+ As [`seiza_color_combine_rgb_json`].
+ */
+char *seiza_color_combine_lrgb_json(const char *request_json,
+                                    const SeizaCancelSignal *cancel,
+                                    char **error_out);
+
+/*
+ Maps aligned H-alpha, OIII and, for most palettes, SII mono stacks onto an
+ RGB palette and writes the result, as `seiza color narrowband` does
+ without registering the channels.
+
+ `request_json` is an object with the `ha` and `oiii` paths, `sii` when the
+ palette uses it, and the `output` path, as in
+ [`seiza_color_combine_rgb_json`]; the output carries the H-alpha stack's
+ WCS. `palette` is one of `SHO` (the default), `SOH`, `HSO`, `HOS`, `OSH`,
+ `OHS`, `HOO`, `Foraxx-SHO` or `Foraxx-HOO`, in any case; `HOO` and
+ `Foraxx-HOO` take no `sii`, and the rest need one. The Foraxx palettes
+ stretch each channel first, setting its median to `foraxxTargetMedian`
+ (0.2) and its black point `foraxxShadowsClip` (-2.8) normal-equivalent
+ MADs below the median, so their output is display-referred. The other
+ fields are those of [`seiza_color_combine_rgb_json`], and so are the
+ returned JSON (with the palette's upper-case name as the label and
+ `"display"` as the Foraxx palettes' transfer) and `cancel`.
+
+ # Safety
+ As [`seiza_color_combine_rgb_json`].
+ */
+char *seiza_color_combine_narrowband_json(const char *request_json,
+                                          const SeizaCancelSignal *cancel,
+                                          char **error_out);
+
+/*
+ Mixes aligned H-alpha, OIII and optional SII mono stacks into RGB through
+ a caller's own linear matrix, and writes the result.
+
+ `request_json` is an object with the `ha` and `oiii` paths, an optional
+ `sii` path, the `output` path, and `matrix`: `{"red": {...}, "green":
+ {...}, "blue": {...}}`, each output channel giving its `sii`, `ha` and
+ `oiii` weights (a weight left out is zero). Weights must be finite and
+ some must be non-zero. A matrix that weights SII needs an `sii` stack; one
+ that does not ignores any given. The output carries the H-alpha stack's
+ WCS and the label `NARROWBAND-MATRIX`, and is linear light. The other
+ fields are those of [`seiza_color_combine_rgb_json`], and so are the
+ returned JSON and `cancel`.
+
+ # Safety
+ As [`seiza_color_combine_rgb_json`].
+ */
+char *seiza_color_combine_narrowband_matrix_json(const char *request_json,
+                                                 const SeizaCancelSignal *cancel,
+                                                 char **error_out);
+
+/*
  Fits a compact background model to interleaved linear `float` samples.
 
  `channels` must be one or three and `data_length` must equal
@@ -700,23 +833,57 @@ char *seiza_gaia_photometry_cone_json(double ra,
                                       char **error_out);
 
 /*
+ Read Gaia DR3 photometry within `radius_deg` of `(ra, dec)` (degrees)
+ down to G `max_mag` from the local catalog [`seiza_catalog_setup`]
+ installs (`stars-gaia-photometry.bin`), for
+ [`seiza_color_calibrate_json`]. `catalog_path` is the catalog file or the
+ directory that holds it; null looks in the standard places.
+
+ Returns an owned JSON array of sources like
+ [`seiza_gaia_photometry_cone_json`]'s, but with positions already at the
+ catalog's epoch, so `pmra` and `pmdec` are null, and the colour as
+ `bpRp` in place of `bp` and `rp`; `bpRp` is left out when Gaia's is
+ missing or its astrometry is unreliable. Free the result, or an
+ `error_out` string, with [`seiza_string_free`].
+
+ # Safety
+ `catalog_path` must be null or a valid NUL-terminated string. When
+ non-null, `error_out` must point to writable storage for one pointer.
+ */
+char *seiza_gaia_photometry_catalog_cone_json(const char *catalog_path,
+                                              double ra,
+                                              double dec,
+                                              double radius_deg,
+                                              float max_mag,
+                                              char **error_out);
+
+/*
  Fit photometric colour calibration for an interleaved linear RGB image
  against Gaia DR3 star colours.
 
  `wcs_json` is a JSON object of the image's FITS WCS keywords (`CTYPE1`,
  `CRVAL1`, `CRPIX1`, `CD1_1` or `CDELT1`, SIP terms, …) with numeric or
  string values; `gaia_json` is an array of sources as
- [`seiza_gaia_photometry_cone_json`] returns. `options_json` may be null
- or an object with `whiteBpRp` (default 0.82, the Sun), `apertureRadius`
- (pixels; default twice the measured FWHM), `neutralizeBackground`
- (default true) and `observationEpoch` (a Julian year, for proper motion).
+ [`seiza_gaia_photometry_cone_json`] or
+ [`seiza_gaia_photometry_catalog_cone_json`] returns; a `bpRp` value is
+ used in place of `bp` and `rp`. `options_json` may be null
+ or an object with `whiteBpRp` (default 0.82, the Sun), `fitBpRpRange`
+ (the `[bluest, reddest]` BP − RP of the stars the fits use; default
+ `[0, 1.8]`), `apertureRadius` (pixels; default twice the measured FWHM),
+ `rejectionSigma` (default 3), `minimumStars` (the fewest stars either fit
+ may rest on; default 20, at least 3), `neutralizeBackground` (default
+ true), `calibratorMaxG` (the faintest Gaia G a calibrator may have;
+ default two magnitudes brighter than the faintest source given) and
+ `observationEpoch` (a Julian year, for proper motion).
 
  Returns owned schema-1 JSON with `gains` and `offsets` for R, G, B (apply
  them with [`seiza_color_calibration_apply`]), each channel's
  `background`, the `redFit` and `blueFit` lines of instrumental colour
- against BP − RP, the `apertureRadius` and `apertureCorrection` used, and
- star counts. The image is not changed. Free the result, or an
- `error_out` string, with [`seiza_string_free`].
+ against BP − RP, the `apertureRadius` and `apertureCorrection` used, star
+ counts, and `measurements`: each cleanly measured star's `x`, `y`, `g`,
+ `bpRp`, R, G, B `flux`, and `used`, whether the red and the blue fit kept
+ it. The image is not changed. Free the result, or an `error_out` string,
+ with [`seiza_string_free`].
 
  # Safety
  `data` must point to `length` readable floats, `width * height * 3` of
@@ -878,6 +1045,90 @@ SeizaLiveStacker *seiza_live_stacker_open_fits_with_reference_image_candidates(c
                                                                                char **error_out);
 
 /*
+ Plans a canvas that holds a connected set of overlapping lights, such as
+ mosaic panels or a dithered stack whose edges should be kept, and starts
+ an empty stack on it, as the CLI's `--reference expand` does.
+
+ `paths_json` is a JSON array of FITS or XISF light paths; the first
+ anchors the WCS and photometric scale, so put the choice of
+ [`seiza_stack_choose_reference_json`] first to anchor on the clearest
+ light. Panels may connect through other panels, and lights may differ in
+ rotation by any amount. A light that cannot join is rejected, with the
+ reason, when pushed; this call fails only when nothing joins the anchor,
+ a light cannot be read, or the canvas would exceed
+ `max_canvas_megasamples` million samples (pixels times channels; zero
+ uses 256). A run peaks at about 40 bytes per sample. With
+ `"registration": {"model": "quadratic"}` in `options_json`, a light lying
+ mostly within one panel is warped onto it, which follows lens distortion
+ across a meridian flip. For panels, set
+ `"acceptance": {"minimum_overlap_fraction": 0.1}` or near it.
+ Bayer drizzle and drizzled reintegration are not supported on the canvas.
+
+ The masters, `dark_exposure_seconds` and `options_json` are those of
+ [`seiza_live_stacker_open_fits`]; every light must differ from every
+ master. `cancel` is checked before each light is read. The stack starts
+ with no accepted frames: push every light, the anchor included.
+ [`seiza_live_stacker_expanded_lens_json`] and
+ [`seiza_live_stacker_expansion_planning_notes_json`] report what planning
+ found.
+
+ # Safety
+ `paths_json` must be a valid NUL-terminated string. Optional paths and
+ `options_json` may be null; when non-null they must be NUL-terminated.
+ `cancel` must be null or a live [`SeizaCancelSignal`] retained until this
+ call returns. When non-null, `error_out` must point to writable storage
+ for one pointer.
+ */
+SeizaLiveStacker *seiza_live_stacker_open_fits_expanding(const char *paths_json,
+                                                         const char *bias_path,
+                                                         const char *dark_path,
+                                                         const char *flat_path,
+                                                         double dark_exposure_seconds,
+                                                         const char *options_json,
+                                                         size_t max_canvas_megasamples,
+                                                         const SeizaCancelSignal *cancel,
+                                                         char **error_out);
+
+/*
+ The lens distortion a canvas from
+ [`seiza_live_stacker_open_fits_expanding`] was planned through, as owned
+ JSON, or the JSON text `null` when planning measured none, as for any
+ stack not opened on an expanding canvas.
+
+ The object is schema 1: the distortion's axis `centerX` and `centerY` in
+ sensor pixels, counted from 0, and its `decenterPixels` from the sensor's
+ centre; `k1` and `k2`, the coefficients of `q` and `q²`, where `q` is a
+ position's squared distance from the axis over the frame's half diagonal
+ squared; `largestShiftPixels`, the largest shift it makes within that half
+ diagonal; `overlapRmsPixels` and `undistortedOverlapRmsPixels`, the RMS
+ distance between the stars the panels' first frames pair where they
+ overlap, through the lens and fitted without it (null for a reopened
+ context); and `focalLengthPixels`, by which panels were placed on the
+ anchor's tangent plane, when the anchor's headers gave one (null
+ otherwise). Free the string with [`seiza_string_free`].
+
+ # Safety
+ `stacker` must be a live `SeizaLiveStacker` pointer, with this read
+ externally synchronized against mutable operations. When non-null,
+ `error_out` must point to writable storage for one pointer.
+ */
+char *seiza_live_stacker_expanded_lens_json(const SeizaLiveStacker *stacker, char **error_out);
+
+/*
+ What planning a canvas from [`seiza_live_stacker_open_fits_expanding`]
+ noted, as an owned JSON array of strings: why it skipped fitting one lens
+ to every panel (their camera or optics differ, or their headers do not
+ say), or why it kept its first plan when the lens-corrected one failed.
+ The array is empty for an ordinary stack and for a reopened context,
+ which does not plan again. Free the string with [`seiza_string_free`].
+
+ # Safety
+ As [`seiza_live_stacker_expanded_lens_json`].
+ */
+char *seiza_live_stacker_expansion_planning_notes_json(const SeizaLiveStacker *stacker,
+                                                       char **error_out);
+
+/*
  Reopens a versioned live-stack context previously written by
  [`seiza_live_stacker_save_context`]. The restored handle retains its
  original registration reference, calibration, online rejection moments,
@@ -990,6 +1241,12 @@ bool seiza_live_stacker_set_match_tolerances(SeizaLiveStacker *stacker,
  Fill `tolerances` with the stack's own, every flag set: the gate its
  lights are judged under now.
 
+ `SeizaMatchTolerances` has no field for how the light's angle is read
+ (`MatchTolerances::light_rotation`): a stack whose gate reads lights at
+ an angle the host measured, as one opened from a context saved that
+ way, reports its other tolerances here as if it read the recorded
+ angle, and setting these back gives it the recorded reading.
+
  # Safety
 
  `stacker` must be a live stacker from this library, with this read
@@ -1015,6 +1272,75 @@ bool seiza_live_stacker_match_tolerances(const SeizaLiveStacker *stacker,
  synchronize this read with every mutable operation on the same stacker.
  */
 char *seiza_live_stacker_state_json(const SeizaLiveStacker *stacker, char **error_out);
+
+/*
+ Returns the reference frame's per-channel noise as an owned JSON array of
+ numbers, measured the way each pushed frame's `diagnostics.noise` is. It
+ is the unit of frame weights: the reference frame has weight 1 in every
+ channel. The array is empty when the stack weights frames equally. Free
+ it, or an `error_out` string, with [`seiza_string_free`].
+
+ # Safety
+ `stacker` must be a live `SeizaLiveStacker` pointer. When non-null,
+ `error_out` must point to writable storage for one pointer. Externally
+ synchronize this read with every mutable operation on the same stacker.
+ */
+char *seiza_live_stacker_reference_noise_json(const SeizaLiveStacker *stacker, char **error_out);
+
+/*
+ Returns the reference frame's mapping onto the stack grid, the identity,
+ as owned JSON in the same versioned form as each pushed frame's
+ `diagnostics.mapping`, so a host can keep one record per frame, the
+ reference included. Free it, or an `error_out` string, with
+ [`seiza_string_free`].
+
+ # Safety
+ `stacker` must be a live `SeizaLiveStacker` pointer. When non-null,
+ `error_out` must point to writable storage for one pointer. Externally
+ synchronize this read with every mutable operation on the same stacker.
+ */
+char *seiza_live_stacker_reference_mapping_json(const SeizaLiveStacker *stacker, char **error_out);
+
+/*
+ Opens a stack from a FITS or XISF frame the host has already calibrated
+ and debayered, keeping its header cards for the stack's outputs. This
+ lets a host correct a frame between calibration and registration. A raw
+ CFA frame (one with a Bayer layout) is refused. The stack takes later
+ frames only as arrays, through [`seiza_live_stacker_push_linear_json`].
+ Pass null or empty `options_json` for defaults, as for
+ [`seiza_live_stacker_open_fits`].
+
+ # Safety
+ `prepared_path` must be a valid NUL-terminated string. A non-null
+ `options_json` must be NUL-terminated. When non-null, `error_out` must
+ point to writable storage for one pointer.
+ */
+SeizaLiveStacker *seiza_live_stacker_open_prepared_fits(const char *prepared_path,
+                                                        const char *options_json,
+                                                        char **error_out);
+
+/*
+ Measures a linear image's per-channel pixel noise, the estimator behind
+ frame weights: the median absolute deviation of second differences along
+ each axis, as a Gaussian standard deviation in the image's own units,
+ keeping the noisier axis. `channels` is 1 for mono or 3 for interleaved
+ RGB.
+
+ Returns an owned JSON array with one number per channel, or `null` when
+ the image is too small or too empty of finite samples to measure. Free
+ it, or an `error_out` string, with [`seiza_string_free`].
+
+ # Safety
+ `data` must point to `length` readable floats, `width * height *
+ channels` of them. When non-null, `error_out` must point to writable
+ storage for one pointer.
+ */
+char *seiza_frame_noise_json(const float *data,
+                             size_t length,
+                             size_t width,
+                             size_t height,
+                             size_t channels,
+                             char **error_out);
 
 /*
  Load and atomically replace the masters used by later FITS/XISF pushes.
@@ -1837,6 +2163,67 @@ char *seiza_solve_image_with_limits_json(const char *path,
                                          char **error_out);
 
 /*
+ When the image at `path` was taken, as `{"captureTime": "..."}`: from a
+ FITS or XISF header's `DATE-OBS`, `DATE-BEG` or `DATE-AVG`, read without
+ decoding the pixels, or from a photo's EXIF, in UTC. `captureTime` is
+ null when the file does not say. It is the time
+ [`seiza_solve_image_json`] dates transients and places comets and
+ asteroids by. Free the result, or an `error_out` string, with
+ [`seiza_string_free`].
+
+ # Safety
+ `path` must be a valid NUL-terminated string. When non-null, `error_out`
+ must point to writable storage for one pointer.
+ */
+char *seiza_read_capture_time_json(const char *path, char **error_out);
+
+/*
+ A WCS as FITS header cards. `wcs_json` is a WCS as
+ [`seiza_solve_image_json`] returns it: `crval`, `crpix`, `cd`, an
+ optional `sip` and an optional `pixelOrigin` (0, the default, when
+ `crpix` counts pixels from 0; 1 when it counts from 1, as a FITS header
+ does).
+
+ Returns `{"cards": {...}, "text": "..."}`: `cards` holds each keyword
+ and its value in the order a header writes them (`CTYPE1` and `CTYPE2`,
+ TAN or TAN-SIP; `CUNIT`, `EQUINOX`, `CRVAL`, 1-based `CRPIX`, the `CD`
+ matrix, and every SIP keyword when the WCS has SIP terms), and `text`
+ the same cards as a minimal FITS header: 80-column cards ending with
+ `END`. `cards` can be passed as the WCS keywords of
+ [`seiza_color_calibrate_json`]. Free the result, or an `error_out`
+ string, with [`seiza_string_free`].
+
+ # Safety
+ `wcs_json` must be a valid NUL-terminated UTF-8 string. When non-null,
+ `error_out` must point to writable storage for one pointer.
+ */
+char *seiza_wcs_fits_header_json(const char *wcs_json, char **error_out);
+
+/*
+ The EXIF fields of a JPEG, TIFF, HEIF, PNG or WebP file that help a
+ plate solve: `captureTimeUtc` (from the original time and its offset,
+ or from the GPS stamps, as `captureTimeSource` says:
+ `date_time_original` or `gps`), the GPS position, and the focal length
+ with its 35 mm equivalent, with the camera, exposure and orientation.
+ Missing or damaged EXIF gives null fields and `warnings`, never an error.
+
+ Given the decoded image's `width` and `height` (after its EXIF
+ orientation; 0 for either leaves them out), `scaleHint` is the pixel
+ scale the 35 mm-equivalent focal length implies (null without one), and
+ `scaleRanges` the `[min, max]` pixel-scale ranges, in arcseconds per
+ pixel, to try in order with a blind solve. Without them both are null.
+ Free the result, or an `error_out` string, with [`seiza_string_free`].
+
+ # Safety
+ `path` must be a valid NUL-terminated string. When non-null, `error_out`
+ must point to writable storage for one pointer.
+ */
+char *seiza_read_photo_metadata_json(const char *path,
+                                     uint32_t width,
+                                     uint32_t height,
+                                     char **error_out);
+
+/*
  # Safety
  `value` must be null or a string returned by this library that has not
  already been freed.
@@ -1863,7 +2250,11 @@ char *seiza_probe_frame_json(const char *path, char **error_out);
  optional camelCase tolerances. Dark flats use dark exposure/temperature
  matching and should reference the selected flat they will calibrate. Each
  record has `path`, `role`, and the `signature` object returned by
- [`seiza_probe_frame_json`]; extra probe fields are ignored.
+ [`seiza_probe_frame_json`]; extra probe fields are ignored. To plan a
+ light's flats by an angle the host measured for it, give
+ `tolerances.lightRotation` as `{"basis": "measured", "degrees": 82.2}`,
+ or `{"basis": "unknown"}` when its angle does not decide its flats; the
+ flats keep their recorded angles.
  The owned response reports `matchedPaths`, coherent `selectedPaths`,
  `ready`, and one stable exclusion reason per omitted candidate. Free it
  with [`seiza_string_free`].
@@ -1880,10 +2271,25 @@ char *seiza_calibration_plan_json(const char *request_json, char **error_out);
 
  The camelCase request has `kind`, at least two `inputs`, and `output`;
  optional fields are `bias`, `dark`, `darkExposureSeconds`,
- `exposureSeconds`, `rejection` (`lowSigma`, `highSigma`), and
- `defectSuppression` (`lowSigma`, `highSigma`). `dark` is a dark-flat when
+ `exposureSeconds`, `rejection` (`lowSigma`, `highSigma`),
+ `defectSuppression` (`lowSigma`, `highSigma`), `flatStarMasking`,
+ `darkLevelScreening` and `scratchDirectory`. `dark` is a dark-flat when
  building a flat. Defect suppression is accepted only for flats, because a
  dark master must retain the hot pixels it is meant to subtract.
+
+ `flatStarMasking` (flats only) leaves stars and broad saturated patches
+ out of each sky flat before it is normalized and combined. Its fields,
+ each optional, are `detectionSigma` (default 4), `haloRadiusFactor`
+ (default 3), `minimumRadiusPixels` (default 6), `saturationLevel` (in the
+ inputs' raw units; default from `SATURATE`, `SATLEVEL` or the FITS
+ encoding) and `minimumCleanSamples` (the fewest unmasked inputs every
+ pixel must keep; default 2); `{}` takes every default.
+ `darkLevelScreening` (darks only) sets aside darks whose level sits more
+ than `maxExcessSigma` (default 1) times the quietest dark's pixel noise
+ above it, the mark of stray light; they appear in `skippedInputs`.
+ `scratchDirectory`, an existing directory, holds a flat build's temporary
+ pixels in place of the system's temporary directory; bias and dark
+ builds need none.
 
  Construction is a two-pass leave-one-out sigma-clipped mean and may take
  minutes. Run it off the UI thread. `cancel` may be null; otherwise another
@@ -1894,10 +2300,17 @@ char *seiza_calibration_plan_json(const char *request_json, char **error_out);
  [`seiza_string_free`].
 
  Response schema 2 reports `requestedFrames`, accepted `inputFrames` and
- accepted-only per-frame `inputs`, plus `skippedInputs` entries with `path`
- and `reason` for metadata disagreements the integrator set aside. The
- accepted and skipped paths are disjoint and account for every requested
- input in request order.
+ accepted-only per-frame `inputs` (`path`, `acceptedSamples`,
+ `rejectedSamples`, `maskedSamples`), plus `skippedInputs` entries with
+ `path` and `reason` for frames the integrator set aside. The accepted and
+ skipped paths are disjoint and account for every requested input in
+ request order. `maskedSamples` counts the samples star masking left out,
+ `rejectionMethod` is the rejection the build used (`NONE`, `MEDIAN_MAD`
+ or `LEAVE_ONE_OUT`), and `flatStarMasking` is null unless masking ran;
+ then it holds the `options` used, `maskedSamples`, `maskedPixels`, the
+ `minimumCleanSamples` and `maximumCleanSamples` any pixel kept,
+ `lowCoverageSamples`, `unmaskedSaturationSamples` and
+ `unknownSaturationInputs`.
 
  # Safety
  `request_json` must be a valid NUL-terminated string. `cancel` must be null
@@ -2102,6 +2515,33 @@ char *seiza_stars_detect_luma_u16_json(const uint16_t *data,
 char *seiza_stars_detect_path_json(const char *path, const char *options_json, char **error_out);
 
 /*
+ The pixel scale, in arcseconds per pixel, of a camera with pixels
+ `pixel_size_um` micrometres across (binning included) behind a
+ telescope of focal length `focal_length_mm` millimetres; NaN unless
+ both are finite and positive. [`seiza_stars_classify_pixel_scale`]
+ turns it into a detection preset.
+ */
+double seiza_stars_pixel_scale_arcsec(double focal_length_mm, double pixel_size_um);
+
+/*
+ The star detection preset for a rig of `arcsec_per_pixel`, as the
+ `preset` option of [`seiza_stars_detect_luma_u16_json`] takes it:
+ `widefield` from 1.2"/px up, `longfocal` at 0.6"/px and below, and
+ `standard` between, or for a scale that is not a positive number. The
+ string is static: do not free it.
+ */
+const char *seiza_stars_classify_pixel_scale(double arcsec_per_pixel);
+
+/*
+ The detection binning, 1 to 4, for the `detectionBinning` option of
+ [`seiza_stars_detect_luma_u16_json`], from an in-focus star's measured
+ HFR in captured pixels: the factor that brings it nearest the
+ detector's calibrated 3 pixels. 1 for an HFR that is not a positive
+ number.
+ */
+size_t seiza_stars_recommend_detection_binning(double measured_hfr_pixels);
+
+/*
  Why two frames' sensor readings refuse to match, as a human-readable
  string naming every differing field and both readings — for example
  `gain light=100 master=200`. Never empty on a mismatch; on frames that
@@ -2232,6 +2672,327 @@ char *seiza_rc_astro_process_file_json(const char *request_json,
                                        SeizaRcAstroProgressCallback progress,
                                        void *context,
                                        char **error_out);
+
+/*
+ Measure one raw bias or dark frame, as a step toward judging its set
+ with [`seiza_calibration_screen_bias_json`] or
+ [`seiza_calibration_screen_darks_json`].
+
+ `request_json` is `{"path": ..., "hotSigma": 10}`; `hotSigma`, the
+ height above the level in units of pixel noise at which a sample counts
+ as hot, may be left out. The file is read through seiza-image-io, FITS
+ or XISF, before any calibration. The owned response holds the
+ measurement: `algorithmVersion`, `width`, `height`, `level`, `sigma`,
+ `noise`, `rowBanding`, `columnBanding`, `hotPixels` and `hotThreshold`,
+ in the frame's own units. It is small: keep it, and pass it back to a
+ screen whenever the set changes rather than reading the frame again. A
+ stored measurement whose `algorithmVersion` differs from a new one's is
+ stale. Free the response with [`seiza_string_free`].
+
+ # Safety
+ `request_json` must be a valid NUL-terminated string. When non-null,
+ `error_out` must point to writable storage for one pointer.
+ */
+char *seiza_calibration_measure_dark_json(const char *request_json, char **error_out);
+
+/*
+ Measure one raw flat frame, as a step toward judging its set with
+ [`seiza_calibration_screen_flats_json`].
+
+ `request_json` is `{"path": ...}` with optional `cfa` (true for a raw
+ colour frame with one channel; left out, true when the header records a
+ Bayer pattern), `fullScale` (the value a saturated sample reads, 65535 by
+ default), `featureDepth` (the shallowest dip counted, as a fraction of
+ the light around it, 0.02 by default) and `featureSigma` (how far above
+ the noise a dip must reach, 5 by default). Give the raw samples, before
+ bias or dark subtraction: levels and clipping are judged against
+ `fullScale`. The owned response holds `algorithmVersion`, `width`,
+ `height`, `fullScale`, `level`, `channelLevels`, `clippedFraction`,
+ `noise`, `detectionDepth`, `illumination` (`columns`, `rows` and a
+ row-major `response` of cell medians, 1 for a typical cell),
+ `featureCount` and the deepest `features` (`x`, `y`, `left`, `top`,
+ `right`, `bottom`, `pixels`, `depth`). Keep it and pass it back to a
+ screen whenever the set changes. Free it with [`seiza_string_free`].
+
+ # Safety
+ As [`seiza_calibration_measure_dark_json`].
+ */
+char *seiza_calibration_measure_flat_json(const char *request_json, char **error_out);
+
+/*
+ Judge a set of bias frames that should match: one camera, gain, offset,
+ readout mode and binning.
+
+ `request_json` holds `measurements`, each as
+ [`seiza_calibration_measure_dark_json`] returned it, and optional limits
+ `level`, `noise` and `banding`, each `{"suspect": ..., "poor": ...}`:
+ the value at which a frame turns suspect, then poor (higher is worse).
+ Banding is judged on each frame alone; with three or more frames, each
+ is also compared with the set's median level and noise. The owned
+ response holds `frames`, one verdict per measurement in request order:
+ `grade` (`ok`, `suspect` or `poor`) and `findings`, each with `code`
+ (`level`, `noise`, `row_banding` or `column_banding`), `grade`, the
+ measured `value` and the `limit` it reached. The verdicts say what the
+ pixels show, never why. Free it with [`seiza_string_free`].
+
+ # Safety
+ As [`seiza_calibration_measure_dark_json`].
+ */
+char *seiza_calibration_screen_bias_json(const char *request_json, char **error_out);
+
+/*
+ Judge a set of darks that should match: one camera mode, one exposure,
+ one sensor temperature.
+
+ `request_json` holds `measurements`, each as
+ [`seiza_calibration_measure_dark_json`] returned it, and optional limits
+ `levelExcess`, `noise`, `hotPixels` and `banding`, each `{"suspect":
+ ..., "poor": ...}` (higher is worse). With two or more frames each
+ frame's level is compared with the quietest frame's, since light can only
+ add to a dark; with three or more, noise and hot pixels are compared with
+ the median of the frames whose level passed. The response is shaped as
+ [`seiza_calibration_screen_bias_json`]'s, with the codes `level_excess`,
+ `noise`, `hot_pixels`, `row_banding` and `column_banding`. Free it with
+ [`seiza_string_free`].
+
+ # Safety
+ As [`seiza_calibration_measure_dark_json`].
+ */
+char *seiza_calibration_screen_darks_json(const char *request_json, char **error_out);
+
+/*
+ Judge a set of flats that should match: one filter, one session, one
+ rotation, one optical train.
+
+ `request_json` holds `measurements`, each as
+ [`seiza_calibration_measure_flat_json`] returned it, and optional limits
+ `clipped`, `bright`, `dim` (lower is worse), `illumination`, `features`,
+ `changingFeatures` and `carriedFeatures`, each `{"suspect": ...,
+ "poor": ...}`, with `steadyPresence` (the share of frames a steady
+ feature is found in, 0.9 by default), `steadyDepthRange` (how much its
+ depth may vary, 0.5 by default) and `matchDistance` (pixels between
+ boxes that are one feature, 2 by default). Every frame is checked alone
+ for clipping, exposure and clear compact features; with three or more,
+ each is also compared with the set. The owned response holds `frames`,
+ one verdict per measurement in request order, as
+ [`seiza_calibration_screen_bias_json`] gives them; `master`, the verdict
+ on a master built from every frame (whether changing features would
+ survive into it); and the counts `steadyFeatures`, `changingFeatures`
+ and `carriedFeatures`. Fails when the measurements differ in size. Free
+ it with [`seiza_string_free`].
+
+ # Safety
+ As [`seiza_calibration_measure_dark_json`].
+ */
+char *seiza_calibration_screen_flats_json(const char *request_json, char **error_out);
+
+/*
+ Build a residual flat response from crops of light frames that share one
+ place on the detector, and write it into the caller's buffer.
+
+ A residual flat corrects a dip the flat left behind, such as dust that
+ moved after the flats were taken. Each of the `sample_count` pointers in
+ `samples` is one crop of `width` x `height` x `channels` interleaved
+ linear samples, every crop cut from the same detector position of a
+ different light. The host must first show that the dip stays fixed on the
+ detector while the sky moves; this call does not decide what the dip is.
+ Each crop's own edge sets a local background, and only a loss of light
+ most crops share is kept. `options_json` may be null or empty for the
+ defaults, or hold any of `minimumSamples` (5), `minimumDepth` (0.005),
+ `minimumConsensus` (0.7), `maximumGain` (1.2), `backgroundEdgeFraction`
+ (0.2), `smoothingSigma` (2), `edgeFeatherFraction` (0.12),
+ `minimumCorrectedSamples` (16) and `minimumConnectedPixels` (64).
+
+ `response_out` receives `response_length` samples, which must equal one
+ crop's: the response, 1 where nothing is corrected and lower where light
+ is lost, never below `1 / maximumGain`. Apply it with
+ [`seiza_calibration_apply_residual_flat_response`]. Returns owned JSON
+ with `algorithmVersion` (keep it with a stored response), `sampleCount`,
+ `correctedSamples`, `totalSamples`, `largestConnectedPixels`,
+ `minimumResponse` and `maximumAppliedGain`, or null with `error_out` set
+ when the crops show too little to correct. Free it with
+ [`seiza_string_free`].
+
+ # Safety
+ `samples` must point to `sample_count` pointers, each to one crop's
+ readable floats. `response_out` must point to `response_length` writable
+ floats. A non-null `options_json` must be NUL-terminated. When non-null,
+ `error_out` must point to writable storage for one pointer.
+ */
+char *seiza_calibration_build_residual_flat_json(const float *const *samples,
+                                                 size_t sample_count,
+                                                 size_t width,
+                                                 size_t height,
+                                                 size_t channels,
+                                                 const char *options_json,
+                                                 float *response_out,
+                                                 size_t response_length,
+                                                 char **error_out);
+
+/*
+ Check a residual flat response the host stored or made itself before it
+ keeps or applies it: every value must be finite and in (0, 1]. Returns
+ true when it is, or false with `error_out` set.
+
+ # Safety
+ `response` must point to `response_length` readable floats, which must
+ equal `width * height * channels`. When non-null, `error_out` must point
+ to writable storage for one pointer.
+ */
+bool seiza_calibration_validate_residual_flat_response(const float *response,
+                                                       size_t response_length,
+                                                       size_t width,
+                                                       size_t height,
+                                                       size_t channels,
+                                                       char **error_out);
+
+/*
+ Divide a residual flat response out of a light, in place, with the
+ response's top-left corner at pixel (`x`, `y`) of the light.
+
+ The response is `response_width` x `response_height` with the light's
+ channel count, as [`seiza_calibration_build_residual_flat_json`] wrote
+ it or as the host stored it; it is checked first as
+ [`seiza_calibration_validate_residual_flat_response`] does. The light
+ must be sampled as the crops were, and the response must lie inside it.
+ Returns true, or false with `error_out` set and the light unchanged.
+
+ # Safety
+ `response` must point to `response_length` readable floats and `image`
+ to `image_length` writable floats, each equal to its width times height
+ times channels. When non-null, `error_out` must point to writable storage
+ for one pointer.
+ */
+bool seiza_calibration_apply_residual_flat_response(const float *response,
+                                                    size_t response_length,
+                                                    size_t response_width,
+                                                    size_t response_height,
+                                                    float *image,
+                                                    size_t image_length,
+                                                    size_t image_width,
+                                                    size_t image_height,
+                                                    size_t channels,
+                                                    size_t x,
+                                                    size_t y,
+                                                    char **error_out);
+
+/*
+ Integrate FITS or XISF frames that were calibrated, registered and
+ normalized elsewhere, with the three-pass leave-one-out rejection
+ [`seiza_live_stacker_reintegrate`] uses, and return the result as a new
+ snapshot.
+
+ `request_json` holds `inputs`, the paths of the frames, all one size on
+ one pixel grid, with samples a frame does not cover stored as NaN; and
+ optional `rejection` (`lowSigma`, `highSigma`, 3 by default),
+ `minimumSigma` (a noise floor in the frames' units, 1e-6 by default) and
+ `frameWeights` (one list per input with one positive weight per channel,
+ as a live stack's diagnostics give them; left out, every frame weighs
+ the same). Each input is read through seiza-image-io once per pass, and
+ must read the same each time. Nothing is registered or normalized again,
+ and every input takes part. Pixels with fewer than three samples are
+ averaged without rejection. Memory is about 40 bytes per output sample
+ plus one frame.
+
+ When `report_out` is non-null it receives owned JSON holding `frames`,
+ one per input in request order, with its `path`, `finiteSamples` (the
+ samples it covers) and `integratedSamples` (those rejection kept); free
+ it with [`seiza_string_free`]. `cancel` and `progress` work as for
+ [`seiza_live_stacker_reintegrate`], with the input's index and the input
+ count. The snapshot writes with the first input's WCS, and
+ refuses to write over an input. Release it with
+ [`seiza_stack_snapshot_free`]. On failure the snapshot and report are
+ null and `error_out` says why.
+
+ # Safety
+ `request_json` must be a valid NUL-terminated string. `cancel` must be
+ null or a live [`SeizaCancelSignal`] retained until this call returns.
+ `context` is passed through untouched to `progress`. When non-null,
+ `report_out` and `error_out` must each point to writable storage for one
+ pointer.
+ */
+SeizaStackSnapshot *seiza_stack_integrate_registered_json(const char *request_json,
+                                                          const SeizaCancelSignal *cancel,
+                                                          SeizaStackReintegrateProgressCallback progress,
+                                                          void *context,
+                                                          char **report_out,
+                                                          char **error_out);
+
+/*
+ Choose one background surface for the channels of one image that were
+ fitted one at a time.
+
+ Automatic model selection runs per fit, so channels fitted apart can
+ each land on a different surface, a constant in one and a curve in
+ another, and correcting them with different shapes leaves a colour cast
+ that grows toward the edges. `models` holds `model_count` models from
+ [`seiza_background_fit`], each fitted with an automatic `model` in
+ `config_json`, the same `BackgroundConfig` JSON the fits took (null or
+ empty for the default). This averages each candidate surface's held-out
+ error over every fit and chooses as automatic selection does for one.
+
+ Returns owned `BackgroundConfig` JSON: `config_json` with its `model`
+ replaced by the chosen surface. Fit each channel again with it. Returns
+ the JSON `null` when there is no shared choice: the config is not
+ automatic, a fit holds no selection diagnostics, or no candidate was
+ scored in every fit; keep the fits as they are then. Null with
+ `error_out` set means the arguments were wrong. Free the string with
+ [`seiza_string_free`].
+
+ # Safety
+ `models` must point to `model_count` live model pointers. A non-null
+ `config_json` must be NUL-terminated. When non-null, `error_out` must
+ point to writable storage for one pointer.
+ */
+char *seiza_background_select_shared_model_json(const SeizaBackgroundModel *const *models,
+                                                size_t model_count,
+                                                const char *config_json,
+                                                char **error_out);
+
+/*
+ Set how the stack's gate reads a light's rotator angle when it matches
+ the master flat to the lights pushed from now on, keeping its other
+ tolerances.
+
+ `basis` is [`SEIZA_LIGHT_ROTATION_RECORDED`] (the default),
+ [`SEIZA_LIGHT_ROTATION_MEASURED`], with `degrees` the angle the host
+ measured for the light (by plate solving it, or by fitting its sky
+ background against the candidate flats), or
+ [`SEIZA_LIGHT_ROTATION_UNKNOWN`] when the host has shown the angle does
+ not decide which flats the light follows; `degrees` is read only for a
+ measured angle. The flat's own angle is always the recorded one.
+ [`SeizaMatchTolerances`] is a fixed layout with no room for this, so it
+ has its own call: [`seiza_live_stacker_set_match_tolerances`] replaces
+ the whole gate and reads the recorded angle again, so call this after
+ it. A saved context keeps the setting, and the configuration fingerprint
+ changes with it. Returns false with `error_out` set for an unknown basis,
+ a measured angle that is not finite, or a stack created from prepared
+ arrays.
+
+ # Safety
+ `stacker` must be a live stacker from this library, with this call
+ externally synchronized against every other operation on it. When
+ non-null, `error_out` must point to writable storage for one pointer.
+ */
+bool seiza_live_stacker_set_light_rotation(SeizaLiveStacker *stacker,
+                                           uint32_t basis,
+                                           double degrees,
+                                           char **error_out);
+
+/*
+ Read how the stack's gate reads a light's rotator angle now: one of the
+ `SEIZA_LIGHT_ROTATION_*` values into `basis_out`, and into `degrees_out`
+ the measured angle, or zero for the other bases. Either output may be
+ null. Returns false when `stacker` is null.
+
+ # Safety
+ `stacker` must be null or a live stacker from this library, with this
+ read externally synchronized against mutable operations. Each non-null
+ output must point to writable storage for one value.
+ */
+bool seiza_live_stacker_light_rotation(const SeizaLiveStacker *stacker,
+                                       uint32_t *basis_out,
+                                       double *degrees_out);
 
 /*
  Prepare a parallax video from a JSON request (see the fields below) and
@@ -2494,6 +3255,8 @@ char *seiza_parallax_summary_json(const SeizaParallax *video, char **error_out);
  or too few stars show to count it), and -1 with `error_out` set on
  failure. Any size works; the image's own shape keeps the map square to
  it.
+ With a crop, the map still spans the original source image; unfilmed
+ pixels are clear. Reading, painting and replacing a map use the same coordinates.
 
  # Safety
 
@@ -2521,6 +3284,7 @@ int32_t seiza_parallax_dust_map(const SeizaParallax *video,
  [`seiza_parallax_dust_map`]'s map, pass it here, and draw frames from
  the new video; [`seiza_parallax_with_dust_map_json`] reads the map from
  a file instead. A map gives dust even to a video prepared without it.
+ With a crop, give a map of the original source image's shape, not the crop's.
 
  Only the dust changes. The planes and stars are shared, not copied, so
  this takes about as long as fitting the camera again
@@ -2582,6 +3346,8 @@ SeizaParallax *seiza_parallax_with_dust_map_json(const SeizaParallax *video,
  `counted` true for the dust mapped from the star counts rather than the
  dust in use. Returns 1 when written, 0 when
  the video has no such dust, and -1 with `error_out` set on failure.
+ The size defaults to the original source image's, even with a crop.
+ Unfilmed pixels are clear; the saved map can be loaded back directly.
 
  # Safety
 
@@ -2680,6 +3446,166 @@ int32_t seiza_parallax_write_video_json(const SeizaParallax *video,
  that has not already been freed, with no call using it still running.
  */
 void seiza_parallax_free(SeizaParallax *video);
+
+/*
+ Open a file of satellite orbital elements: CCSDS OMM JSON (an array or
+ one object) or two- or three-line TLE text. Use it for images older than
+ a few days, with elements from near their time. Returns an owned catalog
+ to release with [`seiza_satellite_catalog_free`], or null with an owned
+ `error_out` string to free with `seiza_string_free`.
+
+ # Safety
+ `path` must be a NUL-terminated UTF-8 string. When non-null, `error_out`
+ must point to writable storage for one pointer.
+ */
+SeizaSatelliteCatalog *seiza_satellite_catalog_open(const char *path, char **error_out);
+
+/*
+ Parse OMM JSON text (an array or one object). `source`, which the
+ catalog and its tracks report, may be null for `"inline"`. Returns an
+ owned catalog to release with [`seiza_satellite_catalog_free`], or null
+ with an owned `error_out` string.
+
+ # Safety
+ `text` must be a NUL-terminated UTF-8 string, and `source` null or one.
+ When non-null, `error_out` must point to writable storage for one pointer.
+ */
+SeizaSatelliteCatalog *seiza_satellite_catalog_from_omm_json(const char *text,
+                                                             const char *source,
+                                                             char **error_out);
+
+/*
+ Parse two- or three-line TLE text. Records that do not parse are
+ skipped; text with none that do fails. `source` may be null for
+ `"inline"`. Returns an owned catalog to release with
+ [`seiza_satellite_catalog_free`], or null with an owned `error_out`
+ string.
+
+ # Safety
+ `text` must be a NUL-terminated UTF-8 string, and `source` null or one.
+ When non-null, `error_out` must point to writable storage for one pointer.
+ */
+SeizaSatelliteCatalog *seiza_satellite_catalog_from_tle_text(const char *text,
+                                                             const char *source,
+                                                             char **error_out);
+
+/*
+ Download CelesTrak's current set of active satellites, or reuse a cached
+ copy. The cache refreshes at most every two hours and falls back to the
+ newest good copy when a refresh fails; CelesTrak blocks clients that
+ download too often, so keep to one cache directory. `cache_dir` may be
+ null or empty for the platform's satellite cache. The call blocks on the
+ network; run it off the UI thread. `cancel` may be null; raising it stops
+ the download at once, failing the call, and leaves no half-written file
+ in the cache. Read the provider, cache state and any warning with
+ [`seiza_satellite_catalog_info_json`]. Current elements suit only recent
+ images; for an older one use [`seiza_satellite_catalog_resolve_json`] or
+ open a file of elements from its time.
+
+ Returns an owned catalog to release with [`seiza_satellite_catalog_free`],
+ or null with an owned `error_out` string.
+
+ # Safety
+ `cache_dir` must be null or a NUL-terminated UTF-8 string. `cancel` must
+ be null or a live [`SeizaCancelSignal`] retained until this call returns.
+ When non-null, `error_out` must point to writable storage for one pointer.
+ */
+SeizaSatelliteCatalog *seiza_satellite_catalog_fetch_celestrak(const char *cache_dir,
+                                                               const SeizaCancelSignal *cancel,
+                                                               char **error_out);
+
+/*
+ Find the elements that suit an image's time, choosing the provider so
+ the caller need not: a recent time uses CelesTrak's current set; an
+ older one a nearby cached copy, then the Seiza satellite mirror, then
+ IAU SatChecker.
+
+ `request_json` is `{"time": ..., "cacheDir": ...}`: `time` is Unix
+ seconds or RFC 3339 text (UTC when it has no offset), best the
+ exposure's midpoint; `cacheDir` may be absent for the platform's
+ satellite cache. A recent time may refresh CelesTrak, which blocks
+ clients that download too often, so keep to one cache directory. The
+ call blocks on the network; `cancel` may be null, and raising it stops
+ the load at once, failing the call. Read the provider, cache state and
+ any warning with [`seiza_satellite_catalog_info_json`].
+
+ Returns an owned catalog to release with [`seiza_satellite_catalog_free`],
+ or null with an owned `error_out` string.
+
+ # Safety
+ `request_json` must be a NUL-terminated UTF-8 string. `cancel` must be
+ null or a live [`SeizaCancelSignal`] retained until this call returns.
+ When non-null, `error_out` must point to writable storage for one pointer.
+ */
+SeizaSatelliteCatalog *seiza_satellite_catalog_resolve_json(const char *request_json,
+                                                            const SeizaCancelSignal *cancel,
+                                                            char **error_out);
+
+/*
+ Describe a catalog as owned JSON: `records` (how many), `source` (a path,
+ a URL or the caller's text), `retrievedAtUnix`, and after a fetch or
+ resolve `provider` (`"celestrak-active"`, `"seiza-mirror"` or
+ `"iau-satchecker"`), `cacheState` (`"fresh"`, `"downloaded"`,
+ `"stale-fallback"` or `"cache-only"`), `cachePath` and `warning`, a
+ problem that did not stop the load. Those four are null for a file or
+ text. Free the result, or an `error_out` string, with
+ `seiza_string_free`.
+
+ # Safety
+ `catalog` must be a live pointer from a `seiza_satellite_catalog_*`
+ constructor. When non-null, `error_out` must point to writable storage
+ for one pointer.
+ */
+char *seiza_satellite_catalog_info_json(const SeizaSatelliteCatalog *catalog, char **error_out);
+
+/*
+ Predict which satellites crossed a solved `width` by `height` image while
+ the shutter was open. The tracks are predictions from orbital elements,
+ never detections in the pixels.
+
+ `wcs_json` is the image's WCS as the C ABI's solve returns it (`crval`,
+ `crpix`, `cd`, `sip`, and `pixelOrigin`, 0 or 1, for what `crpix` counts
+ from). `request_json` gives one exposure, one continuous time with the
+ shutter open (never a stack's total): `start`, as Unix seconds or RFC 3339
+ text, and either `durationSeconds` or `end`; the observer as `latitude`
+ and `longitude` in degrees (east positive) with `altitudeM` above the
+ ellipsoid, or as `observerItrf`, `[x, y, z]` in metres; and optionally
+ `sampleIntervalSeconds` (1), `coarseIntervalSeconds` (10),
+ `minimumElevationDeg` (0) and `maximumElementAgeSeconds` (seven days;
+ null allows any age).
+
+ Returns owned JSON: `tracks`, highest elevation first, each with its
+ satellite (`noradId`, `cosparId`, `name`, `label`), `elementEpochUnix`,
+ `elementAgeSeconds`, `source`, `sampleIntervalSeconds`, `samples` (each
+ `timeUnix`, `raDeg`, `decDeg`, `pixel` as `{x, y}` counted from 0 or null,
+ `elevationDeg`, `rangeKm`, `sunlightFraction`), `clippedSegments` (the
+ path inside the image, each `{start, end}`), `maxElevationDeg`,
+ `maxSunlightFraction`, `maxApparentRateArcsecPerS`,
+ `maxPixelRatePxPerS` and `clippedLengthPx`; then `elementsConsidered`,
+ `propagationFailures` and `staleElements`, the records skipped for age.
+ Free it, or an `error_out` string, with `seiza_string_free`.
+
+ # Safety
+ `catalog` must be a live pointer from a `seiza_satellite_catalog_*`
+ constructor; `wcs_json` and `request_json` NUL-terminated UTF-8 strings.
+ When non-null, `error_out` must point to writable storage for one pointer.
+ */
+char *seiza_satellite_catalog_tracks_json(const SeizaSatelliteCatalog *catalog,
+                                          const char *wcs_json,
+                                          uint32_t width,
+                                          uint32_t height,
+                                          const char *request_json,
+                                          char **error_out);
+
+/*
+ Release a catalog from a `seiza_satellite_catalog_*` constructor.
+
+ # Safety
+ `catalog` must be null or a pointer from a `seiza_satellite_catalog_*`
+ constructor that has not already been freed, with no call using it
+ still running.
+ */
+void seiza_satellite_catalog_free(SeizaSatelliteCatalog *catalog);
 
 #ifdef __cplusplus
 }  // extern "C"

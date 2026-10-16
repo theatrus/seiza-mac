@@ -24,47 +24,39 @@ Seiza for Mac **0.8.2** uses published core/C ABI **0.30.1**, parallax
 **0.7.0**, stacking **0.32.0**, and image I/O **0.5.0**. Its header matches the
 published C ABI; the versioned release descriptions above are historical.
 
-The next Mac test build pins [seiza PR #283](https://github.com/theatrus/seiza/pull/283)
-at `b8ebe99b11ca05716a3b2314d5395d495ba05d8a` for independent tour camera
-fitting and whole-image pull-back. It includes the #283 review fixes: endpoint
-spins fit their complete holds, pull-back room includes overall zoom, and a
-smooth temporary transition zoom preserves both endpoints of a two-stop turn.
-The preview reports the peak as **Transition zoom** (`fit.motionZoom`). This is
-based on published core/C ABI
-**0.32.0**, downloader **0.9.0**, parallax **0.9.0**, stacking **0.35.0**, and
-image I/O **0.7.0**, following [seiza PR #275](https://github.com/theatrus/seiza/pull/275).
-The complete header matches the pinned commit. Return to exact published crate
-versions and registry checksums for the release, containing both #283 and #277.
+The current development build uses published core/C ABI **0.33.0**, downloader
+**0.9.0**, parallax **0.10.0**, stacking **0.36.0**, and image I/O **0.8.0**,
+from [Seiza 0.33.0](https://github.com/theatrus/seiza/releases/tag/v0.33.0).
+Cargo locks registry checksums; the complete C ABI header matches the published
+package, whose source commit is `9868b7878165cf01508cef9458c4c72e287654ad`.
+The temporary Git pins have been removed.
 
-### Release gate: source-space dust maps
+This release includes [#283](https://github.com/theatrus/seiza/pull/283): tour
+fitting preserves valid opening and closing lenses, endpoint spins fit their
+complete holds, and pull-back room includes overall zoom. A two-stop turn can
+use smooth temporary magnification between fixed endpoints, reported as
+**Transition zoom** (`fit.motionZoom`).
 
-Before shipping the crop feature, adopt the published core/C ABI release that
-contains [seiza PR #277](https://github.com/theatrus/seiza/pull/277). Review of
-commit `7a1156d5cc3c04d35059eb7ca3ae17dbe362c183` found that the PR has no version
-bump; published C ABI 0.32.0 / parallax 0.9.0 do not include it.
+### Source-space dust maps
 
-The fix keeps replacement maps in original source coordinates and samples
-coarse maps directly over the crop. C ABI reads and exports return source-space
-maps too, with clear pixels outside the filmed region. This replaces the Mac's
-0.32.0 compatibility adapter; a dependency bump alone is incompatible.
+The published release also includes [#277](https://github.com/theatrus/seiza/pull/277).
+Dust-map preparation, replacement, reads and exports use original source
+coordinates, even when only a crop is filmed. Coarse source-shaped maps are
+sampled directly over that crop. Exports default to the original source size;
+unfilmed pixels are clear, including where the imported map was painted.
 
-When that release is published:
+The Mac's old 0.32 crop/expand adapter, C declaration, Swift bridge and direct
+parallax dependency have been removed. Pass full-source maps directly to the
+native API and export its result directly. Crop-shaped maps with a different
+aspect from the source are rejected. This avoids double cropping and keeps
+painting aligned when a map is reloaded or used with another crop.
 
-1. Update the exact dependency pins and lockfile, and copy/compare the complete
-   published C ABI header. Use registry checksums rather than an unreleased Git pin.
-2. Remove the crop/expand calls from `ParallaxSession.swapDust` and
-   `exportDustMap`, the `ParallaxCore.transformDustMap` bridge, and the local
-   `dust_maps.rs` adapter, C declaration, and adapter-only dependencies.
-   Pass the selected full-source map directly to the core and write its map
-   directly to the destination. Do not crop it twice or preserve old painted
-   values outside the filmed region: the new native contract explicitly clears them.
-3. Extend the native Mac regression coverage with a non-origin square crop of a
-   rectangular source and a coarse asymmetric map. Check identical prepare/reload
-   frames, source-sized reads and exports, clear unfilmed pixels, paint/export/reload
-   alignment, rejection of crop-shaped maps, another crop using the exported map,
-   counted-dust reset, and independence of the original video handle.
-4. Rerun the full native/Rust suites, Dropbox framing and real MP4 checks, and the
-   universal app/DMG validation against the published packages.
+Native regression coverage exercises non-origin square crops of a rectangular
+source, coarse asymmetric maps, identical prepare/replacement frames, all four
+export formats, source-sized reads and exports, clear unfilmed pixels,
+paint/export/reload alignment, rejection of crop-shaped maps, another crop,
+counted-dust reset and independence of the original video handle. Session tests
+cover the same source-space contract through the UI's import/export/reload path.
 
 ## Framing and crop
 

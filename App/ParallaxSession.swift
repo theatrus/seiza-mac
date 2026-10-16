@@ -355,20 +355,12 @@ final class ParallaxSession: ObservableObject {
         let (signal, generation) = begin(message)
         let events = eventHandler(generation)
         let path = map?.url.path
-        let crop = composition.scene.crop, sourceWidth = width, sourceHeight = height, files = files
         task = Task {
             do {
                 let video = try await Task.detached(priority: .userInitiated) {
-                    try withExtendedLifetime((map, access, files)) {
-                        var mappedPath = path
-                        if let crop, let path, let files {
-                            let cropped = files.directory.appendingPathComponent(UUID().uuidString + ".fits")
-                            try ParallaxCore.transformDustMap(path: path, to: cropped,
-                                sourceWidth: sourceWidth, sourceHeight: sourceHeight, crop: crop, expand: false)
-                            mappedPath = cropped.path
-                        }
+                    try withExtendedLifetime((map, access)) {
                         try signal.check()
-                        let painted = try ParallaxCore.withDustMap(source, path: mappedPath, cancellation: signal, events: events)
+                        let painted = try ParallaxCore.withDustMap(source, path: path, cancellation: signal, events: events)
                         if let settings {
                             return try ParallaxCore.reconfigure(painted, settings: settings, cancellation: signal, events: events)
                         }
@@ -398,23 +390,12 @@ final class ParallaxSession: ObservableObject {
     func exportDustMap(to destination: URL) {
         guard !closed, canExportDustMap, let video = prepared ?? sceneVideo else { return }
         let access = ParallaxScopedURL(destination)
-        let crop = composition.scene.crop, sourceWidth = width, sourceHeight = height
-        let files = files, baseMap = selectedInputs[.dustMap]
         let (signal, generation) = begin("Writing dust map…")
         task = Task {
             do {
                 let written = try await Task.detached(priority: .userInitiated) {
-                    try withExtendedLifetime((access, files, baseMap)) {
+                    try withExtendedLifetime(access) {
                         try signal.check()
-                        if let crop, let files {
-                            let cropped = files.directory.appendingPathComponent(UUID().uuidString + ".fits")
-                            guard try video.writeDustMap(to: cropped) else { return false }
-                            try signal.check()
-                            try ParallaxCore.transformDustMap(path: cropped.path, to: access.url,
-                                sourceWidth: sourceWidth, sourceHeight: sourceHeight, crop: crop,
-                                expand: true, base: baseMap?.url.path)
-                            return true
-                        }
                         return try video.writeDustMap(to: access.url)
                     }
                 }.value

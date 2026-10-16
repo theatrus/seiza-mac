@@ -9,4 +9,3 @@ const char *seiza_mac_core_package_source(void);
 char *seiza_mac_distance_catalog_status_json(const char *directory, char **error_out);
 bool seiza_mac_catalog_setup_parallax(const char *directory,
     SeizaCatalogSetupProgressCallback progress, void *context, char **error_out);
-bool seiza_mac_dust_map_transform_json(const char *request, char **error_out);
