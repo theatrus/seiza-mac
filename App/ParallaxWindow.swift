@@ -261,12 +261,12 @@ struct ParallaxWorkspace: View {
             }
             Toggle("Lock crop to frame shape", isOn: $lockCropToFrame)
             HStack {
-                TextField("X", value: cropBinding(\.x), format: .number)
-                TextField("Y", value: cropBinding(\.y), format: .number)
+                TextField("X", value: cropBinding(\.x), formatter: Self.cropNumberFormatter)
+                TextField("Y", value: cropBinding(\.y), formatter: Self.cropNumberFormatter)
             }
             HStack {
-                TextField("Width", value: cropBinding(\.width), format: .number)
-                TextField("Height", value: cropBinding(\.height), format: .number)
+                TextField("Width", value: cropBinding(\.width), formatter: Self.cropNumberFormatter)
+                TextField("Height", value: cropBinding(\.height), formatter: Self.cropNumberFormatter)
             }
             Text(drawingCrop ? "Drag a rectangle on the source image." : "Source pixels. Changing the crop requires a new scene preparation.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -781,6 +781,15 @@ struct ParallaxWorkspace: View {
             }
         })
     }
+
+    // Commit a complete number on submit/focus loss. Clamping each partial
+    // keystroke (for example the first "1" in "1350") rewrites the edit.
+    private static let cropNumberFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.allowsFloats = false
+        return formatter
+    }()
 
     private func cropBinding(_ key: WritableKeyPath<ParallaxCrop, Int>) -> Binding<Int> {
         Binding(get: {
