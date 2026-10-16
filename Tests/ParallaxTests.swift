@@ -61,6 +61,37 @@ final class ParallaxTests: XCTestCase {
         }
     }
 
+    func testPullBackFromAnEdgeTargetWidensTheStopAndPreservesOpeningPixels() throws {
+        let (files, original) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        var request = original
+        request.video.framing = "fill"; request.video.zoom = 1
+        request.video.tourGlide = 0.2
+        request.video.tour = [ParallaxStop(travel: 0, hold: 0.2),
+            ParallaxStop(name: "Edge Target", focus: [83, 10], dolly: 0.35,
+                         rotateDegrees: 11, travel: 0.8, hold: 0.3),
+            ParallaxStop(travel: 0.8, hold: 0.2)]
+        let before = try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in })
+        let opening = try before.frame(0).dataProvider?.data as Data?
+        XCTAssertEqual(before.summary.fit.zoom.used, 1, accuracy: 1e-6)
+        XCTAssertEqual(before.summary.fit.stops[0].zoom.used, 1, accuracy: 1e-6)
+        let targetDolly = try XCTUnwrap(before.summary.fit.stops[1].dolly).used
+        let targetMagnification = before.summary.fit.stops[1].zoom.used / (1 - targetDolly)
+        request.video.tour[1].dolly = 0
+        request.video.tour[1].pullBackToWholeImage = true
+        let after = try ParallaxCore.reconfigure(before, settings: request.video,
+            cancellation: ParallaxCancellation(), events: { _ in })
+        XCTAssertEqual(after.summary.fit.zoom.used, 1, accuracy: 1e-6)
+        XCTAssertEqual(after.summary.fit.stops[0].zoom.used, 1, accuracy: 1e-6)
+        XCTAssertLessThan(after.summary.fit.stops[1].zoom.used, targetMagnification)
+        XCTAssertEqual(try after.frame(0).dataProvider?.data as Data?, opening,
+                       "Pulling back a target must not magnify or move the opening frame")
+        let saved = try JSONEncoder().encode(request.video.tour[1])
+        let restored = try JSONDecoder().decode(ParallaxStop.self, from: saved)
+        XCTAssertEqual(restored.pullBackToWholeImage, true)
+        XCTAssertEqual(restored.focus, [83, 10], "Saving the wide camera must retain the target")
+    }
+
     func testKnownStarlessSourceSolvesOnlyAlignedStarsAndNeverTheStarlessFiles() throws {
         let (files, original) = try fixture()
         defer { withExtendedLifetime(files) {} }
@@ -119,6 +150,7 @@ final class ParallaxTests: XCTestCase {
         let stop = try XCTUnwrap(session.composition.stops.last)
         XCTAssertEqual(stop.focus, [35, 28]); XCTAssertEqual(stop.depthParsecs, 150)
         XCTAssertEqual(stop.dolly, 0); XCTAssertEqual(stop.zoom, 1); XCTAssertEqual(stop.push, 0)
+        XCTAssertEqual(stop.pullBackToWholeImage, true)
         XCTAssertEqual(session.playhead, session.composition.arrival(at: 2))
         session.undo()
         XCTAssertEqual(session.composition.stops[2].dolly, 0.7)
@@ -1603,8 +1635,9 @@ final class ParallaxLocalFixtureTests: XCTestCase {
         session.automaticPreview = false
         func waitForOperation() async throws {
             let deadline = ContinuousClock.now + .seconds(300)
-            while session.isBusy, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(50)) }
+            while session.isBusy || session.isReconfiguring, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(50)) }
             XCTAssertFalse(session.isBusy, "BigQ operation timed out: \(session.status)")
+            XCTAssertFalse(session.isReconfiguring, "BigQ refit timed out: \(session.status)")
             XCTAssertNil(session.error)
         }
         try await waitForOperation()
@@ -1614,7 +1647,7 @@ final class ParallaxLocalFixtureTests: XCTestCase {
         try await waitForOperation()
         XCTAssertTrue(session.layersAligned)
         XCTAssertTrue(session.canPrepare, session.preparationIssue ?? "BigQ pair should be ready")
-        session.tourOptions.targets = 1
+        session.tourOptions.targets = 5
         session.generateTour()
         try await waitForOperation()
         let plan = try XCTUnwrap(session.candidate, session.error ?? "BigQ tour did not generate")
@@ -1623,10 +1656,29 @@ final class ParallaxLocalFixtureTests: XCTestCase {
         XCTAssertTrue(session.preparationNotes.contains("Sky coordinates recovered from the stars layer."))
         session.applyCandidate()
         XCTAssertEqual(session.composition.motion, .tour)
+        let target = try XCTUnwrap(session.composition.stops.first { $0.focus != nil })
+        session.selectStop(target.id)
+        session.editStop { $0.dolly = 0.35 }
         session.preparePreview()
         try await waitForOperation()
         XCTAssertTrue(session.hasPreview, session.error ?? "BigQ preview did not prepare")
         XCTAssertEqual(session.summary?.width, 960)
+        let before = try XCTUnwrap(session.summary?.fit)
+        XCTAssertEqual(before.zoom.used, 1, accuracy: 1e-6)
+        XCTAssertEqual(before.stops[0].zoom.used, 1, accuracy: 1e-6)
+        let index = try XCTUnwrap(session.selectedIndex)
+        let targetDolly = try XCTUnwrap(before.stops[index].dolly).used
+        let magnification = before.stops[index].zoom.used / (1 - targetDolly)
+        session.pullBack()
+        session.preparePreview()
+        try await waitForOperation()
+        let after = try XCTUnwrap(session.summary?.fit)
+        XCTAssertEqual(after.zoom.used, before.zoom.used, accuracy: 1e-6)
+        XCTAssertEqual(after.stops[0].zoom.used, before.stops[0].zoom.used, accuracy: 1e-6)
+        XCTAssertLessThan(after.stops[index].zoom.used, magnification)
+        XCTAssertEqual(session.composition.stops[index].focus, target.focus)
+        XCTAssertEqual(session.composition.stops[index].dolly, 0)
+        XCTAssertEqual(session.composition.stops[index].pullBackToWholeImage, true)
         print("BigQ starless source: \(plan.tour.count) generated stops, preview ready")
     }
 

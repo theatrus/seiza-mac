@@ -209,6 +209,13 @@ final class ParallaxSession: ObservableObject {
         edit { body(&$0.stops[index]) }
     }
 
+    func editStopFraming(_ body: (inout ParallaxStop) -> Void) {
+        editStop { stop in
+            body(&stop)
+            stop.pullBackToWholeImage = true
+        }
+    }
+
     func undo() {
         guard !isBusy, let previous = undoStates.popLast() else { return }
         let sceneChanged = previous.scene != composition.scene
@@ -529,6 +536,7 @@ final class ParallaxSession: ObservableObject {
     func addStop(whole: Bool = false) {
         var stop = ParallaxStop(name: whole ? "Whole Image" : "Custom Point",
             focus: whole ? nil : composition.imageCenter, dolly: 0)
+        if !whole { stop.pullBackToWholeImage = true }
         stop.rotateDegrees = selectedIndex.map { composition.stops[$0].rotateDegrees } ?? 0
         let index = selectedIndex.map { $0 + 1 } ?? composition.stops.count
         edit { $0.stops.insert(stop, at: index) }
@@ -550,7 +558,7 @@ final class ParallaxSession: ObservableObject {
         selectStop(composition.stops[min(index, composition.stops.count - 1)].id)
     }
     func pullBack() {
-        editStop { $0.dolly = 0; $0.zoom = 1; $0.pan = 0; $0.push = 0 }
+        editStopFraming { $0.dolly = 0; $0.zoom = 1; $0.pan = 0; $0.push = 0 }
         if let selectedStop { selectStop(selectedStop) }
     }
     func selectStop(_ id: UUID) {

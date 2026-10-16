@@ -492,16 +492,20 @@ struct ParallaxWorkspace: View {
                 Text("Set hold to 0 to pass straight through. Glide, spin and push can keep a held stop moving.").font(.caption).foregroundStyle(.secondary)
                 HStack {
                     Text("Dolly")
-                    Slider(value: stopBinding(\.dolly), in: 0...max(0.99, session.composition.stops[index].dolly), step: 0.01)
+                    Slider(value: stopFramingBinding(\.dolly), in: 0...max(0.99, session.composition.stops[index].dolly), step: 0.01)
                         .accessibilityLabel("Dolly camera travel")
-                        .help("Camera travel through depth: 0% returns to the starting distance; higher values move toward the background and create parallax. Zoom controls lens magnification separately.")
+                        .help("Camera travel through depth: 0% pulls back toward whole-image framing; higher values move toward the selected target and create parallax. Zoom controls lens magnification separately.")
                     Text("\(session.composition.stops[index].dolly * 100, specifier: "%.0f")%").monospacedDigit()
-                    Button("0%") { session.editStop { $0.dolly = 0 } }.help("Reset camera travel to the starting distance")
+                    Button("0%") { session.editStopFraming { $0.dolly = 0 } }.help("Reset camera travel toward whole-image framing")
                 }
-                zoomControl("Zoom", value: stopBinding(\.zoom), minimum: 0.1,
+                zoomControl("Zoom", value: stopFramingBinding(\.zoom), minimum: 0.1,
                     help: "Lens magnification: 0.5× gives a wider view, 1× is the base view, and 2× magnifies it. Dolly moves through depth instead. Overall zoom and camera fitting also apply.")
                 Button("Pull Back", action: session.pullBack)
-                    .help("Reset camera travel and lens zoom at this destination without changing the target or point.")
+                    .help("Return toward whole-image framing at this stop while retaining the selected target or point.")
+                if session.composition.stops[index].pullBackToWholeImage == true {
+                    Text("Wide views move toward the image centre; tighter views return to the selected target.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Text("Dolly moves through scene depth; Zoom changes lens magnification. Fill Frame can tighten a wider view to hide image edges; Show Whole Image allows them.")
                     .font(.caption).foregroundStyle(.secondary)
                 if session.composition.framing == "fill", session.composition.stops[index].zoom < 1 {
@@ -870,5 +874,9 @@ struct ParallaxWorkspace: View {
     private func stopBinding(_ key: WritableKeyPath<ParallaxStop, Double>) -> Binding<Double> {
         Binding(get: { session.selectedIndex.map { session.composition.stops[$0][keyPath: key] } ?? 0 },
                 set: { value in session.editStop { $0[keyPath: key] = value } })
+    }
+    private func stopFramingBinding(_ key: WritableKeyPath<ParallaxStop, Double>) -> Binding<Double> {
+        Binding(get: { session.selectedIndex.map { session.composition.stops[$0][keyPath: key] } ?? 0 },
+                set: { value in session.editStopFraming { $0[keyPath: key] = value } })
     }
 }

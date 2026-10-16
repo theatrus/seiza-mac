@@ -21,9 +21,12 @@ struct ParallaxStop: Codable, Equatable, Identifiable {
     /// Nil follows the scene under the focus. Preserve an explicit depth
     /// from a generated or imported tour until the user chooses Follow scene.
     var depthParsecs: Double?
+    /// Wide manual views return toward the image centre, retaining the
+    /// selected target so tighter views can frame it again.
+    var pullBackToWholeImage: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case name, focus, depthParsecs, dolly, zoom, rotateDegrees, pan, travel, hold, spinDegrees, push, title, card
+        case name, focus, depthParsecs, dolly, zoom, rotateDegrees, pan, travel, hold, spinDegrees, push, title, card, pullBackToWholeImage
     }
     init(name: String? = "Whole Image", focus: [Double]? = nil, dolly: Double = 0,
          zoom: Double = 1, rotateDegrees: Double = 0, pan: Double = 0,
@@ -40,6 +43,7 @@ struct ParallaxStop: Codable, Equatable, Identifiable {
         name = try c.decodeIfPresent(String.self, forKey: .name)
         focus = try c.decodeIfPresent([Double].self, forKey: .focus)
         depthParsecs = try c.decodeIfPresent(Double.self, forKey: .depthParsecs)
+        pullBackToWholeImage = try c.decodeIfPresent(Bool.self, forKey: .pullBackToWholeImage)
         dolly = try c.decodeIfPresent(Double.self, forKey: .dolly) ?? 0
         zoom = try c.decodeIfPresent(Double.self, forKey: .zoom) ?? 1
         rotateDegrees = try c.decodeIfPresent(Double.self, forKey: .rotateDegrees) ?? 0
@@ -352,7 +356,7 @@ struct ParallaxComposition: Equatable {
     var loopClosingDuration: Double {
         guard motion == .tour, tourLoop, stops.count >= 2,
             let first = stops.first, let last = stops.last else { return 0 }
-        if last.focus == first.focus && last.dolly == first.dolly && last.zoom == first.zoom && last.pan == first.pan { return 0 }
+        if last.focus == first.focus && (last.pullBackToWholeImage ?? false) == (first.pullBackToWholeImage ?? false) && last.dolly == first.dolly && last.zoom == first.zoom && last.pan == first.pan { return 0 }
         let travel = stops.dropFirst().reduce(0) { $0 + $1.travel } / Double(stops.count - 1)
         return travel + max(first.hold * 3, 3)
     }

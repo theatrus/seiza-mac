@@ -24,10 +24,13 @@ Seiza for Mac **0.8.2** uses published core/C ABI **0.30.1**, parallax
 **0.7.0**, stacking **0.32.0**, and image I/O **0.5.0**. Its header matches the
 published C ABI; the versioned release descriptions above are historical.
 
-The next Mac build uses published core/C ABI **0.32.0**, downloader **0.9.0**,
-parallax **0.9.0**, stacking **0.35.0**, and image I/O **0.7.0**, following
-[seiza PR #275](https://github.com/theatrus/seiza/pull/275). Its complete header
-matches the published C ABI crate, and Cargo locks registry checksums.
+The next Mac test build pins [seiza PR #283](https://github.com/theatrus/seiza/pull/283)
+at `54b675f78b0c72d5d7172bb1605a00821c80cbce` for independent tour camera
+fitting and whole-image pull-back. This is based on published core/C ABI
+**0.32.0**, downloader **0.9.0**, parallax **0.9.0**, stacking **0.35.0**, and
+image I/O **0.7.0**, following [seiza PR #275](https://github.com/theatrus/seiza/pull/275).
+The complete header matches the pinned commit. Return to exact published crate
+versions and registry checksums for the release, containing both #283 and #277.
 
 ### Release gate: source-space dust maps
 
@@ -110,15 +113,32 @@ Switching to Fly In retains the tour draft.
 Adding, duplicating, moving or removing a stop seeks the selected stop's arrival,
 so the inspector and preview show the same destination. **Pull Back** resets its
 Dolly, Zoom, Pan and Push while retaining its point, name, depth and timing.
+Manual Dolly/Zoom edits and new custom points use `pullBackToWholeImage`:
+as the view widens its camera centre approaches the image centre; tighter views
+return toward the retained target. The mode is saved in tours and shared by
+preview and export. Existing imported tours retain point-centred framing until
+edited. A shifted camera follows the scene depth under its actual framing;
+the target's explicit depth is retained for when it is centred again.
 Zoom controls use sliders, multiplier readouts, tooltips and a **1×** reset.
 A new custom point starts with Dolly 0 and Zoom 1 rather than inferring a close
 target extent. Its Dolly slider covers 0–99% with a percent readout and 0% reset.
 A stop can widen below 1×, including 0.5×; overall/opening/end zoom retain the
 native minimum of 1×. Dolly moves through depth; Zoom changes lens magnification.
-Fill Frame can tighten fitted framing to hide edges, while Show Whole Image
-allows black space and preserves a wider stop.
+Fill Frame can tighten an individual stop to hide edges, while Show Whole Image
+allows black space and preserves a wider stop. Fitting no longer magnifies the
+whole tour when one target needs more than 1.5× additional zoom. An already-valid
+unlooped opening/closing view stays unchanged; neighboring stops receive travel
+fitting. Regression checks compare opening-frame pixels before and after Pull Back.
 
 ![Per-stop Dolly and Zoom sliders with a wider custom point](images/parallax-framing/tour-point-controls.jpg)
+
+BigQ's first target before and after Pull Back in the optimized test build:
+the selected NGC 7762 coordinates remain unchanged, Dolly returns from 35% to
+0%, and the view widens toward the image centre. Global zoom stays at 1×;
+only this stop's fitted zoom changes from 2.86× to 1.22× to accommodate its roll.
+
+![BigQ target before Pull Back](images/parallax-framing/bigq-target-before-pullback.jpg)
+![BigQ target after Pull Back](images/parallax-framing/bigq-target-after-pullback.jpg)
 
 Generation returns a candidate, which can be applied or discarded. It needs
 matching WCS and object catalogues, but can run before separating stars or
