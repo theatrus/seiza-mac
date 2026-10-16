@@ -135,7 +135,7 @@ fitting. Regression checks compare opening-frame pixels before and after Pull Ba
 BigQ's first target before and after Pull Back in the optimized test build:
 the selected NGC 7762 coordinates remain unchanged, Dolly returns from 35% to
 0%, and the view widens toward the image centre. Global zoom stays at 1×;
-only this stop's fitted zoom changes from 2.86× to 1.22× to accommodate its roll.
+this stop's fitted zoom changes from 2.86× to 1.22× to accommodate its roll.
 
 ![BigQ target before Pull Back](images/parallax-framing/bigq-target-before-pullback.jpg)
 ![BigQ target after Pull Back](images/parallax-framing/bigq-target-after-pullback.jpg)
