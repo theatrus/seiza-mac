@@ -43,11 +43,15 @@ final class UpdateConfigurationTests: XCTestCase {
     func testSparkleUsesTheStableSignedReleaseFeed() throws {
         let info = try XCTUnwrap(Bundle.main.infoDictionary)
 
+        XCTAssertEqual(info["SUFeedURL"] as? String, UpdateFeedSelection.primaryFeedURL)
+        XCTAssertEqual(UpdateFeedSelection.primaryFeedURL, "https://updates.seiza.fyi/mac/appcast.xml")
         XCTAssertEqual(
-            info["SUFeedURL"] as? String,
+            UpdateFeedSelection.fallbackFeedURL,
             "https://github.com/theatrus/seiza-mac/releases/latest/download/appcast.xml"
         )
         XCTAssertEqual(info["SUEnableInstallerLauncherService"] as? Bool, true)
+        XCTAssertEqual(info["SURequireSignedFeed"] as? Bool, true)
+        XCTAssertEqual(info["SUVerifyUpdateBeforeExtraction"] as? Bool, true)
 
         let publicKey = try XCTUnwrap(info["SUPublicEDKey"] as? String)
         XCTAssertEqual(publicKey, "Jk4K7QO9ohQbi455S888/lnSiqXB6a5sB4wEuEZjaQ0=")
@@ -60,8 +64,63 @@ final class UpdateConfigurationTests: XCTestCase {
 
         XCTAssertEqual(
             sparkleBundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
-            "2.9.4"
+            "2.9.6"
         )
+    }
+}
+
+final class UpdateFeedSelectionTests: XCTestCase {
+    private func sparkleError(_ code: Int) -> NSError {
+        NSError(domain: UpdateFeedSelection.sparkleErrorDomain, code: code)
+    }
+
+    func testChecksStartFromOurFeed() {
+        var selection = UpdateFeedSelection()
+        XCTAssertEqual(selection.feedURLString(), UpdateFeedSelection.primaryFeedURL)
+    }
+
+    func testAScheduledFeedFailureRetriesOnceAgainstGitHub() {
+        var selection = UpdateFeedSelection()
+        for code in [1000, 1002] {
+            _ = selection.feedURLString()
+            XCTAssertTrue(selection.finishCycle(scheduled: true, error: sparkleError(code)))
+            XCTAssertEqual(selection.feedURLString(), UpdateFeedSelection.fallbackFeedURL)
+
+            // The retry fails too: no third attempt, and the next check is ours again.
+            XCTAssertFalse(selection.finishCycle(scheduled: true, error: sparkleError(code)))
+            XCTAssertEqual(selection.feedURLString(), UpdateFeedSelection.primaryFeedURL)
+            XCTAssertFalse(selection.finishCycle(scheduled: true, error: nil))
+        }
+    }
+
+    func testNoUpdateAndInstallErrorsDoNotRetry() {
+        var selection = UpdateFeedSelection()
+        for code in [1001, 2001, 3001, 4007] {
+            _ = selection.feedURLString()
+            XCTAssertFalse(selection.finishCycle(scheduled: true, error: sparkleError(code)))
+        }
+        _ = selection.feedURLString()
+        XCTAssertFalse(
+            selection.finishCycle(scheduled: true, error: NSError(domain: NSURLErrorDomain, code: 1002))
+        )
+        XCTAssertEqual(selection.feedURLString(), UpdateFeedSelection.primaryFeedURL)
+    }
+
+    func testAUserCheckIsNotRetriedBecauseTheProbeAlreadyChose() {
+        var selection = UpdateFeedSelection()
+        _ = selection.feedURLString()
+        XCTAssertFalse(selection.finishCycle(scheduled: false, error: sparkleError(1002)))
+    }
+
+    func testAnUnreachableProbeSendsOneUserCheckToGitHub() {
+        var selection = UpdateFeedSelection()
+        selection.prepareUserCheck(primaryReachable: false)
+        XCTAssertEqual(selection.feedURLString(), UpdateFeedSelection.fallbackFeedURL)
+        XCTAssertFalse(selection.finishCycle(scheduled: false, error: nil))
+        XCTAssertEqual(selection.feedURLString(), UpdateFeedSelection.primaryFeedURL)
+
+        selection.prepareUserCheck(primaryReachable: true)
+        XCTAssertEqual(selection.feedURLString(), UpdateFeedSelection.primaryFeedURL)
     }
 }
 

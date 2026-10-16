@@ -1,6 +1,6 @@
 # In-app updates with Sparkle
 
-Seiza for Mac uses Sparkle 2.9.4 for signed in-app updates. The app can check
+Seiza for Mac uses Sparkle 2.9.6 for signed in-app updates. The app can check
 for a release on demand, check on a user-controlled schedule, and download and
 install an update in place.
 
@@ -9,8 +9,10 @@ install an update in place.
 The app target embeds Sparkle through a pinned Swift package. `App/Info.plist`
 contains:
 
-- `SUFeedURL`, which points to the stable GitHub Releases appcast;
-- `SUPublicEDKey`, which verifies each release ZIP; and
+- `SUFeedURL`, which points to our copy of the feed on updates.seiza.fyi;
+- `SUPublicEDKey`, which verifies each release ZIP and the feed itself;
+- `SURequireSignedFeed` and `SUVerifyUpdateBeforeExtraction`, which make
+  Sparkle refuse a feed or ZIP that this key did not sign; and
 - `SUEnableInstallerLauncherService`, which lets the sandboxed app install an
   update.
 
@@ -32,16 +34,39 @@ Each versioned release contains:
 - the signed and notarized DMG; and
 - `SHA256SUMS.txt`.
 
-The app reads:
+The same signed feed is published in two places:
 
 ```text
-https://github.com/theatrus/seiza-mac/releases/latest/download/appcast.xml
+https://updates.seiza.fyi/mac/appcast.xml                                  (ours)
+https://github.com/theatrus/seiza-mac/releases/latest/download/appcast.xml (GitHub)
 ```
+
+The release job uploads `appcast.xml` to the GitHub release. A release webhook
+then has ec2admin copy it, byte for byte, to updates.seiza.fyi; the copy is
+checked against the release's `SHA256SUMS.txt` first. The Windows app has its
+own feed under `/windows/`, because the two apps version and release
+separately.
+
+Sparkle reads one feed per check, so `UpdateController` picks it through
+`feedURLString(for:)`:
+
+- A check the user starts sends a HEAD request to our feed with a five second
+  timeout, and uses GitHub if that does not return 200.
+- A scheduled check reads our feed. If it fails to download, parse or verify
+  it (`SUAppcastError` or `SUAppcastParseError`), it runs once more against
+  GitHub.
+- Every check after that starts from our feed again.
+
+Builds released before this change read only the GitHub feed, so release CI
+must keep publishing it there.
 
 The appcast links to the ZIP under its exact immutable release tag. The release
 job runs Sparkle's pinned `generate_appcast` tool after it has signed,
 notarized, and packaged the application. The tool reads the private EdDSA key
-from standard input and embeds the release notes. The first version ships full
+from standard input and embeds the release notes. Because the app sets
+`SURequireSignedFeed`, the tool also signs the whole feed, appending a
+`<!-- sparkle-signatures: -->` block; the release job refuses to publish a
+feed without one. The first version ships full
 ZIP updates only. Delta updates can be added once the release job retains the
 needed older archives.
 
@@ -78,10 +103,17 @@ test for installed users.
 
 ## Checks
 
-- XCTest checks the feed URL, public key, installer service, and embedded
-  Sparkle version.
+- XCTest checks the feed URLs, public key, signed-feed keys, installer
+  service, embedded Sparkle version, and the feed fallback rules.
 - Pull-request CI builds and tests the app with the pinned package.
 - The tag job creates the appcast from the final ZIP and checks its exact
   release URL before publishing.
 - A release test must install the prior Sparkle-enabled version, check for the
   new version, install it, relaunch, and confirm the new bundle version.
+
+## Signed feed bridge
+
+`SURequireSignedFeed` arrives in the same release that moves the feed to
+updates.seiza.fyi. Installed builds without it update normally. From that
+release on, a feed without a valid signature is refused, and every feed the
+release job writes is signed.
