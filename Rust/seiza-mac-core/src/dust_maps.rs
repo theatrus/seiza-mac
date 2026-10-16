@@ -1,3 +1,6 @@
+// Compatibility adapter for C ABI 0.32.0. Remove when adopting seiza #277:
+// native reads, replacements and exports then all use full-source coordinates.
+// See docs/PARALLAX-VIDEO.md's release gate before changing the core pins.
 use seiza_parallax::{Dust, DustMap};
 use serde::Deserialize;
 use std::ffi::{CStr, CString, c_char};

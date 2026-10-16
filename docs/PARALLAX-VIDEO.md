@@ -29,6 +29,36 @@ parallax **0.9.0**, stacking **0.35.0**, and image I/O **0.7.0**, following
 [seiza PR #275](https://github.com/theatrus/seiza/pull/275). Its complete header
 matches the published C ABI crate, and Cargo locks registry checksums.
 
+### Release gate: source-space dust maps
+
+Before shipping the crop feature, adopt the published core/C ABI release that
+contains [seiza PR #277](https://github.com/theatrus/seiza/pull/277). Review of
+commit `7a1156d5cc3c04d35059eb7ca3ae17dbe362c183` found that the PR has no version
+bump; published C ABI 0.32.0 / parallax 0.9.0 do not include it.
+
+The fix keeps replacement maps in original source coordinates and samples
+coarse maps directly over the crop. C ABI reads and exports return source-space
+maps too, with clear pixels outside the filmed region. This replaces the Mac's
+0.32.0 compatibility adapter; a dependency bump alone is incompatible.
+
+When that release is published:
+
+1. Update the exact dependency pins and lockfile, and copy/compare the complete
+   published C ABI header. Use registry checksums rather than an unreleased Git pin.
+2. Remove the crop/expand calls from `ParallaxSession.swapDust` and
+   `exportDustMap`, the `ParallaxCore.transformDustMap` bridge, and the local
+   `dust_maps.rs` adapter, C declaration, and adapter-only dependencies.
+   Pass the selected full-source map directly to the core and write its map
+   directly to the destination. Do not crop it twice or preserve old painted
+   values outside the filmed region: the new native contract explicitly clears them.
+3. Extend the native Mac regression coverage with a non-origin square crop of a
+   rectangular source and a coarse asymmetric map. Check identical prepare/reload
+   frames, source-sized reads and exports, clear unfilmed pixels, paint/export/reload
+   alignment, rejection of crop-shaped maps, another crop using the exported map,
+   counted-dust reset, and independence of the original video handle.
+4. Rerun the full native/Rust suites, Dropbox framing and real MP4 checks, and the
+   universal app/DMG validation against the published packages.
+
 ## Framing and crop
 
 In **Output**, choose **Fill Frame** to fill the video by trimming image edges,
