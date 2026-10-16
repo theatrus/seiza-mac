@@ -1650,10 +1650,19 @@ final class FlatQualityTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let width = 256, height = 256
-        let values: [Int16] = (0..<(width * height)).map { i in
-            let x = i % width, y = i / width
-            let inDisk = (x - 128) * (x - 128) + (y - 128) * (y - 128) < 35 * 35
-            return Int16(40000 - 32768 - (inDisk ? 800 : 0) + i % 11 - 5)
+        // Keep fixture arithmetic simple for Xcode 16's type checker.
+        var values: [Int16] = []
+        values.reserveCapacity(width * height)
+        for i in 0..<(width * height) {
+            let x: Int = i % width
+            let y: Int = i / width
+            let dx: Int = x - 128
+            let dy: Int = y - 128
+            let radiusSquared: Int = dx * dx + dy * dy
+            let shadow: Int = radiusSquared < 35 * 35 ? 800 : 0
+            let noise: Int = i % 11 - 5
+            let sample: Int = 40000 - 32768 - shadow + noise
+            values.append(Int16(sample))
         }
         let file = try SyntheticFrame.write(width: width, height: height, values: values,
             cards: ["IMAGETYP= 'FLAT'"], directory: directory, name: "dust-disk.fits")
