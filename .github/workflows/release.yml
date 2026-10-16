@@ -279,6 +279,17 @@ jobs:
             | grep -qx 'Jk4K7QO9ohQbi455S888/lnSiqXB6a5sB4wEuEZjaQ0='
           grep -q "url=\"${release_base}/Seiza-${version}-universal.zip\"" \
             dist/appcast.xml
+          # The app sets SURequireSignedFeed, so generate_appcast signs the
+          # whole feed as well as the ZIP. An unsigned feed would be refused by
+          # every installed copy, so never publish one.
+          plutil -extract SURequireSignedFeed raw \
+            DerivedData/Build/Products/Release/Seiza.app/Contents/Info.plist \
+            | grep -qx true
+          printf '%s' "$SPARKLE_ED_PRIVATE_KEY" \
+            | DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update \
+                --verify \
+                --ed-key-file - \
+                dist/appcast.xml
 
       - name: Produce checksums
         run: |

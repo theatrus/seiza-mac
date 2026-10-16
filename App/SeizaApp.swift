@@ -39,7 +39,7 @@ struct SeizaApp: App {
                     appDelegate.showAboutPanel(nil)
                 }
                 Divider()
-                CheckForUpdatesView(updater: appDelegate.updateController.updater)
+                CheckForUpdatesView(controller: appDelegate.updateController)
             }
             CommandGroup(replacing: .newItem) {
                 Button("Open…") {
@@ -84,7 +84,7 @@ struct SeizaApp: App {
         }
 
         Settings {
-            SettingsView(updater: appDelegate.updateController.updater)
+            SettingsView(updateController: appDelegate.updateController)
         }
     }
 }

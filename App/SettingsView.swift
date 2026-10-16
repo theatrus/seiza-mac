@@ -140,7 +140,7 @@ struct CatalogComponentDisplay: Identifiable, Equatable {
 }
 
 struct SettingsView: View {
-    let updater: SPUUpdater
+    let updateController: UpdateController
     @AppStorage("catalogDirectory") private var catalogDirectory = ""
     @StateObject private var setup = CatalogSetupController.shared
     @State private var preset = CatalogSetupPreset.standardBlind
@@ -148,7 +148,7 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            UpdateSettingsSection(updater: updater)
+            UpdateSettingsSection(controller: updateController)
 
             Section("Catalog location") {
                 LabeledContent("Directory") {

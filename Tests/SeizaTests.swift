@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import Foundation
 import ImageIO
+import Sparkle
 import UniformTypeIdentifiers
 import XCTest
 @testable import Seiza
@@ -43,11 +44,15 @@ final class UpdateConfigurationTests: XCTestCase {
     func testSparkleUsesTheStableSignedReleaseFeed() throws {
         let info = try XCTUnwrap(Bundle.main.infoDictionary)
 
+        XCTAssertEqual(info["SUFeedURL"] as? String, UpdateFeedSelection.primaryFeedURL)
+        XCTAssertEqual(UpdateFeedSelection.primaryFeedURL, "https://updates.seiza.fyi/mac/appcast.xml")
         XCTAssertEqual(
-            info["SUFeedURL"] as? String,
+            UpdateFeedSelection.fallbackFeedURL,
             "https://github.com/theatrus/seiza-mac/releases/latest/download/appcast.xml"
         )
         XCTAssertEqual(info["SUEnableInstallerLauncherService"] as? Bool, true)
+        XCTAssertEqual(info["SURequireSignedFeed"] as? Bool, true)
+        XCTAssertEqual(info["SUVerifyUpdateBeforeExtraction"] as? Bool, true)
 
         let publicKey = try XCTUnwrap(info["SUPublicEDKey"] as? String)
         XCTAssertEqual(publicKey, "Jk4K7QO9ohQbi455S888/lnSiqXB6a5sB4wEuEZjaQ0=")
@@ -60,8 +65,158 @@ final class UpdateConfigurationTests: XCTestCase {
 
         XCTAssertEqual(
             sparkleBundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
-            "2.9.4"
+            "2.9.6"
         )
+    }
+}
+
+final class UpdateFeedSelectionTests: XCTestCase {
+    private func sparkleError(_ code: Int) -> NSError {
+        NSError(domain: UpdateFeedSelection.sparkleErrorDomain, code: code)
+    }
+
+    func testChecksStartFromOurFeed() {
+        var selection = UpdateFeedSelection()
+        XCTAssertEqual(selection.feedURLString(), UpdateFeedSelection.primaryFeedURL)
+    }
+
+    func testAScheduledFeedFailureRetriesOnceAgainstGitHub() {
+        var selection = UpdateFeedSelection()
+        for code in [1000, 1002] {
+            _ = selection.feedURLString()
+            XCTAssertTrue(selection.finishCycle(error: sparkleError(code)))
+            XCTAssertEqual(selection.feedURLString(), UpdateFeedSelection.fallbackFeedURL)
+
+            // The retry fails too: no third attempt, and the next check is ours again.
+            XCTAssertFalse(selection.finishCycle(error: sparkleError(code)))
+            XCTAssertEqual(selection.feedURLString(), UpdateFeedSelection.primaryFeedURL)
+            XCTAssertFalse(selection.finishCycle(error: nil))
+        }
+    }
+
+    func testNoUpdateAndInstallErrorsDoNotRetry() {
+        var selection = UpdateFeedSelection()
+        for code in [1001, 2001, 3001, 4007] {
+            _ = selection.feedURLString()
+            XCTAssertFalse(selection.finishCycle(error: sparkleError(code)))
+        }
+        _ = selection.feedURLString()
+        XCTAssertFalse(
+            selection.finishCycle(error: NSError(domain: NSURLErrorDomain, code: 1002))
+        )
+        XCTAssertEqual(selection.feedURLString(), UpdateFeedSelection.primaryFeedURL)
+    }
+
+    func testAUserCheckRetriesIfTheFeedFailsAfterTheProbe() {
+        var selection = UpdateFeedSelection()
+        _ = selection.feedURLString()
+        XCTAssertTrue(selection.finishCycle(error: sparkleError(1002)))
+        XCTAssertEqual(selection.feedURLString(), UpdateFeedSelection.fallbackFeedURL)
+        XCTAssertFalse(selection.finishCycle(error: sparkleError(1002)))
+        XCTAssertEqual(selection.feedURLString(), UpdateFeedSelection.primaryFeedURL)
+    }
+
+    func testAnUnreachableProbeSendsOneUserCheckToGitHub() {
+        var selection = UpdateFeedSelection()
+        selection.prepareUserCheck(primaryReachable: false)
+        XCTAssertEqual(selection.feedURLString(), UpdateFeedSelection.fallbackFeedURL)
+        XCTAssertFalse(selection.finishCycle(error: nil))
+        XCTAssertEqual(selection.feedURLString(), UpdateFeedSelection.primaryFeedURL)
+
+        selection.prepareUserCheck(primaryReachable: true)
+        XCTAssertEqual(selection.feedURLString(), UpdateFeedSelection.primaryFeedURL)
+    }
+}
+
+@MainActor
+final class UpdateControllerTests: XCTestCase {
+    private final class RecordingChecks: UpdateCheckRunning {
+        var checks: [SPUUpdateCheck] = []
+        func checkForUpdates() { checks.append(.updates) }
+        func checkForUpdatesInBackground() { checks.append(.updatesInBackground) }
+        func checkForUpdateInformation() { checks.append(.updateInformation) }
+    }
+
+    func testFeedFailureStartsFallbackBeforeSparkleReschedulesAndPreservesCheckKind() {
+        for kind in [SPUUpdateCheck.updates, .updatesInBackground, .updateInformation] {
+            let controller = UpdateController(startingUpdater: false)
+            let checks = RecordingChecks()
+            let error = NSError(domain: SUSparkleErrorDomain, code: 1000)
+            // Sparkle reads the feed during configuration and again for GET.
+            for _ in 0..<2 {
+                XCTAssertEqual(controller.feedURLString(for: controller.updater), UpdateFeedSelection.primaryFeedURL)
+            }
+            controller.finishUpdateCycle(kind, error: error, checking: checks)
+            // Sparkle starts its scheduling probe after this callback returns.
+            // A deferred retry would run while that probe owns the session.
+            XCTAssertEqual(checks.checks, [kind])
+            for _ in 0..<2 {
+                XCTAssertEqual(controller.feedURLString(for: controller.updater), UpdateFeedSelection.fallbackFeedURL)
+            }
+            controller.finishUpdateCycle(kind, error: error, checking: checks)
+            XCTAssertEqual(checks.checks, [kind], "A failed fallback must not create a retry loop")
+            XCTAssertEqual(controller.feedURLString(for: controller.updater), UpdateFeedSelection.primaryFeedURL)
+        }
+    }
+
+    func testNoUpdateOrArchiveValidationFailureDoesNotStartAnotherCheck() {
+        let controller = UpdateController(startingUpdater: false)
+        let checks = RecordingChecks()
+        for code in [1001, 3001, 3002] {
+            _ = controller.feedURLString(for: controller.updater)
+            controller.finishUpdateCycle(
+                .updates, error: NSError(domain: SUSparkleErrorDomain, code: code), checking: checks
+            )
+        }
+        XCTAssertTrue(checks.checks.isEmpty)
+    }
+}
+
+private final class UpdateProbeURLProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.host == "feed-probe.invalid"
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard request.httpMethod == "HEAD", request.timeoutInterval == 5,
+              request.cachePolicy == .reloadIgnoringLocalCacheData else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        let url = request.url!
+        if url.lastPathComponent == "timeout" {
+            client?.urlProtocol(self, didFailWithError: URLError(.timedOut))
+            return
+        }
+        let response: URLResponse
+        if url.lastPathComponent == "non-http" {
+            response = URLResponse(url: url, mimeType: nil, expectedContentLength: 0, textEncodingName: nil)
+        } else {
+            response = HTTPURLResponse(
+                url: url, statusCode: Int(url.lastPathComponent)!, httpVersion: "HTTP/1.1", headerFields: nil
+            )!
+        }
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
+final class UpdateFeedProbeTests: XCTestCase {
+    func testProbeRequiresAnUncachedHeadWithAFiveSecondTimeoutAndHTTP200() async {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [UpdateProbeURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        for (path, expected) in [("200", true), ("503", false), ("404", false), ("timeout", false), ("non-http", false)] {
+            let reachable = await UpdateController.feedIsReachable("https://feed-probe.invalid/\(path)", session: session)
+            XCTAssertEqual(reachable, expected, path)
+        }
+        let invalid = await UpdateController.feedIsReachable("https://[", session: session)
+        XCTAssertFalse(invalid)
     }
 }
 

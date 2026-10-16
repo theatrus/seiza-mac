@@ -48,7 +48,7 @@ done < <(find "$plugins_path" -mindepth 1 -maxdepth 1 -print)
 test "$(plutil -extract CFBundleIdentifier raw "$app_path/Contents/Info.plist")" = "fyi.seiza.mac"
 test "$(plutil -extract CFBundleIdentifier raw "$quicklook_path/Contents/Info.plist")" = "fyi.seiza.mac.quicklook"
 test "$(plutil -extract NSExtension.NSExtensionPointIdentifier raw "$quicklook_path/Contents/Info.plist")" = "com.apple.quicklook.preview"
-test "$(plutil -extract CFBundleShortVersionString raw "$sparkle_path/Resources/Info.plist")" = "2.9.4"
+test "$(plutil -extract CFBundleShortVersionString raw "$sparkle_path/Resources/Info.plist")" = "2.9.6"
 file "$app_path/Contents/MacOS/Seiza" \
     | grep -q 'universal binary with 2 architectures'
 file "$quicklook_path/Contents/MacOS/SeizaQuickLook" \
