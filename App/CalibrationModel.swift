@@ -602,6 +602,12 @@ struct FlatQualityReport: Decodable, Sendable {
         if master.grade != "ok" {
             notes.append("Combined master (\(master.grade)): " + master.findings.map(\.description).joined(separator: "; "))
         }
+        notes.append(contentsOf: dustNotes(paths: paths, measurements: measurements))
+        return notes
+    }
+
+    func dustNotes(paths: [String], measurements: [FlatQualityMeasurement]) -> [String] {
+        var notes: [String] = []
         notes.append("Compact dust: \(steadyFeatures) steady, \(changingFeatures) changing, \(carriedFeatures) changing dips may survive in the master. Steady dust belongs to the light path and is what a flat corrects.")
         let features = measurements.flatMap(\.features)
         let shapes = Dictionary(grouping: features, by: \.shape)
@@ -623,5 +629,25 @@ struct FlatQualityReport: Decodable, Sendable {
             }
         }
         return notes
+    }
+}
+
+/// Preserve native findings through presentation instead of parsing report prose.
+struct FlatQualityReview: Sendable {
+    var paths: [String]
+    var measurements: [FlatQualityMeasurement]
+    var report: FlatQualityReport
+    var groupTitle: String? = nil
+
+    var suspectCount: Int { report.frames.filter { $0.grade == "suspect" }.count }
+    var poorCount: Int { report.frames.filter { $0.grade == "poor" }.count }
+    var flaggedIndices: [Int] {
+        report.frames.indices.filter { report.frames[$0].grade != "ok" }
+    }
+    var notes: [String] { report.reviewNotes(paths: paths, measurements: measurements) }
+    var dustNotes: [String] { report.dustNotes(paths: paths, measurements: measurements) }
+    func filename(at index: Int) -> String {
+        guard paths.indices.contains(index) else { return "Frame \(index + 1)" }
+        return URL(fileURLWithPath: paths[index]).lastPathComponent
     }
 }

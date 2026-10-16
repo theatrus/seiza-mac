@@ -60,20 +60,21 @@ final class CalibrationPreparationResult: @unchecked Sendable {
     let calibration: ImageStackCalibration
     let summaries: [CalibrationPreparationKindSummary]
     let warnings: [String]
-    let reviewNotes: [String]
+    let flatQualityReviews: [FlatQualityReview]
+    var reviewNotes: [String] { flatQualityReviews.flatMap(\.notes) }
     private let leaseStore: CalibrationLeaseStore
 
     init(
         calibration: ImageStackCalibration,
         summaries: [CalibrationPreparationKindSummary],
         warnings: [String],
-        reviewNotes: [String],
+        flatQualityReviews: [FlatQualityReview],
         leases: [CalibrationFileLease]
     ) {
         self.calibration = calibration
         self.summaries = summaries
         self.warnings = warnings
-        self.reviewNotes = reviewNotes
+        self.flatQualityReviews = flatQualityReviews
         self.leaseStore = CalibrationLeaseStore(leases: leases)
     }
 
@@ -261,7 +262,7 @@ struct CalibrationPreparationService {
     private struct KindOutcome {
         var summary: CalibrationPreparationKindSummary
         var warnings: [String] = []
-        var reviewNotes: [String] = []
+        var flatQualityReviews: [FlatQualityReview] = []
         var lease: CalibrationFileLease? = nil
     }
 
@@ -271,7 +272,7 @@ struct CalibrationPreparationService {
     ) async throws -> CalibrationPreparationResult {
         try validate(request)
         var warnings: [String] = []
-        var reviewNotes: [String] = []
+        var flatQualityReviews: [FlatQualityReview] = []
 
         let targets = try normalizedTargets(for: request)
         let tolerances = request.options.tolerances
@@ -323,7 +324,7 @@ struct CalibrationPreparationService {
         func adopt(_ outcome: KindOutcome) {
             summaries.append(outcome.summary)
             warnings.append(contentsOf: outcome.warnings)
-            reviewNotes.append(contentsOf: outcome.reviewNotes)
+            flatQualityReviews.append(contentsOf: outcome.flatQualityReviews)
             if let warning = outcome.summary.warning {
                 warnings.append(warning)
             }
@@ -482,7 +483,7 @@ struct CalibrationPreparationService {
                 calibration: calibration,
                 summaries: summaries,
                 warnings: warnings,
-                reviewNotes: reviewNotes,
+                flatQualityReviews: flatQualityReviews,
                 leases: leases)
         } catch {
             for lease in leases {
@@ -1096,7 +1097,8 @@ struct CalibrationPreparationService {
                 let report = try await runBlocking { try CalibrationService.screenFlats(measured) }
                 try Task.checkCancellation()
                 try ensureInputsUnchanged(identities)
-                outcome.reviewNotes.append(contentsOf: report.reviewNotes(paths: paths, measurements: measurements))
+                outcome.flatQualityReviews.append(FlatQualityReview(
+                    paths: paths, measurements: measurements, report: report))
             } catch is CancellationError {
                 throw CancellationError()
             } catch {

@@ -1245,6 +1245,7 @@ struct ImageStackWorkflowView: View {
     @State private var preparationMessage = ""
     @State private var preparationNotice: String?
     @State private var pendingWarnings: [String]?
+    @State private var pendingFlatReviews: [FlatQualityReview] = []
     @State private var pendingJobs: [ImageStackJob]?
     @State private var preparedResults: [CalibrationPreparationResult] = []
     @State private var preparationTask: Task<Void, Never>?
@@ -1269,10 +1270,12 @@ struct ImageStackWorkflowView: View {
         .sheet(isPresented: warningSheetBinding) {
             CalibrationWarningsSheet(
                 warnings: pendingWarnings ?? [],
+                reviews: pendingFlatReviews,
                 primaryTitle: "Continue Stacking",
                 onPrimary: {
                     let jobs = pendingJobs
                     pendingWarnings = nil
+                    pendingFlatReviews = []
                     pendingJobs = nil
                     if let jobs {
                         startBatch(jobs)
@@ -1280,6 +1283,7 @@ struct ImageStackWorkflowView: View {
                 },
                 onCancel: {
                     pendingWarnings = nil
+                    pendingFlatReviews = []
                     pendingJobs = nil
                     preparationNotice = "Stacking was cancelled before any light "
                         + "frames were processed."
@@ -1298,6 +1302,7 @@ struct ImageStackWorkflowView: View {
             set: { presented in
                 if !presented, pendingWarnings != nil {
                     pendingWarnings = nil
+                    pendingFlatReviews = []
                     pendingJobs = nil
                     releasePreparedResults()
                 }
@@ -1785,10 +1790,11 @@ struct ImageStackWorkflowView: View {
                         groups: groups,
                         outputSelection: outputSelection,
                         calibrationsByGroup: prepared.byGroup)
-                    if prepared.warnings.isEmpty {
+                    if prepared.warnings.isEmpty && prepared.reviews.isEmpty {
                         startBatch(jobs)
                     } else {
                         pendingJobs = jobs
+                        pendingFlatReviews = prepared.reviews
                         pendingWarnings = prepared.warnings
                     }
                 } catch is CancellationError {
@@ -1841,6 +1847,7 @@ struct ImageStackWorkflowView: View {
     private struct BatchPreparation {
         var byGroup: [String: ImageStackCalibration] = [:]
         var warnings: [String] = []
+        var reviews: [FlatQualityReview] = []
     }
 
     /// Probes every group's lights and prepares one master set per filter
@@ -1889,7 +1896,12 @@ struct ImageStackWorkflowView: View {
             preparedResults.append(result)
             preparation.byGroup[group.id] = result.calibration
             preparation.warnings.append(
-                contentsOf: (result.warnings + result.reviewNotes).map { "\(title): \($0)" })
+                contentsOf: result.warnings.map { "\(title): \($0)" })
+            preparation.reviews.append(contentsOf: result.flatQualityReviews.map { review in
+                var grouped = review
+                grouped.groupTitle = title
+                return grouped
+            })
             protectedMasters.append(
                 contentsOf: result.summaries.compactMap(\.masterPath))
         }

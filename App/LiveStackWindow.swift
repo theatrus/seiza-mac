@@ -45,6 +45,7 @@ final class LiveStackWindowModel: ObservableObject {
     @Published var calibrationProgress: Double?
     @Published var configurationNotice: String?
     @Published var pendingWarnings: [String]?
+    @Published var pendingFlatReviews: [FlatQualityReview] = []
 
     // Running state.
     @Published var snapshot = LiveStackRunSnapshot()
@@ -263,9 +264,8 @@ final class LiveStackWindowModel: ObservableObject {
         isPreparingCalibration = false
         calibrationProgress = nil
 
-        let review = prepared.warnings + prepared.reviewNotes
-        if !review.isEmpty {
-            let proceed = await confirmWarnings(review)
+        if !prepared.warnings.isEmpty || !prepared.flatQualityReviews.isEmpty {
+            let proceed = await confirmWarnings(prepared.warnings, reviews: prepared.flatQualityReviews)
             guard proceed else {
                 configurationNotice =
                     "Live stacking was cancelled before any light frames were "
@@ -341,15 +341,17 @@ final class LiveStackWindowModel: ObservableObject {
         return text
     }
 
-    private func confirmWarnings(_ warnings: [String]) async -> Bool {
+    private func confirmWarnings(_ warnings: [String], reviews: [FlatQualityReview]) async -> Bool {
         await withCheckedContinuation { continuation in
             warningContinuation = continuation
+            pendingFlatReviews = reviews
             pendingWarnings = warnings
         }
     }
 
     func resolveWarnings(proceed: Bool) {
         pendingWarnings = nil
+        pendingFlatReviews = []
         warningContinuation?.resume(returning: proceed)
         warningContinuation = nil
     }
@@ -540,6 +542,7 @@ struct LiveStackWindowView: View {
         .sheet(isPresented: warningSheetBinding) {
             CalibrationWarningsSheet(
                 warnings: model.pendingWarnings ?? [],
+                reviews: model.pendingFlatReviews,
                 primaryTitle: "Start Live Stacking",
                 onPrimary: { model.resolveWarnings(proceed: true) },
                 onCancel: { model.resolveWarnings(proceed: false) })
@@ -1071,34 +1074,145 @@ private struct LiveStackRunningView: View {
     }
 }
 
-/// The "Calibration needs attention" confirmation shown before any light
-/// frame is processed when preparation produced warnings.
+/// Review preparation warnings and optional native flat diagnostics before stacking.
 struct CalibrationWarningsSheet: View {
     let warnings: [String]
+    var reviews: [FlatQualityReview] = []
     let primaryTitle: String
     let onPrimary: () -> Void
     let onCancel: () -> Void
 
+    private var reportText: String {
+        var sections = warnings
+        for review in reviews {
+            if let title = review.groupTitle { sections.append(title) }
+            sections.append(contentsOf: review.notes)
+        }
+        return sections.joined(separator: "\n\n")
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Calibration Review")
-                .font(.title3.weight(.semibold))
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Calibration Review").font(.title2.weight(.semibold))
+            Text("Review the findings before processing light frames.")
+                .foregroundStyle(.secondary)
             ScrollView {
-                Text(CalibrationPreparationWarningText.format(warnings))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 20) {
+                    if !warnings.isEmpty { preparationWarnings }
+                    ForEach(reviews.indices, id: \.self) { index in
+                        FlatQualityReviewSection(review: reviews[index])
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+                .padding(.trailing, 8)
             }
-            .frame(maxHeight: 320)
+            .frame(maxHeight: 460)
+            Divider()
             HStack {
+                Button("Copy Report") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(reportText, forType: .string)
+                }
                 Spacer()
-                Button("Cancel", action: onCancel)
-                    .keyboardShortcut(.cancelAction)
-                Button(primaryTitle, action: onPrimary)
-                    .keyboardShortcut(.defaultAction)
+                Button("Cancel", action: onCancel).keyboardShortcut(.cancelAction)
+                Button(primaryTitle, action: onPrimary).keyboardShortcut(.defaultAction)
             }
         }
-        .padding(20)
-        .frame(width: 520)
+        .padding(24)
+        .frame(width: 700)
+    }
+
+    private var preparationWarnings: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Preparation issues", systemImage: "exclamationmark.triangle")
+                .font(.headline)
+            ForEach(warnings.indices, id: \.self) { index in
+                Text(warnings[index]).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct FlatQualityReviewSection: View {
+    let review: FlatQualityReview
+    @State private var showDust = false
+    @State private var showAllFrames = false
+
+    private var visibleIndices: [Int] {
+        showAllFrames ? review.flaggedIndices : Array(review.flaggedIndices.prefix(10))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(review.groupTitle.map { "Flat quality · \($0)" } ?? "Flat quality")
+                .font(.headline)
+            HStack(spacing: 24) {
+                count(review.report.frames.count, title: "Reviewed")
+                count(review.suspectCount, title: "Suspect")
+                count(review.poorCount, title: "Poor")
+            }
+            Text("Your flat selection is unchanged. Continue to use these frames, or cancel to revise the library.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if review.flaggedIndices.isEmpty {
+                Label("No frame issues found", systemImage: "checkmark.circle")
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(visibleIndices, id: \.self) { index in
+                        verdict(review.report.frames[index], title: review.filename(at: index))
+                    }
+                    if !showAllFrames && review.flaggedIndices.count > 10 {
+                        Button("Show all \(review.flaggedIndices.count) flagged frames") { showAllFrames = true }
+                    }
+                }
+            }
+            if review.report.master.grade != "ok" {
+                verdict(review.report.master, title: "Combined master")
+            }
+            Divider()
+            DisclosureGroup("Dust and vignetting details", isExpanded: $showDust) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Steady dust is what flats correct. These measurements describe the flats; they do not determine which flat set matches a light.")
+                        .foregroundStyle(.secondary)
+                    ForEach(review.dustNotes.indices, id: \.self) { index in
+                        Text(review.dustNotes[index])
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 8)
+            }
+            .accessibilityLabel("Dust and vignetting details")
+        }
+    }
+
+    private func count(_ value: Int, title: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value.formatted()).font(.title2.weight(.semibold)).monospacedDigit()
+            Text(title).font(.caption).foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(value) \(title.lowercased())")
+    }
+
+    private func verdict(_ value: FlatQualityReport.Verdict, title: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title).fontWeight(.medium).lineLimit(2).help(title)
+                Spacer()
+                Label(value.grade.capitalized, systemImage: "exclamationmark.triangle")
+                    .font(.caption.weight(.medium))
+            }
+            ForEach(value.findings.indices, id: \.self) { index in
+                Text(value.findings[index].description).foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
     }
 }
 

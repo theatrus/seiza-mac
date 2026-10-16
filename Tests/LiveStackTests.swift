@@ -1408,6 +1408,11 @@ final class CalibrationPreparationServiceTests: XCTestCase {
         defer { reviewed.release() }
         XCTAssertTrue(reviewed.reviewNotes.contains { $0.hasPrefix("Flat quality: 2 frames reviewed;") }, "\(reviewed.reviewNotes)")
         XCTAssertFalse(reviewed.warnings.contains { $0.contains("review could not be completed") })
+        let structured = try XCTUnwrap(reviewed.flatQualityReviews.first)
+        XCTAssertEqual(structured.paths.count, 2)
+        XCTAssertEqual(structured.report.frames.count, 2)
+        XCTAssertFalse(structured.dustNotes.contains { $0.hasPrefix("Flat quality:") })
+
         XCTAssertEqual(reviewed.calibration.flat, second.calibration.flat, "Review must not change frame selection or cache identity")
         XCTAssertTrue(try XCTUnwrap(reviewed.summaries.first { $0.kind == "flat" }).cacheReused)
         let summary = await LiveStackWindowModel.describeCalibration(reviewed)
@@ -1626,6 +1631,20 @@ final class LiveStackCoordinatorTests: XCTestCase {
 // MARK: - Published 0.34 flat-quality bridge
 
 final class FlatQualityTests: XCTestCase {
+    func testReviewSeparatesFrameIssuesFromDustDetails() throws {
+        let json = #"{"schemaVersion":1,"frames":[{"grade":"ok","findings":[]},{"grade":"suspect","findings":[{"code":"dim","grade":"suspect","value":0.0381,"limit":0.1}]},{"grade":"poor","findings":[{"code":"clipped","grade":"poor","value":0.2,"limit":0.01}]}],"master":{"grade":"suspect","findings":[]},"steadyFeatures":2,"changingFeatures":1,"carriedFeatures":1}"#
+        let report = try JSONDecoder().decode(FlatQualityReport.self, from: Data(json.utf8))
+        let review = FlatQualityReview(paths: ["/flats/good.fits", "/flats/dim.fits", "/flats/clipped.fits"], measurements: [], report: report)
+        XCTAssertEqual(review.suspectCount, 1)
+        XCTAssertEqual(review.poorCount, 1)
+        XCTAssertEqual(review.flaggedIndices, [1, 2])
+        XCTAssertEqual(review.filename(at: 1), "dim.fits")
+        XCTAssertTrue(review.notes.contains { $0.contains("3.81%") })
+        XCTAssertTrue(review.notes.contains { $0.contains("Combined master") })
+        XCTAssertFalse(review.dustNotes.contains { $0.contains("dim.fits") || $0.contains("Combined master") })
+        XCTAssertTrue(review.dustNotes.contains { $0.contains("2 steady, 1 changing") })
+    }
+
     func testOptionsRequireCompleteGeometryOnlyWhenEnabled() throws {
         var options = FlatQualityOptions()
         options.fullScale = 0; options.useOptics = true

@@ -17,6 +17,12 @@ Set **Saturation level** to the raw sample value at saturation: usually 65535
 for 16-bit ADU or 1 for normalized samples. Match the actual file units; the
 app does not guess a saturation value from a flat's measured brightness.
 
+The review opens with reviewed/suspect/poor counts and individual frame issues.
+Preparation warnings and the combined-master verdict remain separate. **Dust and
+vignetting details** expands the measurements; **Copy Report** includes every
+reported detail, including collapsed sections. For large sets, the first ten
+flagged frames appear initially, with an action to show the rest.
+
 The native screen reports clipping, channel exposure, illumination differences,
 compact dips and changing defects that a master may retain. Steady dust is what
 flats correct; finding a dust disk alone is not grounds to reject a flat. The
@@ -46,7 +52,7 @@ safe bias/dark pedestal before a flat can be used.
 
 | Capability | Mac status | Next step |
 | --- | --- | --- |
-| 0.34 flat measurement shapes, radii, holes, distances and vignetting | Carried through the Swift bridge and used by the optional review | Add an image overlay or structured report if useful |
+| 0.34 flat measurement shapes, radii, holes, distances and vignetting | Carried through the Swift bridge and used by the optional review | Structured frame issues and expandable dust details are available; an image overlay remains a possible addition |
 | Native flat-set screening | Used on the selected raw set; frame/master findings shown before stacking | Consider explicit user-driven exclusion/re-screening rather than automatic removal |
 | Session-stack dust and cross-session dust matching (`dust::find_session_dust`, `find_changes`, `match_features`) | Rust core only; no C ABI exports in 0.34 | Add matching thin C ABI/Python entry points before a Mac session-comparison workflow |
 | Flat-response construction/comparison and measured selection (`flat_response::metric`) | Rust core only; no C ABI response-building/comparison exports in 0.34 | Bind the response and comparison APIs before replacing metadata selection with measured evidence |
@@ -77,3 +83,17 @@ reported two disks at about 1.30 mm, and returned to configuration on Cancel.
 ![Live-stack flat quality controls](images/calibration-quality/live-controls.jpg)
 
 ![Native flat-quality review](images/calibration-quality/flat-review.jpg)
+
+![Expanded dust details](images/calibration-quality/flat-review-details.jpg)
+
+## Upcoming 0.35 bindings
+
+Core master `bed921f` (#291) supplies the thin C ABI/Python bindings missing in
+0.34: flat-response construction and comparison, change maps, light-background
+estimation, fitted-change verdicts and candidate selection; session dust
+extraction/change detection/matching; and constellation figure projection.
+These are the next building blocks for comparing flat sessions against lights,
+showing dust changes, and selecting a response with measured evidence. A fit can
+return `no_shadows` or `unfitted`; those need explicit inconclusive states in the
+UI rather than a success/failure alert. This PR remains on published 0.34.0 until
+0.35 is published and its complete API and data contracts can be validated.
