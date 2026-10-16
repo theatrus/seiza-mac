@@ -92,6 +92,30 @@ final class ParallaxTests: XCTestCase {
         XCTAssertEqual(restored.focus, [83, 10], "Saving the wide camera must retain the target")
     }
 
+    func testTwoStopTurnFitsWithoutMagnifyingItsEndpoints() throws {
+        let (files, original) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        var request = original
+        request.video.framing = "fill"; request.video.zoom = 1
+        request.video.tourGlide = 0
+        request.video.tour = [ParallaxStop(travel: 0, hold: 0.2),
+            ParallaxStop(rotateDegrees: 180, travel: 0.8, hold: 0.2)]
+        let made = try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in })
+        XCTAssertTrue(made.summary.fit.inside)
+        XCTAssertEqual(made.summary.fit.zoom.used, 1)
+        XCTAssertTrue(made.summary.fit.stops.allSatisfy { $0.zoom.used == 1 })
+        XCTAssertGreaterThan(try XCTUnwrap(made.summary.fit.motionZoom).used, 1)
+        XCTAssertTrue(made.summary.fit.adjustments.contains { $0.hasPrefix("Transition zoom:") })
+        for (frame, stop) in [(0, request.video.tour[0]), (made.summary.frames - 1, request.video.tour[1])] {
+            var still = request.video
+            still.tour = [stop, stop]; still.tour[1].travel = 1
+            let fixed = try ParallaxCore.reconfigure(made, settings: still,
+                cancellation: ParallaxCancellation(), events: { _ in })
+            XCTAssertEqual(try made.frame(frame).dataProvider?.data as Data?,
+                           try fixed.frame(0).dataProvider?.data as Data?)
+        }
+    }
+
     func testKnownStarlessSourceSolvesOnlyAlignedStarsAndNeverTheStarlessFiles() throws {
         let (files, original) = try fixture()
         defer { withExtendedLifetime(files) {} }

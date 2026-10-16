@@ -25,8 +25,12 @@ Seiza for Mac **0.8.2** uses published core/C ABI **0.30.1**, parallax
 published C ABI; the versioned release descriptions above are historical.
 
 The next Mac test build pins [seiza PR #283](https://github.com/theatrus/seiza/pull/283)
-at `54b675f78b0c72d5d7172bb1605a00821c80cbce` for independent tour camera
-fitting and whole-image pull-back. This is based on published core/C ABI
+at `b8ebe99b11ca05716a3b2314d5395d495ba05d8a` for independent tour camera
+fitting and whole-image pull-back. It includes the #283 review fixes: endpoint
+spins fit their complete holds, pull-back room includes overall zoom, and a
+smooth temporary transition zoom preserves both endpoints of a two-stop turn.
+The preview reports the peak as **Transition zoom** (`fit.motionZoom`). This is
+based on published core/C ABI
 **0.32.0**, downloader **0.9.0**, parallax **0.9.0**, stacking **0.35.0**, and
 image I/O **0.7.0**, following [seiza PR #275](https://github.com/theatrus/seiza/pull/275).
 The complete header matches the pinned commit. Return to exact published crate
@@ -195,7 +199,7 @@ The current workspace includes [dust maps](#dust-maps), introduced in Seiza
 | Tour motion | Overall zoom, glide through holds, fading stop titles, and seamless looping with an automatic return when needed. CW/CCW shortcuts distinguish travel turns from held spins. |
 | Labels | Depth-aware catalogue labels and density; custom text, source x/y/radius and color; optional editable credit, with a logo image in a chosen corner, its height and the opacity of both; opening and closing title cards and how long each shows. |
 | Output | Fill Frame / Show Whole Image, image-shaped 720p/1080p/1440p/4K, orientation swap, custom even dimensions up to 3840 per side, 24/30/60 fps, Standard/High rendering, star growth limit and fade threshold. |
-| Fit feedback | Requested versus fitted zoom, pan, lead, sideways motion, and per-stop zoom/pan/dolly. `fit.inside` drives a persistent warning below the preview and in Camera when any frames still extend beyond the image. |
+| Fit feedback | Requested versus fitted zoom, pan, lead, sideways motion, per-stop zoom/pan/dolly, and peak transition zoom. `fit.inside` drives a persistent warning below the preview and in Camera when any frames still extend beyond the image. |
 | Native encoding | Silent SDR MP4 through AVFoundation/VideoToolbox, H.264 or HEVC, bounded pixel-buffer pool, hardware acceleration allowed with native software fallback. |
 
 A stop's roll controls travel orientation; `spinDegrees` adds a turn around a held

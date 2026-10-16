@@ -514,6 +514,7 @@ struct ParallaxStopFit: Decodable {
 }
 struct ParallaxFit: Decodable {
     let zoom: ParallaxFitValue
+    let motionZoom: ParallaxFitValue?
     let pan: ParallaxFitValue
     let lead: ParallaxFitValue
     let truck: ParallaxFitValue
@@ -525,6 +526,9 @@ struct ParallaxFit: Decodable {
     var adjustments: [String] {
         var notes = [("Zoom", zoom), ("Pan", pan), ("Sideways lead", lead), ("Sideways motion", truck)]
             .filter { $0.1.changed }.map { String(format: "%@: %.2f → %.2f", $0.0, $0.1.asked, $0.1.used) }
+        if let motionZoom, motionZoom.changed {
+            notes.append(String(format: "Transition zoom: %.2f → %.2f", motionZoom.asked, motionZoom.used))
+        }
         for (index, stop) in stops.enumerated() {
             if stop.zoom.changed { notes.append(String(format: "Stop %d zoom: %.2f → %.2f", index + 1, stop.zoom.asked, stop.zoom.used)) }
             if stop.pan.changed { notes.append(String(format: "Stop %d pan: %.2f → %.2f", index + 1, stop.pan.asked, stop.pan.used)) }

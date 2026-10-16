@@ -10,10 +10,10 @@ publish = false
 crate-type = ["staticlib"]
 
 [dependencies]
-seiza-cabi = { git = "https://github.com/theatrus/seiza", rev = "54b675f78b0c72d5d7172bb1605a00821c80cbce" }
-seiza = { git = "https://github.com/theatrus/seiza", rev = "54b675f78b0c72d5d7172bb1605a00821c80cbce" }
-seiza-download = { git = "https://github.com/theatrus/seiza", rev = "54b675f78b0c72d5d7172bb1605a00821c80cbce" }
-seiza-parallax = { git = "https://github.com/theatrus/seiza", rev = "54b675f78b0c72d5d7172bb1605a00821c80cbce" }
+seiza-cabi = { git = "https://github.com/theatrus/seiza", rev = "b8ebe99b11ca05716a3b2314d5395d495ba05d8a" }
+seiza = { git = "https://github.com/theatrus/seiza", rev = "b8ebe99b11ca05716a3b2314d5395d495ba05d8a" }
+seiza-download = { git = "https://github.com/theatrus/seiza", rev = "b8ebe99b11ca05716a3b2314d5395d495ba05d8a" }
+seiza-parallax = { git = "https://github.com/theatrus/seiza", rev = "b8ebe99b11ca05716a3b2314d5395d495ba05d8a" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt"] }
