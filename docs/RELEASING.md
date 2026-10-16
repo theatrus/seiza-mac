@@ -180,3 +180,11 @@ app even when the host has free storage. Explicit capacity also leaves room for
 filesystem metadata and extended attributes. A local regression fixture with a
 512 MiB sparse file and a resource fork fails with automatic sizing and passes
 with explicit sizing, including byte-for-byte reads from the mounted image.
+
+Unsigned CI retains Cargo outputs for the post-job Rust cache, removing only
+linked Rust archives and Xcode intermediates before creating its development
+DMG. CI and signed publishing use GitHub's standard `macos-15-intel` runner,
+which keeps macOS 15 validation on the Intel pool; both build the universal app.
+Local release validation also covers Apple silicon. See GitHub's
+[hosted runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+for the available standard labels.

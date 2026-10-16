@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   macos:
-    runs-on: macos-15
+    runs-on: macos-15-intel
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
@@ -72,6 +72,9 @@ jobs:
 
       - name: Package and verify development DMG
         run: |
+          # Retain target for Rust caching; the app no longer needs linked inputs.
+          rm -rf .build/rust DerivedData/Build/Intermediates.noindex
+          df -h .
           scripts/package-dmg.sh \
             DerivedData/Build/Products/Release/Seiza.app \
             dist/Seiza-development.dmg \
