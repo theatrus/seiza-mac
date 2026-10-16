@@ -21,9 +21,12 @@ struct ParallaxStop: Codable, Equatable, Identifiable {
     /// Nil follows the scene under the focus. Preserve an explicit depth
     /// from a generated or imported tour until the user chooses Follow scene.
     var depthParsecs: Double?
+    /// Wide manual views return toward the image centre, retaining the
+    /// selected target so tighter views can frame it again.
+    var pullBackToWholeImage: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case name, focus, depthParsecs, dolly, zoom, rotateDegrees, pan, travel, hold, spinDegrees, push, title, card
+        case name, focus, depthParsecs, dolly, zoom, rotateDegrees, pan, travel, hold, spinDegrees, push, title, card, pullBackToWholeImage
     }
     init(name: String? = "Whole Image", focus: [Double]? = nil, dolly: Double = 0,
          zoom: Double = 1, rotateDegrees: Double = 0, pan: Double = 0,
@@ -40,6 +43,7 @@ struct ParallaxStop: Codable, Equatable, Identifiable {
         name = try c.decodeIfPresent(String.self, forKey: .name)
         focus = try c.decodeIfPresent([Double].self, forKey: .focus)
         depthParsecs = try c.decodeIfPresent(Double.self, forKey: .depthParsecs)
+        pullBackToWholeImage = try c.decodeIfPresent(Bool.self, forKey: .pullBackToWholeImage)
         dolly = try c.decodeIfPresent(Double.self, forKey: .dolly) ?? 0
         zoom = try c.decodeIfPresent(Double.self, forKey: .zoom) ?? 1
         rotateDegrees = try c.decodeIfPresent(Double.self, forKey: .rotateDegrees) ?? 0
@@ -64,6 +68,7 @@ struct ParallaxTourOptions: Codable {
 /// targets, how long at each and how much motion.
 struct ParallaxScenePlanSettings: Encodable {
     var size: String
+    var framing = "fill"
     var autoTour: ParallaxTourOptions
 }
 
@@ -77,9 +82,49 @@ struct ParallaxTourPlan: Codable {
     var tourGlide: Double?
     var tourTitles: Bool?
     var tourLoop: Bool?
+    var crop: ParallaxCrop?
+}
+
+struct ParallaxCrop: Codable, Equatable {
+    var x: Int
+    var y: Int
+    var width: Int
+    var height: Int
+    var rect: CGRect { CGRect(x: x, y: y, width: width, height: height) }
+
+    static func selecting(from start: CGPoint, to end: CGPoint, width: Int, height: Int, aspect: Double?) -> Self? {
+        let bounds = CGRect(x: 0, y: 0, width: width, height: height)
+        var rect = CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
+                          width: abs(end.x - start.x), height: abs(end.y - start.y)).intersection(bounds)
+        guard !rect.isNull else { return nil }
+        if let aspect, aspect.isFinite, aspect > 0 {
+            if rect.width / max(1, rect.height) > aspect { rect.size.width = rect.height * aspect }
+            else { rect.size.height = rect.width / aspect }
+        }
+        let crop = Self(x: Int(rect.minX.rounded()), y: Int(rect.minY.rounded()),
+                        width: Int(rect.width.rounded(.down)), height: Int(rect.height.rounded(.down)))
+        return crop.width >= 16 && crop.height >= 16 ? crop : nil
+    }
+
+    init(x: Int, y: Int, width: Int, height: Int) {
+        self.x = x; self.y = y; self.width = width; self.height = height
+    }
+    init(from decoder: Decoder) throws {
+        var c = try decoder.unkeyedContainer()
+        x = try c.decode(Int.self); y = try c.decode(Int.self)
+        width = try c.decode(Int.self); height = try c.decode(Int.self)
+        guard c.isAtEnd else {
+            throw DecodingError.dataCorruptedError(in: c, debugDescription: "A crop needs x, y, width and height.")
+        }
+    }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.unkeyedContainer()
+        try c.encode(x); try c.encode(y); try c.encode(width); try c.encode(height)
+    }
 }
 
 struct ParallaxSceneSettings: Codable, Equatable {
+    var crop: ParallaxCrop?
     var distanceFocus: [Double]?
     var distanceParsecs: Double?
     var unmatchedDistanceParsecs: Double?
@@ -163,6 +208,7 @@ enum ParallaxWatermark: Encodable, Equatable {
 // and never rely on an omitted field inheriting the previous handle's value.
 struct ParallaxVideoSettings: Encodable, Equatable {
     var focus: [Double]?
+    var framing = "fill"
     var start = "whole"
     var dolly = 0.4
     var truck = 0.0
@@ -217,6 +263,10 @@ struct ParallaxComposition: Equatable {
     var tourLoop = false
     var width = 1920
     var height = 1080
+    var sourceWidth = 0
+    var sourceHeight = 0
+    var matchImageShape = false
+    var framing = "fill"
     var fps = 30
     var quality = "standard"
     var growthLimit = 4.0
@@ -238,6 +288,56 @@ struct ParallaxComposition: Equatable {
     var outroCard: String?
     var cardSeconds = 3.0
 
+    var filmedBounds: CGRect {
+        scene.crop?.rect ?? CGRect(x: 0, y: 0, width: sourceWidth, height: sourceHeight)
+    }
+    var imageCenter: [Double] {
+        let bounds = filmedBounds
+        return [bounds.minX + max(0, bounds.width - 1) / 2,
+                bounds.minY + max(0, bounds.height - 1) / 2]
+    }
+    var outputSize: (width: Int, height: Int) {
+        let bounds = filmedBounds
+        guard matchImageShape, bounds.width > 0, bounds.height > 0 else { return (width, height) }
+        let long = max(16, min(3840, max(width, height)))
+        let short = max(16, min(long, Int((Double(long) * min(bounds.width, bounds.height) / max(bounds.width, bounds.height) / 2).rounded()) * 2))
+        return bounds.width >= bounds.height ? (long, short) : (short, long)
+    }
+    var frameKey: String { "\(outputSize.width)x\(outputSize.height)|\(framing)" }
+    func sourcePoint(_ point: [Double]) -> [Double] {
+        guard point.count == 2 else { return point }
+        return [point[0] + filmedBounds.minX, point[1] + filmedBounds.minY]
+    }
+    func videoPoint(_ point: [Double]) -> [Double] {
+        guard point.count == 2 else { return point }
+        return [point[0] - filmedBounds.minX, point[1] - filmedBounds.minY]
+    }
+    func sceneSettings() -> ParallaxSceneSettings {
+        var result = scene
+        result.distanceFocus = scene.distanceFocus.map(videoPoint)
+        return result
+    }
+    /// The editor keeps source coordinates, so changing a crop never applies
+    /// its origin twice. Only requests and saved tours use crop coordinates.
+    mutating func setCrop(_ crop: ParallaxCrop?) {
+        scene.crop = crop
+        if distanceName == "Image center" { scene.distanceFocus = imageCenter }
+        let bounds = filmedBounds
+        guard bounds.width >= 16, bounds.height >= 16 else { return }
+        func clamp(_ point: [Double]) -> [Double] {
+            guard point.count == 2 else { return point }
+            return [min(max(point[0], bounds.minX), bounds.maxX - 1),
+                    min(max(point[1], bounds.minY), bounds.maxY - 1)]
+        }
+        focus = focus.map(clamp)
+        scene.distanceFocus = scene.distanceFocus.map(clamp)
+        for index in stops.indices { stops[index].focus = stops[index].focus.map(clamp) }
+        for index in labels.indices {
+            let point = clamp([labels[index].x, labels[index].y])
+            labels[index].x = point[0]; labels[index].y = point[1]
+        }
+    }
+
     /// The credit and logo as the native core takes them: the plain text
     /// while that is all there is, else text, logo, corner, size and opacity.
     var watermark: ParallaxWatermark {
@@ -256,7 +356,7 @@ struct ParallaxComposition: Equatable {
     var loopClosingDuration: Double {
         guard motion == .tour, tourLoop, stops.count >= 2,
             let first = stops.first, let last = stops.last else { return 0 }
-        if last.focus == first.focus && last.dolly == first.dolly && last.zoom == first.zoom && last.pan == first.pan { return 0 }
+        if last.focus == first.focus && (last.pullBackToWholeImage ?? false) == (first.pullBackToWholeImage ?? false) && last.dolly == first.dolly && last.zoom == first.zoom && last.pan == first.pan { return 0 }
         let travel = stops.dropFirst().reduce(0) { $0 + $1.travel } / Double(stops.count - 1)
         return travel + max(first.hold * 3, 3)
     }
@@ -269,9 +369,11 @@ struct ParallaxComposition: Equatable {
     /// distance reference. Imported and catalogue plans supply a new reference.
     /// Every path preserves explicit stop depths, including externally authored ones.
     mutating func applyTour(_ plan: ParallaxTourPlan, onScene: Bool) {
+        if !onScene { setCrop(plan.crop) }
         motion = .tour
         stops = plan.tour
-        if !onScene { scene.distanceFocus = plan.focus; distanceName = plan.focusName }
+        for index in stops.indices { stops[index].focus = stops[index].focus.map(sourcePoint) }
+        if !onScene { scene.distanceFocus = sourcePoint(plan.focus); distanceName = plan.focusName }
         if let glide = plan.tourGlide { tourGlide = glide }
         if let titles = plan.tourTitles { tourTitles = titles }
         if let loop = plan.tourLoop { tourLoop = loop }
@@ -286,6 +388,12 @@ struct ParallaxComposition: Equatable {
         stops[index].rotateDegrees = stops[index - 1].rotateDegrees + (clockwise ? -360 : 360)
     }
     var validationMessage: String? {
+        if let crop = scene.crop,
+           crop.x < 0 || crop.y < 0 || crop.width < 16 || crop.height < 16 ||
+           crop.x > sourceWidth - crop.width || crop.y > sourceHeight - crop.height {
+            return "Choose a crop at least 16 × 16 pixels inside the source image."
+        }
+        guard ["fill", "fit"].contains(framing) else { return "Choose Fill Frame or Show Whole Image." }
         guard width >= 16, height >= 16, width <= 3840, height <= 3840,
             width.isMultiple(of: 2), height.isMultiple(of: 2), [24, 30, 60].contains(fps)
         else { return "Choose even dimensions between 16 and 3840 pixels and 24, 30 or 60 fps." }
@@ -334,16 +442,24 @@ struct ParallaxComposition: Equatable {
     func videoSettings(preview: Bool) -> ParallaxVideoSettings {
         // Preserve exact output aspect ratio for standard presets; custom even
         // dimensions are rounded to an even preview size.
-        let scale = preview ? min(1, 960.0 / Double(max(width, height))) : 1
-        let w = max(16, Int(Double(width) * scale) / 2 * 2)
-        let h = max(16, Int(Double(height) * scale) / 2 * 2)
-        return ParallaxVideoSettings(focus: focus, start: start, dolly: dolly,
+        let output = outputSize
+        let scale = preview ? min(1, 960.0 / Double(max(output.width, output.height))) : 1
+        let w = max(16, Int((Double(output.width) * scale / 2).rounded()) * 2)
+        let h = max(16, Int((Double(output.height) * scale / 2).rounded()) * 2)
+        var videoStops = stops
+        for index in videoStops.indices { videoStops[index].focus = videoStops[index].focus.map(videoPoint) }
+        var videoLabels = labels
+        for index in videoLabels.indices {
+            let point = videoPoint([videoLabels[index].x, videoLabels[index].y])
+            videoLabels[index].x = point[0]; videoLabels[index].y = point[1]
+        }
+        return ParallaxVideoSettings(focus: focus.map(videoPoint), framing: framing, start: start, dolly: dolly,
             truck: truck, truckAngleDegrees: truckAngleDegrees, pan: pan, zoom: zoom, zoomEnd: zoomEnd,
             rotateDegrees: [rotationStart, rotation], easing: easing, quality: preview ? "standard" : quality,
-            growthLimit: growthLimit, fadeFrom: fadeFrom, tour: motion == .tour ? stops : [], tourGlide: tourGlide,
+            growthLimit: growthLimit, fadeFrom: fadeFrom, tour: motion == .tour ? videoStops : [], tourGlide: tourGlide,
             tourTitles: motion == .tour && tourTitles, tourLoop: motion == .tour && tourLoop,
             seconds: duration, fps: fps, size: "\(w)x\(h)", overlay: overlay, overlayDensity: overlayDensity,
-            labels: labels, labelColor: labelColor, watermark: watermark,
+            labels: videoLabels, labelColor: labelColor, watermark: watermark,
             introCard: introCard, outroCard: outroCard, cardSeconds: cardSeconds)
     }
 }
@@ -398,6 +514,7 @@ struct ParallaxStopFit: Decodable {
 }
 struct ParallaxFit: Decodable {
     let zoom: ParallaxFitValue
+    let motionZoom: ParallaxFitValue?
     let pan: ParallaxFitValue
     let lead: ParallaxFitValue
     let truck: ParallaxFitValue
@@ -409,6 +526,9 @@ struct ParallaxFit: Decodable {
     var adjustments: [String] {
         var notes = [("Zoom", zoom), ("Pan", pan), ("Sideways lead", lead), ("Sideways motion", truck)]
             .filter { $0.1.changed }.map { String(format: "%@: %.2f → %.2f", $0.0, $0.1.asked, $0.1.used) }
+        if let motionZoom, motionZoom.changed {
+            notes.append(String(format: "Transition zoom: %.2f → %.2f", motionZoom.asked, motionZoom.used))
+        }
         for (index, stop) in stops.enumerated() {
             if stop.zoom.changed { notes.append(String(format: "Stop %d zoom: %.2f → %.2f", index + 1, stop.zoom.asked, stop.zoom.used)) }
             if stop.pan.changed { notes.append(String(format: "Stop %d pan: %.2f → %.2f", index + 1, stop.pan.asked, stop.pan.used)) }
@@ -432,6 +552,7 @@ struct ParallaxSummary: Decodable {
     let backgroundFocus: [Double]
     let fit: ParallaxFit
     let wcs: WCSResult
+    let crop: ParallaxCrop?
     /// Whether a given map, rather than the star counts, made the dust, and
     /// how many stars its opaque places brought in front of the nebula.
     let dustGiven: Bool?
@@ -565,32 +686,71 @@ enum ParallaxCore {
         String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
     }
 
-    // Keep the composite as the first choice. A confirmed, aligned stars layer
-    // can recover a failed solve without changing the scene's source geometry.
+    // Keep the original file's astrometric headers. The full-size snapshot and
+    // confirmed, aligned stars layer preserve the same source geometry.
     static func resolvingWCS(_ request: ParallaxRequest, allowStarsFallback: Bool = true,
+                            originalURL: URL? = nil, sourceIsStarless: Bool = false, didSolve: ((SolveResult) -> Void)? = nil,
                             cancellation: ParallaxCancellation, events: (ParallaxEvent) -> Void,
-                            solve: (URL, URL?, Double, Double) throws -> WCSResult = { image, catalog, minimum, maximum in
-                                try SeizaCore.solve(url: image, catalogDirectory: catalog,
-                                    minimumScale: minimum, maximumScale: maximum).wcs
-                            }) throws -> ParallaxRequest {
+                            solve: ((URL, URL?, Double, Double) throws -> WCSResult)? = nil) throws -> ParallaxRequest {
         try cancellation.check()
         guard request.inputs.wcs == nil else { return request }
         let catalog = request.inputs.catalogDirectory.map { URL(fileURLWithPath: $0) }
         func attempt(_ path: String) throws -> WCSResult {
             try cancellation.check()
-            let wcs = try solve(URL(fileURLWithPath: path), catalog,
-                request.scene.minimumScaleArcsecPerPixel, request.scene.maximumScaleArcsecPerPixel)
+            let wcs: WCSResult
+            if let solve {
+                wcs = try solve(URL(fileURLWithPath: path), catalog,
+                    request.scene.minimumScaleArcsecPerPixel, request.scene.maximumScaleArcsecPerPixel)
+            } else {
+                let solution = try SeizaCore.solve(url: URL(fileURLWithPath: path), catalogDirectory: catalog,
+                    minimumScale: request.scene.minimumScaleArcsecPerPixel,
+                    maximumScale: request.scene.maximumScaleArcsecPerPixel,
+                    cancellation: cancellation.pointer)
+                try cancellation.check()
+                didSolve?(solution)
+                if let provenance = solution.provenanceDescription {
+                    events(ParallaxEvent(kind: solution.solvedFrom == "header-unchecked" ? "warning" : "note",
+                        message: provenance, fraction: nil))
+                }
+                wcs = solution.wcs
+            }
             try cancellation.check()
             return wcs
         }
         var resolved = request
+        if sourceIsStarless {
+            guard let stars = request.inputs.stars else {
+                throw SeizaCoreError.message("The opened image is starless. Choose an aligned Stars image in Source before solving.")
+            }
+            guard allowStarsFallback else {
+                throw SeizaCoreError.message("The opened image is starless. Enable Layers match source alignment and stretch in Source to solve using the selected stars image.")
+            }
+            events(ParallaxEvent(kind: "note", message: "The source is starless. Plate-solving the aligned stars layer…", fraction: nil))
+            resolved.inputs.wcs = try attempt(stars)
+            events(ParallaxEvent(kind: "note", message: "Sky coordinates recovered from the stars layer.", fraction: nil))
+            return resolved
+        }
+        if let originalURL, originalURL.path != request.inputs.image {
+            events(ParallaxEvent(kind: "note", message: "Plate-solving the original file using its headers…", fraction: nil))
+            do {
+                resolved.inputs.wcs = try attempt(originalURL.path)
+                return resolved
+            } catch {
+                try cancellation.check()
+                if error is CancellationError { throw error }
+                events(ParallaxEvent(kind: "warning", message: "Original file solve failed: \(error.localizedDescription). Retrying the source snapshot…", fraction: nil))
+            }
+        }
         events(ParallaxEvent(kind: "note", message: "Plate-solving the source image…", fraction: nil))
         do {
             resolved.inputs.wcs = try attempt(request.inputs.image)
         } catch {
             try cancellation.check()
             if error is CancellationError { throw error }
-            guard allowStarsFallback, let stars = request.inputs.stars, stars != request.inputs.image else { throw error }
+            guard let stars = request.inputs.stars, stars != request.inputs.image else { throw error }
+            guard allowStarsFallback else {
+                throw SeizaCoreError.message("Source image solve failed: \(error.localizedDescription). Enable Layers match source alignment and stretch in Source to solve using the selected stars image.")
+            }
             let sourceError = error.localizedDescription
             events(ParallaxEvent(kind: "warning",
                 message: "Source image solve failed: \(sourceError). Retrying with the aligned stars layer…", fraction: nil))
@@ -649,17 +809,28 @@ enum ParallaxCore {
         return result
     }
 
-    static func prepare(_ request: ParallaxRequest, cancellation: ParallaxCancellation,
+    static func prepare(_ request: ParallaxRequest, originalURL: URL? = nil, sourceIsStarless: Bool = false,
+                        didSolve: ((SolveResult) -> Void)? = nil, cancellation: ParallaxCancellation,
                         events: @escaping (ParallaxEvent) -> Void) throws -> ParallaxVideo {
         try cancellation.check()
         // Imported pairs have already been confirmed aligned by the workspace.
         // Automatic separation keeps the upstream solve/separation path.
-        let request = request.inputs.stars == nil ? request :
-            try resolvingWCS(request, cancellation: cancellation, events: events)
+        var resolved = request
+        if sourceIsStarless || originalURL != nil || request.inputs.stars != nil {
+            do {
+                resolved = try resolvingWCS(request, originalURL: originalURL, sourceIsStarless: sourceIsStarless, didSolve: didSolve,
+                    cancellation: cancellation, events: events)
+            } catch {
+                try cancellation.check()
+                guard !(error is CancellationError), !sourceIsStarless, request.inputs.stars == nil,
+                      request.inputs.rcAstroExecutable != nil else { throw error }
+                events(ParallaxEvent(kind: "warning", message: "Source solve failed; trying the automatically separated stars layer.", fraction: nil))
+            }
+        }
         let context = ParallaxEventContext(events)
         var failure: UnsafeMutablePointer<CChar>?
         let pointer = try withExtendedLifetime(context) {
-            try json(request).withCString {
+            try json(resolved).withCString {
                 seiza_parallax_prepare_json($0, cancellation.pointer, parallaxEventCallback,
                     Unmanaged.passUnretained(context).toOpaque(), &failure)
             }
@@ -762,7 +933,8 @@ final class ParallaxVideo: @unchecked Sendable {
 
     /// The dust as a `width` × `height` map over the whole image, row by row,
     /// 0 clear to 1 opaque: the dust in use, or the dust counted from the
-    /// stars even while a given map takes its place. Nil when there is none.
+    /// stars even while a given map takes its place. This spans the original
+    /// source, with clear pixels outside the crop. Nil when there is none.
     func dustMap(width: Int, height: Int, counted: Bool = false) throws -> [Float]? {
         guard width > 0, height > 0 else { throw SeizaCoreError.message("The dust map needs a width and height.") }
         var opacity = [Float](repeating: 0, count: width * height)
@@ -778,7 +950,8 @@ final class ParallaxVideo: @unchecked Sendable {
 
     /// Write the dust to `url`, white opaque, in the format its extension
     /// names: 16-bit PNG or TIFF, or 32-bit float FITS or XISF, the size of
-    /// the image. False when there is no such dust to write.
+    /// the original source, with clear pixels outside the crop. False when
+    /// there is no such dust to write.
     func writeDustMap(to url: URL, counted: Bool = false) throws -> Bool {
         var failure: UnsafeMutablePointer<CChar>?
         let request = try ParallaxCore.json(ParallaxDustMapWrite(path: url.path, counted: counted))

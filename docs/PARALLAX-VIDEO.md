@@ -24,6 +24,75 @@ Seiza for Mac **0.8.2** uses published core/C ABI **0.30.1**, parallax
 **0.7.0**, stacking **0.32.0**, and image I/O **0.5.0**. Its header matches the
 published C ABI; the versioned release descriptions above are historical.
 
+The current development build uses published core/C ABI **0.33.0**, downloader
+**0.9.0**, parallax **0.10.0**, stacking **0.36.0**, and image I/O **0.8.0**,
+from [Seiza 0.33.0](https://github.com/theatrus/seiza/releases/tag/v0.33.0).
+Cargo locks registry checksums; the complete C ABI header matches the published
+package, whose source commit is `9868b7878165cf01508cef9458c4c72e287654ad`.
+The temporary Git pins have been removed.
+
+This release includes [#283](https://github.com/theatrus/seiza/pull/283): tour
+fitting preserves valid opening and closing lenses, endpoint spins fit their
+complete holds, and pull-back room includes overall zoom. A two-stop turn can
+use smooth temporary magnification between fixed endpoints, reported as
+**Transition zoom** (`fit.motionZoom`).
+
+### Source-space dust maps
+
+The published release also includes [#277](https://github.com/theatrus/seiza/pull/277).
+Dust-map preparation, replacement, reads and exports use original source
+coordinates, even when only a crop is filmed. Coarse source-shaped maps are
+sampled directly over that crop. Exports default to the original source size;
+unfilmed pixels are clear, including where the imported map was painted.
+
+The Mac's old 0.32 crop/expand adapter, C declaration, Swift bridge and direct
+parallax dependency have been removed. Pass full-source maps directly to the
+native API and export its result directly. Crop-shaped maps with a different
+aspect from the source are rejected. This avoids double cropping and keeps
+painting aligned when a map is reloaded or used with another crop.
+
+Native regression coverage exercises non-origin square crops of a rectangular
+source, coarse asymmetric maps, identical prepare/replacement frames, all four
+export formats, source-sized reads and exports, clear unfilmed pixels,
+paint/export/reload alignment, rejection of crop-shaped maps, another crop,
+counted-dust reset and independence of the original video handle. Session tests
+cover the same source-space contract through the UI's import/export/reload path.
+
+## Framing and crop
+
+In **Output**, choose **Fill Frame** to fill the video by trimming image edges,
+or **Show Whole Image** to keep the entire photograph with black beside it when
+the shapes differ. This is a camera setting: changing it reuses the scene.
+Turn on **Match image shape** to give the video the shape of the photo or crop.
+Presets set the longer side; the shorter side rounds to an even number. A
+9213 × 6943 image at 4K becomes 3840 × 2894. The inspector shows the actual
+output dimensions. Previews remain capped at 960 pixels on their longer side.
+
+![Output framing and image-shaped dimensions](images/parallax-framing/output-framing.jpg)
+
+In **Source → Crop**, draw a rectangle or enter its source-pixel origin and
+size. **Lock crop to frame shape** constrains the rectangle to the selected
+frame aspect ratio. **Use Full Image** removes it. A crop needs at least
+16 pixels per side and stays inside the source. Changing it prepares a new
+scene; star layers, masks, and dust maps retain their full source dimensions.
+
+![Source crop rectangle and pixel controls](images/parallax-framing/source-crop.jpg)
+
+The editor keeps focus points, distance references, stops, and labels in
+original-image coordinates. Requests translate them to the cropped image;
+coordinate fields display those crop coordinates. Changing the crop recenters
+the default reference and brings out-of-crop points to its edge. Undo restores
+the previous crop and points. Saved tours include the crop and crop-relative
+coordinates, so importing them restores the original positions exactly once.
+Older tours without a crop use the full image. The summary's WCS remains the
+uncropped source solution, safe to use for another preparation.
+
+Dust-map reloads extract the selected crop from source-aligned maps. Exporting
+from a cropped scene restores the original image dimensions and offset; an
+existing painted map preserves its pixels outside the crop, while counted dust
+exports clear pixels outside the filmed area. PNG/TIFF retain 16-bit precision
+and FITS/XISF retain floating-point precision.
+
 ## Workspace
 
 **File → Parallax Video…** and the viewer's film button open an independent,
@@ -34,17 +103,59 @@ the video. WCS, including SIP coefficients, is reused with that exact geometry.
 Source, Camera, Labels, and Output inspectors surround the preview and transport.
 Tours have an ordered stop strip; selecting a stop seeks to its arrival. Stops
 can be added, duplicated, removed, moved earlier/later, and picked or entered in
-source coordinates. Edits and applying a generated tour support undo/redo.
+filmed-image coordinates. Edits and applying a generated tour support undo/redo.
 Switching to Fly In retains the tour draft.
+
+Adding, duplicating, moving or removing a stop seeks the selected stop's arrival,
+so the inspector and preview show the same destination. **Pull Back** resets its
+Dolly, Zoom, Pan and Push while retaining its point, name, depth and timing.
+Manual Dolly/Zoom edits and new custom points use `pullBackToWholeImage`:
+as the view widens its camera centre approaches the image centre; tighter views
+return toward the retained target. The mode is saved in tours and shared by
+preview and export. Existing imported tours retain point-centred framing until
+edited. A shifted camera follows the scene depth under its actual framing;
+the target's explicit depth is retained for when it is centred again.
+Zoom controls use sliders, multiplier readouts, tooltips and a **1×** reset.
+A new custom point starts with Dolly 0 and Zoom 1 rather than inferring a close
+target extent. Its Dolly slider covers 0–99% with a percent readout and 0% reset.
+A stop can widen below 1×, including 0.5×; overall/opening/end zoom retain the
+native minimum of 1×. Dolly moves through depth; Zoom changes lens magnification.
+Fill Frame can tighten an individual stop to hide edges, while Show Whole Image
+allows black space and preserves a wider stop. Fitting no longer magnifies the
+whole tour when one target needs more than 1.5× additional zoom. An already-valid
+unlooped opening/closing view stays unchanged; neighboring stops receive travel
+fitting. Regression checks compare opening-frame pixels before and after Pull Back.
+
+![Per-stop Dolly and Zoom sliders with a wider custom point](images/parallax-framing/tour-point-controls.jpg)
+
+BigQ's first target before and after Pull Back in the optimized test build:
+the selected NGC 7762 coordinates remain unchanged, Dolly returns from 35% to
+0%, and the view widens toward the image centre. Global zoom stays at 1×;
+this stop's fitted zoom changes from 2.86× to 1.22× to accommodate its roll.
+
+![BigQ target before Pull Back](images/parallax-framing/bigq-target-before-pullback.jpg)
+![BigQ target after Pull Back](images/parallax-framing/bigq-target-after-pullback.jpg)
 
 Generation returns a candidate, which can be applied or discarded. It needs
 matching WCS and object catalogues, but can run before separating stars or
 fetching their distances. Without WCS, the app solves first, respecting the
-configured scale bounds. The composite source is tried first. If its solve fails,
-an imported stars layer is retried only after the user confirms its alignment.
+configured scale bounds. The original file is tried first, preserving FITS and
+PixInsight XISF headers, then the full-size snapshot, then an imported stars
+layer when **Layers match source alignment and stretch** is enabled (the default).
+Selecting or replacing a layer preserves that choice. If it is turned off,
+preview explains that the pair cannot be prepared, and a failed solve explains
+how to enable the stars-layer fallback. Opening a starless source is supported:
+when the opened file is the selected starless layer, the aligned stars layer is
+solved directly for tour generation, preview and export. The starless original
+and snapshot are never tried. Missing or disabled aligned stars produce an
+immediate explanation instead of spending minutes in futile blind solves.
 Preview and export use the same fallback, and the activity log records the retry
-and outcome. Existing WCS is reused without solving again. Automatic separation
-has no imported stars file to retry and retains upstream's original-image solve.
+and outcome. Existing WCS is reused without solving again, including viewer
+solves made after opening the video window. A solve from Parallax is shared
+back to the viewer, and Cancel reaches the native solver. Automatic separation
+can still retry its generated stars layer when the original and snapshot fail.
+The inspector identifies header-checked, header-hinted, and blind solutions;
+an unconfirmed header solution carries an explicit warning.
 Generation options affect only the next candidate. Once a scene is prepared,
 generation plans on it instead (`seiza_parallax_plan_scene_tour_json`, from
 Seiza 0.30.1): each stop is framed at the depth of the plane the scene shows
@@ -52,11 +163,11 @@ its target on, as an automatic tour of that scene would be. Applying such a
 tour keeps the scene's distance reference, so the scene is not prepared again,
 and each stop keeps its explicit depth until Follow scene depth is selected.
 Imported and catalogue-generated tours also preserve explicit stop depths.
-Changing the scene or output dimensions discards a pending scene-generated
+Changing the scene, output dimensions, or framing discards a pending scene-generated
 candidate, so it cannot later apply framing for an obsolete scene.
 
 Tour JSON can be loaded and saved. It retains every stop field and the scene's
-independent distance reference; the app also saves optional `tourGlide`, `tourTitles`, and `tourLoop`. Older JSON remains readable. It is
+independent distance reference and crop; the app also saves optional `tourGlide`, `tourTitles`, and `tourLoop`. Older JSON remains readable. It is
 an itinerary, not a full project: it does not embed images, bookmarks, labels,
 scene overrides, or export preferences.
 
@@ -69,7 +180,7 @@ The current workspace includes [dust maps](#dust-maps), introduced in Seiza
 | Area | Controls / contract |
 | --- | --- |
 | Source | Imported stretched, aligned starless and unscreened stars PNG/TIFF, or an optional installed, licensed `rc-astro` executable for StarXTerminator. The integrator name is fixed to `seiza-mac`. |
-| Geometry | Source WCS, automatic solve, and minimum/maximum arcseconds per pixel. Imported layers must match dimensions and have no orientation transform; the user confirms matching stretch/alignment. |
+| Geometry | Original-file WCS and header-aware solve, minimum/maximum arcseconds per pixel, crop rectangle with optional frame-aspect lock, and crop-aware point editing. Imported layers remain full size and have no orientation transform; matching stretch/alignment defaults on and can be turned off. |
 | Distances | Separate source-point distance reference, manual background and unmatched-star parsecs, Gaia magnitude limit, opt-in online lookup, app-managed distance cache. |
 | Scene | Moving-star limit, remaining stars as background field or dropped, keep galaxies in background, dust and dust opacity, and a dust map (PNG, JPEG, TIFF, FITS or XISF) that replaces the counted dust. |
 | Depth planes | Automatic planes for nebulae and dust clouds; distance overrides for any catalogue object by name; custom mask images with names and distances, replacement, reload and removal. |
@@ -79,8 +190,8 @@ The current workspace includes [dust maps](#dust-maps), introduced in Seiza
 | Tour stops | Name, independent on-screen title, an optional card image shown in place of the title, focus, optional explicit depth in parsecs or Follow scene depth, dolly, zoom, pan, unwrapped roll, incoming travel seconds, hold seconds, held spin degrees, and push through the remaining depth. |
 | Tour motion | Overall zoom, glide through holds, fading stop titles, and seamless looping with an automatic return when needed. CW/CCW shortcuts distinguish travel turns from held spins. |
 | Labels | Depth-aware catalogue labels and density; custom text, source x/y/radius and color; optional editable credit, with a logo image in a chosen corner, its height and the opacity of both; opening and closing title cards and how long each shows. |
-| Output | 720p, 1080p, 1440p, 4K, orientation swap, custom even dimensions up to 3840 per side, 24/30/60 fps, Standard/High rendering, star growth limit and fade threshold. |
-| Fit feedback | Requested versus fitted zoom, pan, lead, sideways motion, and per-stop zoom/pan/dolly. `fit.inside` drives a persistent warning below the preview and in Camera when any frames still extend beyond the image. |
+| Output | Fill Frame / Show Whole Image, image-shaped 720p/1080p/1440p/4K, orientation swap, custom even dimensions up to 3840 per side, 24/30/60 fps, Standard/High rendering, star growth limit and fade threshold. |
+| Fit feedback | Requested versus fitted zoom, pan, lead, sideways motion, per-stop zoom/pan/dolly, and peak transition zoom. `fit.inside` drives a persistent warning below the preview and in Camera when any frames still extend beyond the image. |
 | Native encoding | Silent SDR MP4 through AVFoundation/VideoToolbox, H.264 or HEVC, bounded pixel-buffer pool, hardware acceleration allowed with native software fallback. |
 
 A stop's roll controls travel orientation; `spinDegrees` adds a turn around a held
@@ -512,7 +623,7 @@ and while planning labels. The Swift bridge maps a stopped preparation to
 has coarse sections: solving, distance requests, and standalone tour planning
 can delay completion. The app waits safely for native calls and discards
 cancelled results, but cannot interrupt every stage.
-Structured stage/error/provenance data and documented pixel/color/timing
+Structured stage/error data and documented pixel/color/timing
 contracts would improve release behavior. No new camera-reconfiguration API is
 needed for the current controls.
 
@@ -525,3 +636,20 @@ PRs #240 and #242 are merged and their changes ship in the published crates.
 For future updates, review the release and update dependencies, lockfile and header
 together. Map any new scene/video/stop fields to the inspectors and rerun the
 native and Rust checks, including renderer regressions and representative exports.
+
+The optional `ParallaxLocalFixtureTests` exercise the Dropbox/parallax sample
+files without adding large images or a local catalogue requirement to CI:
+
+```sh
+TEST_RUNNER_SEIZA_VALIDATE_DROPBOX=1 xcodebuild test \
+  -project Seiza.xcodeproj -scheme Seiza -configuration Debug \
+  -destination 'platform=macOS' -derivedDataPath DerivedData \
+  -only-testing:SeizaTests/ParallaxLocalFixtureTests CODE_SIGNING_ALLOWED=NO
+```
+
+These check the confirmed and unconfirmed header solutions, cancellation,
+sharing a Parallax solve back to the viewer, and square/portrait fill, fit,
+image-shaped and cropped frames against the supplied reference video dimensions.
+They write first/last PNG frames to the temporary `Seiza-Parallax-Validation`
+directory for visual comparison, plus cropped H.264 and HEVC MP4s from the real
+images. The offline catalogues must already be installed.

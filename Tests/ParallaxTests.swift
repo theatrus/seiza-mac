@@ -2,10 +2,487 @@ import AVFoundation
 import CoreGraphics
 import CoreVideo
 import Foundation
+import ImageIO
 import XCTest
 @testable import Seiza
 
 final class ParallaxTests: XCTestCase {
+    @MainActor
+    func testReplacingALayerDoesNotStartBlindSolvingAKnownStarlessSource() async throws {
+        let (files, request) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        let source = URL(fileURLWithPath: request.inputs.image)
+        let session = ParallaxSession(sourceURL: source, processing: .default, wcs: nil)
+        defer { session.close() }
+        try await waitUntil { !session.isBusy }
+        session.importLayer(source, starless: true)
+        try await waitUntil { !session.isBusy }
+        session.importLayer(URL(fileURLWithPath: request.inputs.starless!), starless: true)
+        try await waitUntil { !session.isBusy }
+        session.importLayer(URL(fileURLWithPath: request.inputs.stars!), starless: false)
+        try await waitUntil { !session.isBusy }
+        session.layersAligned = false
+        XCTAssertTrue(session.solvingDescription.contains("starless"))
+        session.generateTour()
+        XCTAssertFalse(session.isBusy, "Blocked starless input must never start a native blind solve")
+        XCTAssertTrue(session.error?.contains("starless") == true)
+    }
+
+    func testTourCanPullBackFromATargetToAWiderCustomPoint() throws {
+        let (files, original) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        var request = original
+        request.video.framing = "fit"; request.video.zoom = 1
+        request.video.tourGlide = 0.2; request.video.tourLoop = false
+        request.video.tour = [
+            ParallaxStop(name: "Whole", focus: nil, dolly: 0, travel: 0, hold: 0.1),
+            ParallaxStop(name: "Target", focus: [47.5, 31.5], dolly: 0.5, zoom: 2, travel: 0.25, hold: 0.1),
+            ParallaxStop(name: "Custom Point", focus: [47.5, 31.5], dolly: 0, zoom: 0.5, travel: 0.25, hold: 0.1)
+        ]
+        let video = try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in })
+        let stops = video.summary.fit.stops
+        XCTAssertEqual(stops.count, 3)
+        let wideDolly = try XCTUnwrap(stops[2].dolly).used
+        let targetDolly = try XCTUnwrap(stops[1].dolly).used
+        XCTAssertEqual(stops[2].zoom.used, 0.5, accuracy: 1e-6)
+        XCTAssertEqual(wideDolly, 0, accuracy: 1e-6)
+        XCTAssertLessThan(stops[2].zoom.used / (1 - wideDolly),
+            stops[1].zoom.used / (1 - targetDolly))
+        XCTAssertEqual(try video.frame(video.summary.frames - 1).width, video.summary.width)
+        let lastPixels = try video.frame(video.summary.frames - 1).dataProvider?.data as Data?
+        var refit = video
+        for _ in 0..<3 {
+            refit = try ParallaxCore.reconfigure(refit, settings: request.video,
+                cancellation: ParallaxCancellation(), events: { _ in })
+            XCTAssertEqual(refit.summary.fit.stops[2].zoom.used, 0.5, accuracy: 1e-6)
+            XCTAssertEqual(refit.summary.fit.zoom.used, video.summary.fit.zoom.used, accuracy: 1e-6)
+            XCTAssertEqual(try refit.frame(refit.summary.frames - 1).dataProvider?.data as Data?, lastPixels,
+                "Refitting the same draft must not progressively magnify the tour")
+        }
+    }
+
+    func testPullBackFromAnEdgeTargetWidensTheStopAndPreservesOpeningPixels() throws {
+        let (files, original) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        var request = original
+        request.video.framing = "fill"; request.video.zoom = 1
+        request.video.tourGlide = 0.2
+        request.video.tour = [ParallaxStop(travel: 0, hold: 0.2),
+            ParallaxStop(name: "Edge Target", focus: [83, 10], dolly: 0.35,
+                         rotateDegrees: 11, travel: 0.8, hold: 0.3),
+            ParallaxStop(travel: 0.8, hold: 0.2)]
+        let before = try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in })
+        let opening = try before.frame(0).dataProvider?.data as Data?
+        XCTAssertEqual(before.summary.fit.zoom.used, 1, accuracy: 1e-6)
+        XCTAssertEqual(before.summary.fit.stops[0].zoom.used, 1, accuracy: 1e-6)
+        let targetDolly = try XCTUnwrap(before.summary.fit.stops[1].dolly).used
+        let targetMagnification = before.summary.fit.stops[1].zoom.used / (1 - targetDolly)
+        request.video.tour[1].dolly = 0
+        request.video.tour[1].pullBackToWholeImage = true
+        let after = try ParallaxCore.reconfigure(before, settings: request.video,
+            cancellation: ParallaxCancellation(), events: { _ in })
+        XCTAssertEqual(after.summary.fit.zoom.used, 1, accuracy: 1e-6)
+        XCTAssertEqual(after.summary.fit.stops[0].zoom.used, 1, accuracy: 1e-6)
+        XCTAssertLessThan(after.summary.fit.stops[1].zoom.used, targetMagnification)
+        XCTAssertEqual(try after.frame(0).dataProvider?.data as Data?, opening,
+                       "Pulling back a target must not magnify or move the opening frame")
+        let saved = try JSONEncoder().encode(request.video.tour[1])
+        let restored = try JSONDecoder().decode(ParallaxStop.self, from: saved)
+        XCTAssertEqual(restored.pullBackToWholeImage, true)
+        XCTAssertEqual(restored.focus, [83, 10], "Saving the wide camera must retain the target")
+    }
+
+    func testTwoStopTurnFitsWithoutMagnifyingItsEndpoints() throws {
+        let (files, original) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        var request = original
+        request.video.framing = "fill"; request.video.zoom = 1
+        request.video.tourGlide = 0
+        request.video.tour = [ParallaxStop(travel: 0, hold: 0.2),
+            ParallaxStop(rotateDegrees: 180, travel: 0.8, hold: 0.2)]
+        let made = try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in })
+        XCTAssertTrue(made.summary.fit.inside)
+        XCTAssertEqual(made.summary.fit.zoom.used, 1)
+        XCTAssertTrue(made.summary.fit.stops.allSatisfy { $0.zoom.used == 1 })
+        XCTAssertGreaterThan(try XCTUnwrap(made.summary.fit.motionZoom).used, 1)
+        XCTAssertTrue(made.summary.fit.adjustments.contains { $0.hasPrefix("Transition zoom:") })
+        for (frame, stop) in [(0, request.video.tour[0]), (made.summary.frames - 1, request.video.tour[1])] {
+            var still = request.video
+            still.tour = [stop, stop]; still.tour[1].travel = 1
+            let fixed = try ParallaxCore.reconfigure(made, settings: still,
+                cancellation: ParallaxCancellation(), events: { _ in })
+            XCTAssertEqual(try made.frame(frame).dataProvider?.data as Data?,
+                           try fixed.frame(0).dataProvider?.data as Data?)
+        }
+    }
+
+    func testKnownStarlessSourceSolvesOnlyAlignedStarsAndNeverTheStarlessFiles() throws {
+        let (files, original) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        var request = original; request.inputs.wcs = nil
+        let expected = try XCTUnwrap(original.inputs.wcs)
+        var paths: [String] = []
+        let resolved = try ParallaxCore.resolvingWCS(request,
+            originalURL: URL(fileURLWithPath: request.inputs.starless!), sourceIsStarless: true,
+            cancellation: ParallaxCancellation(), events: { _ in }, solve: { url, _, _, _ in
+                paths.append(url.path); return expected
+            })
+        XCTAssertEqual(paths, [request.inputs.stars!])
+        XCTAssertEqual(resolved.inputs.wcs, expected)
+        for aligned in [false, true] {
+            var blocked = request
+            if aligned { blocked.inputs.stars = nil }
+            XCTAssertThrowsError(try ParallaxCore.resolvingWCS(blocked, allowStarsFallback: aligned,
+                sourceIsStarless: true, cancellation: ParallaxCancellation(), events: { _ in },
+                solve: { _, _, _, _ in XCTFail("Never solve a known starless source"); return expected })) {
+                XCTAssertTrue($0.localizedDescription.contains("starless"))
+            }
+        }
+        var automatic = request
+        automatic.inputs.stars = nil
+        automatic.inputs.rcAstroExecutable = files.directory.appendingPathComponent("must-not-run").path
+        XCTAssertThrowsError(try ParallaxCore.prepare(automatic, sourceIsStarless: true,
+            cancellation: ParallaxCancellation(), events: { _ in })) {
+            XCTAssertTrue($0.localizedDescription.contains("starless"), "Never retry known starless data through native automatic separation")
+        }
+    }
+
+    @MainActor
+    func testNewAndDuplicatedStopsSeekTheirOwnViewAndPullBackKeepsThePoint() async throws {
+        let (files, request) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        let session = ParallaxSession(sourceURL: URL(fileURLWithPath: request.inputs.image),
+            processing: .default, wcs: request.inputs.wcs)
+        defer { session.close() }
+        try await waitUntil { !session.isBusy }
+        session.edit {
+            $0.motion = .tour
+            $0.stops = [ParallaxStop(name: "Whole", focus: nil, dolly: 0, travel: 0, hold: 1),
+                ParallaxStop(name: "Target", focus: [40, 30], dolly: 0.8, zoom: 2, travel: 2, hold: 1)]
+        }
+        session.selectStop(session.composition.stops[1].id)
+        let targetTime = session.playhead
+        session.addStop()
+        XCTAssertEqual(session.selectedIndex, 2)
+        XCTAssertEqual(session.composition.stops[2].dolly, 0, "A custom point starts wide, without inferred target extents")
+        XCTAssertEqual(session.composition.stops[2].zoom, 1)
+        XCTAssertGreaterThan(session.playhead, targetTime, "The preview must leave the previous target")
+        XCTAssertEqual(session.playhead, session.composition.arrival(at: 2))
+        session.editStop { $0.focus = [35, 28]; $0.depthParsecs = 150; $0.dolly = 0.7; $0.zoom = 2; $0.push = 0.3 }
+        session.playhead = targetTime
+        session.pullBack()
+        let stop = try XCTUnwrap(session.composition.stops.last)
+        XCTAssertEqual(stop.focus, [35, 28]); XCTAssertEqual(stop.depthParsecs, 150)
+        XCTAssertEqual(stop.dolly, 0); XCTAssertEqual(stop.zoom, 1); XCTAssertEqual(stop.push, 0)
+        XCTAssertEqual(stop.pullBackToWholeImage, true)
+        XCTAssertEqual(session.playhead, session.composition.arrival(at: 2))
+        session.undo()
+        XCTAssertEqual(session.composition.stops[2].dolly, 0.7)
+        session.duplicateStop()
+        XCTAssertEqual(session.selectedIndex, 3)
+        XCTAssertEqual(session.playhead, session.composition.arrival(at: 3))
+        session.moveStop(-1)
+        XCTAssertEqual(session.selectedIndex, 2)
+        XCTAssertEqual(session.playhead, session.composition.arrival(at: 2))
+        session.removeStop()
+        XCTAssertEqual(session.playhead, session.composition.arrival(at: try XCTUnwrap(session.selectedIndex)))
+    }
+
+    @MainActor
+    func testAlignedLayersDefaultOnEnablePreviewAndPreserveExplicitOptOut() async throws {
+        let (files, request) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        let session = ParallaxSession(sourceURL: URL(fileURLWithPath: request.inputs.image),
+            processing: .default, wcs: request.inputs.wcs)
+        defer { session.close() }
+        try await waitUntil { !session.isBusy }
+        XCTAssertTrue(session.layersAligned)
+        XCTAssertFalse(session.canPrepare)
+        XCTAssertTrue(session.preparationIssue?.contains("Choose both") == true)
+        session.importLayer(URL(fileURLWithPath: request.inputs.starless!), starless: true)
+        try await waitUntil { !session.isBusy }
+        session.importLayer(URL(fileURLWithPath: request.inputs.stars!), starless: false)
+        try await waitUntil { !session.isBusy }
+        XCTAssertTrue(session.canPrepare, session.preparationIssue ?? "Pair should be ready")
+        session.edit { $0.width = 80; $0.height = 60; $0.seconds = 0.5; $0.scene.distanceParsecs = 400 }
+        session.preparePreview()
+        try await waitUntil { !session.isBusy }
+        XCTAssertTrue(session.hasPreview, session.error ?? "The default pair did not prepare")
+        session.layersAligned = false
+        XCTAssertFalse(session.canPrepare)
+        XCTAssertTrue(session.preparationIssue?.contains("Enable Layers match") == true)
+        session.importLayer(URL(fileURLWithPath: request.inputs.stars!), starless: false)
+        try await waitUntil { !session.isBusy }
+        XCTAssertFalse(session.layersAligned, "Replacing a layer must preserve an explicit opt-out")
+        session.layersAligned = true
+        XCTAssertTrue(session.canPrepare)
+    }
+
+    func testImageShapeUsesTheCropAndKeepsPreviewSmall() throws {
+        for (width, height, long, expectedWidth, expectedHeight) in [
+            (4123, 4123, 1920, 1920, 1920), (4152, 6237, 1920, 1278, 1920),
+            (9213, 6943, 3840, 3840, 2894)
+        ] {
+            var composition = ParallaxComposition()
+            composition.sourceWidth = width; composition.sourceHeight = height
+            composition.width = long; composition.matchImageShape = true
+            XCTAssertEqual(composition.outputSize.width, expectedWidth)
+            XCTAssertEqual(composition.outputSize.height, expectedHeight)
+            let dimensions = composition.videoSettings(preview: true).size.split(separator: "x").compactMap { Int($0) }
+            XCTAssertEqual(dimensions.count, 2)
+            XCTAssertLessThanOrEqual(dimensions.max()!, 960)
+            XCTAssertTrue(dimensions.allSatisfy { $0.isMultiple(of: 2) })
+        }
+        var cropped = ParallaxComposition()
+        cropped.sourceWidth = 4123; cropped.sourceHeight = 4123; cropped.matchImageShape = true
+        cropped.setCrop(ParallaxCrop(x: 1431, y: 1165, width: 2400, height: 1350))
+        XCTAssertEqual(cropped.videoSettings(preview: false).size, "1920x1080")
+        XCTAssertEqual(cropped.videoSettings(preview: true).size, "960x540")
+        XCTAssertNil(cropped.validationMessage)
+        cropped.scene.crop?.x = 4000
+        XCTAssertNotNil(cropped.validationMessage)
+    }
+
+    func testCropCoordinatesRoundTripWithoutMovingSourcePointsTwice() throws {
+        var composition = ParallaxComposition()
+        composition.sourceWidth = 100; composition.sourceHeight = 80
+        composition.setCrop(ParallaxCrop(x: 10, y: 20, width: 60, height: 40))
+        XCTAssertEqual(composition.scene.distanceFocus, [39.5, 39.5])
+        composition.focus = [30, 45]; composition.scene.distanceFocus = [25, 35]
+        composition.labels = [ParallaxLabel(x: 50, y: 50)]
+        composition.motion = .tour; composition.stops[1].focus = [30, 45]
+        let video = composition.videoSettings(preview: false)
+        XCTAssertEqual(video.focus, [20, 25]); XCTAssertEqual(video.tour[1].focus, [20, 25])
+        XCTAssertEqual(video.labels[0].x, 40); XCTAssertEqual(video.labels[0].y, 30)
+        XCTAssertEqual(composition.sceneSettings().distanceFocus, [15, 15])
+        let plan = ParallaxTourPlan(focus: [15, 15], focusName: "Reference", seconds: composition.duration,
+            tour: video.tour, crop: composition.scene.crop)
+        let saved = try JSONDecoder().decode(ParallaxTourPlan.self, from: JSONEncoder().encode(plan))
+        for _ in 0..<2 {
+            composition.applyTour(saved, onScene: false)
+            XCTAssertEqual(composition.stops[1].focus, [30, 45])
+            XCTAssertEqual(composition.scene.distanceFocus, [25, 35])
+        }
+        let scene = try JSONSerialization.jsonObject(with: JSONEncoder().encode(composition.sceneSettings())) as! [String: Any]
+        XCTAssertEqual(scene["crop"] as? [Int], [10, 20, 60, 40])
+        var legacy = saved; legacy.crop = nil
+        composition.applyTour(legacy, onScene: false)
+        XCTAssertNil(composition.scene.crop)
+        XCTAssertEqual(composition.stops[1].focus, [20, 25])
+    }
+
+    func testDrawingCropClipsToSourceAndCanLockFrameShape() {
+        let selected = ParallaxCrop.selecting(from: CGPoint(x: -10, y: -10), to: CGPoint(x: 90, y: 70),
+            width: 100, height: 80, aspect: 16.0 / 9)
+        XCTAssertEqual(selected?.x, 0); XCTAssertEqual(selected?.y, 0)
+        XCTAssertEqual(selected?.width, 90); XCTAssertEqual(selected?.height, 50)
+        XCTAssertNil(ParallaxCrop.selecting(from: .zero, to: CGPoint(x: 8, y: 8), width: 100, height: 80, aspect: nil))
+    }
+
+    func testOriginalHeadersAreTriedBeforeSnapshotAndAlignedStars() throws {
+        let (files, original) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        var request = original; request.inputs.wcs = nil
+        let originalURL = files.directory.appendingPathComponent("master.xisf")
+        for failures in 0...2 {
+            var paths: [String] = []
+            let resolved = try ParallaxCore.resolvingWCS(request, originalURL: originalURL,
+                cancellation: ParallaxCancellation(), events: { _ in }) { url, _, _, _ in
+                paths.append(url.path)
+                if paths.count <= failures { throw SeizaCoreError.message("no match") }
+                return original.inputs.wcs!
+            }
+            XCTAssertEqual(paths, Array([originalURL.path, request.inputs.image, request.inputs.stars!].prefix(failures + 1)))
+            XCTAssertEqual(resolved.inputs.wcs, original.inputs.wcs)
+            XCTAssertEqual(resolved.inputs.image, request.inputs.image)
+        }
+    }
+
+
+    func testSolveProvenanceAndPixelOriginDecodeFromNewAndOldCores() throws {
+        let json = #"{"centerRaDegrees":56.75,"centerDecDegrees":24.12,"scaleArcsecPerPixel":3.6,"matchedStars":10,"rmsArcsec":0.2,"detectedStars":12,"elapsedMilliseconds":20,"detectedStarPositions":[],"catalogStarPositions":[],"objectPositions":[],"wcs":{"crval":[56.75,24.12],"crpix":[48,32],"cd":[[-0.001,0],[0,0.001]],"pixelOrigin":0},"solvedFrom":"header-unchecked","falseMatchProbability":1}"#
+        let result = try JSONDecoder().decode(SolveResult.self, from: Data(json.utf8))
+        XCTAssertEqual(result.wcs.pixelOrigin, 0)
+        XCTAssertEqual(result.falseMatchProbability, 1)
+        XCTAssertEqual(result.provenanceDescription, "Using the file's own solution; no stars confirmed it.")
+        var legacy = try JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any]
+        legacy.removeValue(forKey: "solvedFrom"); legacy.removeValue(forKey: "falseMatchProbability")
+        var wcs = legacy["wcs"] as! [String: Any]; wcs.removeValue(forKey: "pixelOrigin"); legacy["wcs"] = wcs
+        let old = try JSONDecoder().decode(SolveResult.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertNil(old.solvedFrom); XCTAssertNil(old.falseMatchProbability); XCTAssertNil(old.wcs.pixelOrigin)
+    }
+
+    @MainActor
+    func testVideoUsesAViewerSolveMadeAfterTheWindowOpened() async throws {
+        let (files, request) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        let model = ImageDocumentModel(url: URL(fileURLWithPath: request.inputs.image))
+        let session = ParallaxSession(model: model)
+        defer { session.close() }
+        try await waitUntil { !session.isBusy }
+        XCTAssertFalse(session.hasWCS)
+        let object: [String: Any] = ["centerRaDegrees":56.75,"centerDecDegrees":24.12,"scaleArcsecPerPixel":3.6,
+            "matchedStars":10,"rmsArcsec":0.2,"detectedStars":12,"elapsedMilliseconds":20,
+            "detectedStarPositions":[],"catalogStarPositions":[],"objectPositions":[],
+            "wcs":try JSONSerialization.jsonObject(with: JSONEncoder().encode(request.inputs.wcs))]
+        let solution = try JSONDecoder().decode(SolveResult.self, from: JSONSerialization.data(withJSONObject: object))
+        model.adoptParallaxSolution(solution)
+        XCTAssertTrue(session.hasWCS)
+        session.importLayer(URL(fileURLWithPath: request.inputs.starless!), starless: true)
+        try await waitUntil { !session.isBusy }
+        session.importLayer(URL(fileURLWithPath: request.inputs.stars!), starless: false)
+        try await waitUntil { !session.isBusy }
+        session.layersAligned = true
+        session.edit { $0.width = 80; $0.height = 60; $0.seconds = 0.5; $0.scene.distanceParsecs = 400 }
+        session.preparePreview()
+        try await waitUntil { !session.isBusy }
+        XCTAssertTrue(session.hasScene, session.error ?? "The late viewer solve was not reused")
+        XCTAssertEqual(session.summary?.wcs.crpix, solution.wcs.crpix)
+    }
+
+    func testNativeCropKeepsTheUncroppedWCSAndFitReconfigures() throws {
+        let (files, original) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        var request = original
+        request.scene.crop = ParallaxCrop(x: 10, y: 12, width: 64, height: 40)
+        request.video.tour = []; request.video.focus = nil; request.video.seconds = 0.5
+        request.video.framing = "fit"; request.video.size = "80x44"
+        let video = try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in })
+        XCTAssertEqual(video.summary.crop, request.scene.crop)
+        XCTAssertEqual(video.summary.wcs.crpix, original.inputs.wcs?.crpix)
+        XCTAssertTrue(video.summary.fit.inside)
+        XCTAssertEqual(try video.frame(0).width, 80)
+        var settings = request.video; settings.framing = "fill"
+        let refit = try ParallaxCore.reconfigure(video, settings: settings, cancellation: ParallaxCancellation(), events: { _ in })
+        XCTAssertEqual(refit.summary.crop, request.scene.crop)
+        XCTAssertEqual(refit.summary.wcs.crpix, original.inputs.wcs?.crpix)
+        var next = request; next.inputs.wcs = refit.summary.wcs
+        let repeated = try ParallaxCore.prepare(next, cancellation: ParallaxCancellation(), events: { _ in })
+        XCTAssertEqual(repeated.summary.wcs.crpix, original.inputs.wcs?.crpix)
+    }
+
+    func testCroppedDustUsesSourceCoordinatesAcrossPreparePaintExportAndReset() throws {
+        let (files, original) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        var request = original
+        let crop = ParallaxCrop(x: 16, y: 8, width: 48, height: 48)
+        request.scene.crop = crop; request.video.focus = nil; request.video.tour = []
+        request.video.seconds = 0.5
+        let plain = try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in })
+        let originalPixels = try XCTUnwrap(plain.frame(1).dataProvider?.data as Data?)
+        let painted = files.directory.appendingPathComponent("coarse-source-dust.png")
+        var rgba = Data()
+        for y in 0..<8 {
+            for x in 0..<12 {
+                let opacity: UInt8 = x < 6 ? 0 : (y < 4 ? 255 : 128)
+                rgba.append(contentsOf: [opacity, opacity, opacity, 255])
+            }
+        }
+        try ImageFileWriter.write(XCTUnwrap(SeizaCore.makeRGBA8Image(data: rgba, width: 12, height: 8)), to: painted, format: .png)
+        request.inputs.dustMap = painted.path
+        let prepared = try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in })
+        let swapped = try ParallaxCore.withDustMap(plain, path: painted.path, cancellation: ParallaxCancellation(), events: { _ in })
+        XCTAssertEqual(try prepared.frame(1).dataProvider?.data as Data?,
+                       try swapped.frame(1).dataProvider?.data as Data?, "Prepare and replacement must sample the same source grid")
+        let map = try XCTUnwrap(swapped.dustMap(width: 96, height: 64))
+        XCTAssertEqual(map[20 * 96 + 24], 0, accuracy: 1e-4)
+        XCTAssertGreaterThan(map[20 * 96 + 60], 0.99)
+        XCTAssertEqual(map[48 * 96 + 60], Float(128.0 / 255.0), accuracy: 0.01)
+        for y in 0..<64 {
+            for x in 0..<96 where x < crop.x || x >= crop.x + crop.width || y < crop.y || y >= crop.y + crop.height {
+                XCTAssertEqual(map[y * 96 + x], 0, "Unfilmed pixels must stay clear")
+            }
+        }
+        // Every offered output format preserves source size and painted alignment.
+        for ext in ["png", "tiff", "fits", "xisf"] {
+            let exported = files.directory.appendingPathComponent("source-dust.\(ext)")
+            XCTAssertTrue(try swapped.writeDustMap(to: exported))
+            let image = try SeizaCore.render(url: exported).metadata
+            XCTAssertEqual(image.width, 96); XCTAssertEqual(image.height, 64)
+            let reloaded = try ParallaxCore.withDustMap(plain, path: exported.path, cancellation: ParallaxCancellation(), events: { _ in })
+            let again = try XCTUnwrap(reloaded.dustMap(width: 96, height: 64))
+            XCTAssertEqual(again[20 * 96 + 24], 0, accuracy: 1e-4)
+            XCTAssertGreaterThan(again[20 * 96 + 60], 0.99)
+            XCTAssertEqual(again[0], 0)
+            var anotherCrop = original
+            anotherCrop.video = request.video
+            anotherCrop.scene.crop = ParallaxCrop(x: 48, y: 16, width: 32, height: 32)
+            anotherCrop.inputs.dustMap = exported.path
+            let reused = try ParallaxCore.prepare(anotherCrop, cancellation: ParallaxCancellation(), events: { _ in })
+            let other = try XCTUnwrap(reused.dustMap(width: 96, height: 64))
+            XCTAssertGreaterThan(other[20 * 96 + 60], 0.99)
+            XCTAssertEqual(other[20 * 96 + 24], 0)
+        }
+        let square = files.directory.appendingPathComponent("crop-shaped.png")
+        try ImageFileWriter.write(XCTUnwrap(SeizaCore.makeRGBA8Image(data: Data(repeating: 255, count: 24 * 24 * 4), width: 24, height: 24)), to: square, format: .png)
+        XCTAssertThrowsError(try ParallaxCore.withDustMap(plain, path: square.path, cancellation: ParallaxCancellation(), events: { _ in }))
+        let reset = try ParallaxCore.withDustMap(swapped, path: nil, cancellation: ParallaxCancellation(), events: { _ in })
+        XCTAssertNil(try reset.dustMap(width: 96, height: 64))
+        XCTAssertEqual(try reset.frame(1).dataProvider?.data as Data?, originalPixels)
+        XCTAssertEqual(try plain.frame(1).dataProvider?.data as Data?, originalPixels)
+        XCTAssertEqual(try swapped.dustMap(width: 96, height: 64), map)
+    }
+
+    @MainActor
+    func testCroppedDustMapsExportAtSourceSizeAndReloadWithAlignment() async throws {
+        let (files, request) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        let session = ParallaxSession(sourceURL: URL(fileURLWithPath: request.inputs.image), processing: .default, wcs: request.inputs.wcs)
+        defer { session.close() }
+        try await waitUntil { !session.isBusy }
+        session.importLayer(URL(fileURLWithPath: request.inputs.starless!), starless: true)
+        try await waitUntil { !session.isBusy }
+        session.importLayer(URL(fileURLWithPath: request.inputs.stars!), starless: false)
+        try await waitUntil { !session.isBusy }
+        session.layersAligned = true
+        session.edit {
+            $0.width = 80; $0.height = 60; $0.seconds = 0.5; $0.scene.distanceParsecs = 400
+            $0.setCrop(ParallaxCrop(x: 10, y: 12, width: 64, height: 40))
+        }
+        session.preparePreview()
+        try await waitUntil { !session.isBusy }
+        XCTAssertTrue(session.hasScene, session.error ?? "Cropped scene failed")
+        let painted = files.directory.appendingPathComponent("session-source-dust.png")
+        var rgba = Data()
+        for _ in 0..<8 {
+            for x in 0..<12 {
+                let opacity: UInt8 = x < 6 ? 0 : 255
+                rgba.append(contentsOf: [opacity, opacity, opacity, 255])
+            }
+        }
+        try ImageFileWriter.write(XCTUnwrap(SeizaCore.makeRGBA8Image(data: rgba, width: 12, height: 8)), to: painted, format: .png)
+        session.chooseDustMap(ParallaxScopedURL(painted))
+        try await waitUntil { !session.isBusy }
+        XCTAssertNil(session.error)
+        XCTAssertEqual(session.summary?.dustGiven, true)
+        let output = files.directory.appendingPathComponent("source-sized-dust.png")
+        session.exportDustMap(to: output)
+        try await waitUntil { !session.isBusy }
+        XCTAssertNil(session.error)
+        let source = try XCTUnwrap(CGImageSourceCreateWithURL(output as CFURL, nil))
+        let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        XCTAssertEqual(image.width, 96); XCTAssertEqual(image.height, 64)
+        var readRequest = request
+        readRequest.inputs.dustMap = output.path
+        let read = try ParallaxCore.prepare(readRequest, cancellation: ParallaxCancellation(), events: { _ in })
+        let map = try XCTUnwrap(read.dustMap(width: 96, height: 64))
+        XCTAssertEqual(map[0], 0, "Export must clear prior paint outside the crop")
+        XCTAssertEqual(map[30 * 96 + 20], 0, accuracy: 1e-4)
+        XCTAssertGreaterThan(map[30 * 96 + 68], 0.99)
+        session.chooseDustMap(ParallaxScopedURL(output))
+        try await waitUntil { !session.isBusy }
+        XCTAssertNil(session.error)
+        session.reloadDustMap()
+        try await waitUntil { !session.isBusy }
+        XCTAssertNil(session.error)
+        session.edit { $0.setCrop(ParallaxCrop(x: 16, y: 8, width: 64, height: 48)) }
+        session.preparePreview()
+        try await waitUntil { !session.isBusy }
+        XCTAssertNil(session.error)
+        XCTAssertEqual(session.summary?.dustGiven, true)
+        XCTAssertEqual(session.summary?.crop, session.composition.scene.crop)
+    }
+
     func testCompositeSolveWinsAndExistingWCSIsReused() throws {
         let (files, original) = try fixture()
         defer { withExtendedLifetime(files) {} }
@@ -76,7 +553,12 @@ final class ParallaxTests: XCTestCase {
             XCTAssertThrowsError(try ParallaxCore.resolvingWCS(request, allowStarsFallback: scenario != "unaligned",
                 cancellation: ParallaxCancellation(), events: { _ in }, solve: { _, _, _, _ in
                     calls += 1; throw SeizaCoreError.message("no match")
-                })) { XCTAssertEqual($0.localizedDescription, "no match") }
+                })) {
+                    if scenario == "unaligned" {
+                        XCTAssertTrue($0.localizedDescription.contains("Enable Layers match source alignment and stretch"))
+                        XCTAssertTrue($0.localizedDescription.contains("no match"))
+                    } else { XCTAssertEqual($0.localizedDescription, "no match") }
+                }
             XCTAssertEqual(calls, 1, scenario)
         }
         var request = original
@@ -416,13 +898,13 @@ final class ParallaxTests: XCTestCase {
         let composition = ParallaxComposition()
         let data = try JSONEncoder().encode(composition.videoSettings(preview: false))
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        for key in ["start", "dolly", "truck", "truckAngleDegrees", "pan", "zoom", "zoomEnd", "rotateDegrees",
+        for key in ["start", "framing", "dolly", "truck", "truckAngleDegrees", "pan", "zoom", "zoomEnd", "rotateDegrees",
                     "easing", "quality", "growthLimit", "fadeFrom", "tour", "tourGlide", "tourTitles", "tourLoop", "seconds", "fps", "size",
                     "overlay", "overlayDensity", "labels", "labelColor", "watermark", "cardSeconds"] {
             XCTAssertNotNil(object[key], key)
         }
         XCTAssertNil(object["introCard"]); XCTAssertNil(object["outroCard"])
-        for key in ["image", "wcs", "distanceFocus", "distanceParsecs", "smallStars", "online", "catalogDirectory", "autoTour", "dustMap",
+        for key in ["image", "wcs", "crop", "distanceFocus", "distanceParsecs", "smallStars", "online", "catalogDirectory", "autoTour", "dustMap",
                     "autoPlanes", "distanceOverrides", "planes"] {
             XCTAssertNil(object[key], key)
         }
@@ -993,7 +1475,8 @@ final class ParallaxTests: XCTestCase {
     func testScenePlanSettingsEncodeTheFrameAndTourOptions() throws {
         let settings = ParallaxScenePlanSettings(size: "1920x1080", autoTour: ParallaxTourOptions(targets: 3, hold: 2, motion: 0.5))
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(ParallaxCore.json(settings).utf8)) as? [String: Any])
-        XCTAssertEqual(Set(object.keys), ["size", "autoTour"])
+        XCTAssertEqual(Set(object.keys), ["size", "framing", "autoTour"])
+        XCTAssertEqual(object["framing"] as? String, "fill")
         XCTAssertEqual(object["size"] as? String, "1920x1080")
         let tour = try XCTUnwrap(object["autoTour"] as? [String: Any])
         XCTAssertEqual(tour["targets"] as? Int, 3); XCTAssertEqual(tour["hold"] as? Double, 2)
@@ -1072,6 +1555,11 @@ final class ParallaxTests: XCTestCase {
         XCTAssertNotNil(session.candidate)
         session.redo()
         XCTAssertNil(session.candidate)
+        session.generateTour()
+        try await waitUntil { !session.isBusy }
+        XCTAssertNotNil(session.candidate)
+        session.edit { $0.framing = "fit" }
+        XCTAssertNil(session.candidate, "A different framing mode requires new planning")
         session.generateTour()
         try await waitUntil { !session.isBusy }
         XCTAssertNotNil(session.candidate)
@@ -1237,5 +1725,195 @@ final class ParallaxTests: XCTestCase {
             XCTFail("Expected render error")
         } catch { XCTAssertTrue(error.localizedDescription.contains("Synthetic render failure")) }
         XCTAssertEqual(try Data(contentsOf: url), original)
+    }
+}
+
+/// Optional integration checks for the user-supplied regression images. Enable
+/// with TEST_RUNNER_SEIZA_VALIDATE_DROPBOX=1 when running xcodebuild test.
+final class ParallaxLocalFixtureTests: XCTestCase {
+    @MainActor
+    func testBigQStarsGenerateATourForAStarlessSource() async throws {
+        let root = try fixtures().appendingPathComponent("sources/bigq")
+        let model = ImageDocumentModel(url: root.appendingPathComponent("bigq-sxt.tif"))
+        let session = ParallaxSession(model: model)
+        defer { session.close() }
+        session.automaticPreview = false
+        func waitForOperation() async throws {
+            let deadline = ContinuousClock.now + .seconds(300)
+            while session.isBusy || session.isReconfiguring, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(50)) }
+            XCTAssertFalse(session.isBusy, "BigQ operation timed out: \(session.status)")
+            XCTAssertFalse(session.isReconfiguring, "BigQ refit timed out: \(session.status)")
+            XCTAssertNil(session.error)
+        }
+        try await waitForOperation()
+        session.importLayer(root.appendingPathComponent("bigq-sxt.tif"), starless: true)
+        try await waitForOperation()
+        session.importLayer(root.appendingPathComponent("bigq-sxt-stars.tif"), starless: false)
+        try await waitForOperation()
+        XCTAssertTrue(session.layersAligned)
+        XCTAssertTrue(session.canPrepare, session.preparationIssue ?? "BigQ pair should be ready")
+        session.tourOptions.targets = 5
+        session.generateTour()
+        try await waitForOperation()
+        let plan = try XCTUnwrap(session.candidate, session.error ?? "BigQ tour did not generate")
+        XCTAssertFalse(plan.tour.isEmpty)
+        XCTAssertTrue(session.hasWCS)
+        XCTAssertTrue(session.preparationNotes.contains("Sky coordinates recovered from the stars layer."))
+        session.applyCandidate()
+        XCTAssertEqual(session.composition.motion, .tour)
+        let target = try XCTUnwrap(session.composition.stops.first { $0.focus != nil })
+        session.selectStop(target.id)
+        session.editStop { $0.dolly = 0.35 }
+        session.preparePreview()
+        try await waitForOperation()
+        XCTAssertTrue(session.hasPreview, session.error ?? "BigQ preview did not prepare")
+        XCTAssertEqual(session.summary?.width, 960)
+        let before = try XCTUnwrap(session.summary?.fit)
+        XCTAssertEqual(before.zoom.used, 1, accuracy: 1e-6)
+        XCTAssertEqual(before.stops[0].zoom.used, 1, accuracy: 1e-6)
+        let index = try XCTUnwrap(session.selectedIndex)
+        let targetDolly = try XCTUnwrap(before.stops[index].dolly).used
+        let magnification = before.stops[index].zoom.used / (1 - targetDolly)
+        session.pullBack()
+        session.preparePreview()
+        try await waitForOperation()
+        let after = try XCTUnwrap(session.summary?.fit)
+        XCTAssertEqual(after.zoom.used, before.zoom.used, accuracy: 1e-6)
+        XCTAssertEqual(after.stops[0].zoom.used, before.stops[0].zoom.used, accuracy: 1e-6)
+        XCTAssertLessThan(after.stops[index].zoom.used, magnification)
+        XCTAssertEqual(session.composition.stops[index].focus, target.focus)
+        XCTAssertEqual(session.composition.stops[index].dolly, 0)
+        XCTAssertEqual(session.composition.stops[index].pullBackToWholeImage, true)
+        print("BigQ starless source: \(plan.tour.count) generated stops, preview ready")
+    }
+
+    private func fixtures() throws -> URL {
+        guard ProcessInfo.processInfo.environment["SEIZA_VALIDATE_DROPBOX"] == "1" else {
+            throw XCTSkip("Set TEST_RUNNER_SEIZA_VALIDATE_DROPBOX=1 to validate the local Dropbox/parallax fixtures")
+        }
+        let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Dropbox/parallax")
+        guard FileManager.default.fileExists(atPath: root.path) else { throw XCTSkip("Local parallax fixtures are not installed") }
+        return root
+    }
+
+    func testNativeSolverReceivesTheCancellationSignal() throws {
+        let root = try fixtures()
+        let cancellation = ParallaxCancellation(); cancellation.cancel()
+        XCTAssertThrowsError(try SeizaCore.solve(url: root.appendingPathComponent("sources/tulip/tulip.jpg"),
+            catalogDirectory: nil, cancellation: cancellation.pointer)) {
+            XCTAssertTrue($0.localizedDescription.contains("cancelled"), $0.localizedDescription)
+        }
+    }
+
+    func testHeaderSolvedFilesAndUnconfirmedHeaderWarning() throws {
+        let root = try fixtures().appendingPathComponent("sources/solve")
+        for (name, expected) in [
+            ("m101-master-pixinsight-solved.xisf", "header-checked"),
+            ("m45-rgb-pixinsight-solved.xisf", "header-checked"),
+            ("m31-capture-software-wcs.fits", "header-checked"),
+            ("flat-with-m31-wcs.fits", "header-unchecked")
+        ] {
+            let result = try SeizaCore.solve(url: root.appendingPathComponent(name), catalogDirectory: nil)
+            XCTAssertEqual(result.solvedFrom, expected, name)
+            XCTAssertEqual(result.wcs.pixelOrigin, 0, name)
+            if expected == "header-unchecked" {
+                XCTAssertEqual(result.matchedStars, 0)
+                XCTAssertEqual(result.falseMatchProbability, 1)
+                XCTAssertTrue(result.provenanceDescription?.contains("no stars confirmed") == true)
+            } else {
+                XCTAssertGreaterThan(result.matchedStars, 0, name)
+                XCTAssertLessThan(try XCTUnwrap(result.falseMatchProbability), 1e-3, name)
+            }
+            print("Header fixture: \(name), \(result.solvedFrom ?? "unknown"), \(result.matchedStars) matches, \(result.elapsedMilliseconds) ms")
+        }
+    }
+
+    @MainActor
+    func testParallaxSolvesTheOriginalXISFAndPublishesItToTheViewer() async throws {
+        let root = try fixtures()
+        let model = ImageDocumentModel(url: root.appendingPathComponent("sources/solve/m101-master-pixinsight-solved.xisf"))
+        let session = ParallaxSession(model: model)
+        defer { session.close() }
+        session.automaticPreview = false
+        let deadline = ContinuousClock.now + .seconds(120)
+        while session.isBusy, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertTrue(session.sourceReady, session.error ?? "Snapshot did not load")
+        XCTAssertFalse(session.hasWCS)
+        session.tourOptions.targets = 1
+        session.generateTour()
+        while session.isBusy, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertFalse(session.isBusy, "Tour planning did not finish")
+        XCTAssertNil(session.error)
+        guard case .solved(let solution) = model.solveState else {
+            return XCTFail("Parallax did not publish the original file's solution to the viewer")
+        }
+        XCTAssertEqual(solution.solvedFrom, "header-checked")
+        XCTAssertEqual(solution.wcs.pixelOrigin, 0)
+        XCTAssertTrue(session.hasWCS)
+    }
+
+    func testRealImageFramingAtTheBeginningAndEnd() async throws {
+        let root = try fixtures()
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent("Seiza-Parallax-Validation", isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        for (name, width, height, crop, distance) in [
+            ("tulip", 4123, 4123, ParallaxCrop(x: 1431, y: 1165, width: 2400, height: 1350), 2700.0),
+            ("northamerica", 4152, 6237, ParallaxCrop(x: 0, y: 2000, width: 4152, height: 2336), 800.0)
+        ] {
+            let source = root.appendingPathComponent("sources/\(name)")
+            let solution = try SeizaCore.solve(url: source.appendingPathComponent("\(name).jpg"), catalogDirectory: nil)
+            var composition = ParallaxComposition()
+            composition.sourceWidth = width; composition.sourceHeight = height
+            composition.seconds = 0.5; composition.fps = 30; composition.dolly = 0.5
+            composition.scene.distanceParsecs = distance
+            let inputs = ParallaxInputs(image: source.appendingPathComponent("\(name).jpg").path,
+                starless: source.appendingPathComponent("\(name)-sxt.tif").path,
+                stars: source.appendingPathComponent("\(name)-sxt-stars.tif").path, wcs: solution.wcs)
+            let request = ParallaxRequest(inputs: inputs, scene: composition.sceneSettings(), video: composition.videoSettings(preview: true))
+            let initial = try ParallaxCore.prepare(request, cancellation: ParallaxCancellation(), events: { _ in })
+            for mode in ["fill", "fit", "image", "crop"] {
+                composition.framing = mode == "fit" ? "fit" : "fill"
+                composition.matchImageShape = mode == "image" || mode == "crop"
+                composition.setCrop(mode == "crop" ? crop : nil)
+                let video: ParallaxVideo
+                if mode == "crop" {
+                    video = try ParallaxCore.prepare(ParallaxRequest(inputs: inputs, scene: composition.sceneSettings(),
+                        video: composition.videoSettings(preview: true)), cancellation: ParallaxCancellation(), events: { _ in })
+                } else {
+                    video = try ParallaxCore.reconfigure(initial, settings: composition.videoSettings(preview: true),
+                        cancellation: ParallaxCancellation(), events: { _ in })
+                }
+                XCTAssertTrue(video.summary.fit.inside, "\(name) \(mode)")
+                XCTAssertEqual(video.summary.wcs.crpix, solution.wcs.crpix)
+                for index in [0, video.summary.frames - 1] {
+                    let image = try video.frame(index)
+                    try ImageFileWriter.write(image, to: output.appendingPathComponent("\(name)-\(mode)-\(index).png"), format: .png)
+                    XCTAssertLessThanOrEqual(max(image.width, image.height), 960)
+                }
+                if mode == "crop" {
+                    let movie = output.appendingPathComponent("\(name)-cropped.mp4")
+                    try await NativeVideoExporter.write(to: movie, width: video.summary.width,
+                        height: video.summary.height, fps: video.summary.fps, frames: video.summary.frames,
+                        codec: name == "tulip" ? .h264 : .hevc, cancellation: ParallaxCancellation(),
+                        render: { try video.render($0, into: $1) }, progress: { _, _ in })
+                    let encoded = AVAssetImageGenerator(asset: AVURLAsset(url: movie))
+                    encoded.appliesPreferredTrackTransform = true
+                    let (last, _) = try await encoded.image(at: CMTime(value: Int64(video.summary.frames - 1), timescale: Int32(video.summary.fps)))
+                    XCTAssertEqual(last.width, video.summary.width)
+                    XCTAssertEqual(last.height, video.summary.height)
+                }
+                let reference = root.appendingPathComponent("framing/\(name)-\(mode)-1080p.mp4")
+                let asset = AVURLAsset(url: reference)
+                let generator = AVAssetImageGenerator(asset: asset)
+                generator.appliesPreferredTrackTransform = true
+                let (frame, _) = try await generator.image(at: .zero)
+                let expected = composition.outputSize
+                XCTAssertEqual(frame.width, expected.width, "\(name) \(mode) reference width")
+                XCTAssertEqual(frame.height, expected.height, "\(name) \(mode) reference height")
+                try ImageFileWriter.write(frame, to: output.appendingPathComponent("\(name)-\(mode)-reference.png"), format: .png)
+                print("Framing fixture: \(name) \(mode), output \(expected.width)x\(expected.height), preview \(video.summary.width)x\(video.summary.height)")
+            }
+        }
+        print("Parallax visual verification frames: \(output.path)")
     }
 }

@@ -45,6 +45,9 @@ struct ParallaxWorkspace: View {
     @State private var showsActivity = false
     @State private var distanceObject = ""
     @State private var objectDistance = 1000.0
+    @State private var drawingCrop = false
+    @State private var lockCropToFrame = false
+    @State private var cropDrag: ParallaxCrop?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -57,7 +60,9 @@ struct ParallaxWorkspace: View {
                 Button(action: session.redo) { Image(systemName: "arrow.uturn.forward") }
                     .help("Redo video edit").disabled(!session.canRedo || session.isBusy)
                 Button(session.hasScene ? "Update Preview" : "Prepare Preview", action: session.preparePreview).disabled(!session.canPrepare)
+                    .help(session.preparationIssue ?? "Prepare the selected images and camera for preview")
                 Button("Export Video…", action: session.exportVideo).disabled(!session.canPrepare)
+                    .help(session.preparationIssue ?? "Export the video at the selected output resolution")
                     .buttonStyle(.borderedProminent)
             }.padding(12)
             Divider()
@@ -122,6 +127,16 @@ struct ParallaxWorkspace: View {
                             description: Text("Choose the source and camera settings, then click Prepare Preview."))
                             .foregroundStyle(.white)
                     }
+                    if session.showsSource, let crop = cropDrag ?? session.composition.scene.crop {
+                        let rect = sourceRect(in: geometry.size)
+                        let scale = rect.width / Double(max(1, session.width))
+                        let cropRect = CGRect(x: rect.minX + Double(crop.x) * scale,
+                            y: rect.minY + Double(crop.y) * scale,
+                            width: Double(crop.width) * scale, height: Double(crop.height) * scale)
+                        Path { path in path.addRect(rect); path.addRect(cropRect) }
+                            .fill(.black.opacity(0.5), style: FillStyle(eoFill: true))
+                        Path { $0.addRect(cropRect) }.stroke(.yellow, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                    }
                     if session.showsSource, let point = pickedFocus {
                         let rect = sourceRect(in: geometry.size)
                         Image(systemName: "scope").font(.title).foregroundStyle(.orange)
@@ -130,8 +145,24 @@ struct ParallaxWorkspace: View {
                     }
                 }
                 .contentShape(Rectangle())
-                .gesture(DragGesture(minimumDistance: 0).onEnded { value in
+                .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+                    guard drawingCrop, session.showsSource, !session.isBusy else { return }
+                    let rect = sourceRect(in: geometry.size)
+                    guard rect.width > 0 else { return }
+                    let scale = Double(session.width) / rect.width
+                    let frame = session.composition.outputSize
+                    cropDrag = ParallaxCrop.selecting(
+                        from: CGPoint(x: (value.startLocation.x - rect.minX) * scale, y: (value.startLocation.y - rect.minY) * scale),
+                        to: CGPoint(x: (value.location.x - rect.minX) * scale, y: (value.location.y - rect.minY) * scale),
+                        width: session.width, height: session.height,
+                        aspect: lockCropToFrame ? Double(frame.width) / Double(max(1, frame.height)) : nil)
+                }.onEnded { value in
                     guard session.showsSource, !session.isBusy else { return }
+                    if drawingCrop {
+                        if let cropDrag { session.edit { $0.setCrop(cropDrag) }; drawingCrop = false }
+                        cropDrag = nil
+                        return
+                    }
                     let rect = sourceRect(in: geometry.size)
                     guard rect.contains(value.location), rect.width > 0 else { return }
                     session.pick(x: (value.location.x - rect.minX) / rect.width * Double(session.width),
@@ -215,12 +246,33 @@ struct ParallaxWorkspace: View {
 
     @ViewBuilder private var sourceInspector: some View {
         Section("Source snapshot") {
-            Text("\(session.width) × \(session.height) pixels")
-            Text(session.hasWCS ? "Sky coordinates available" : "The source will be plate solved when preparing or generating a tour. If it fails, an aligned stars layer is tried when available.")
+            Text("\(Int(session.composition.filmedBounds.width)) × \(Int(session.composition.filmedBounds.height)) pixels")
+            Text(session.solvingDescription)
                 .font(.caption).foregroundStyle(.secondary)
             Text("Uses the current image adjustments. Imported layers must use the same stretch and alignment.")
                 .font(.caption).foregroundStyle(.secondary)
         }
+        Section("Crop") {
+            HStack {
+                Button(drawingCrop ? "Cancel Crop" : "Draw Crop") {
+                    drawingCrop.toggle(); cropDrag = nil
+                    session.showsSource = true; session.pickingDistance = false; session.pickingDestination = false
+                }
+                Button("Use Full Image") { session.edit { $0.setCrop(nil) }; cropDrag = nil; drawingCrop = false }
+                    .disabled(session.composition.scene.crop == nil)
+            }
+            Toggle("Lock crop to frame shape", isOn: $lockCropToFrame)
+            HStack {
+                TextField("X", value: cropBinding(\.x), formatter: Self.cropNumberFormatter)
+                TextField("Y", value: cropBinding(\.y), formatter: Self.cropNumberFormatter)
+            }
+            HStack {
+                TextField("Width", value: cropBinding(\.width), formatter: Self.cropNumberFormatter)
+                TextField("Height", value: cropBinding(\.height), formatter: Self.cropNumberFormatter)
+            }
+            Text(drawingCrop ? "Drag a rectangle on the source image." : "Source pixels. Changing the crop requires a new scene preparation.")
+                .font(.caption).foregroundStyle(.secondary)
+        }.disabled(!session.sourceReady)
         Section("Star separation") {
             Toggle("Use StarXTerminator", isOn: $session.automaticSeparation)
             if session.automaticSeparation {
@@ -235,6 +287,11 @@ struct ParallaxWorkspace: View {
                 Text("PNG or TIFF, full size. Stars must be unscreened.").font(.caption).foregroundStyle(.secondary)
                 Toggle("Layers match source alignment and stretch", isOn: $session.layersAligned)
                     .disabled(session.starlessName == nil || session.starsName == nil)
+                    .help("Enabled by default. Turning this off prevents stars-layer solving and preview preparation for this pair.")
+                if !session.layersAligned {
+                    Text("Stars-layer solving and preview are disabled. Enable this for an aligned pair; a starless source will not be plate solved.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
             }
         }
         Section("Scene depth") {
@@ -366,7 +423,11 @@ struct ParallaxWorkspace: View {
             Text("Motion \(session.tourOptions.motion, specifier: "%.1f")× · 0 removes generated roll and pan")
                 .font(.caption).foregroundStyle(.secondary)
             Button(session.hasWCS ? "Generate Tour" : "Solve & Generate Tour", action: session.generateTour)
-                .disabled(!session.sourceReady || setup.isRunning)
+                .disabled(!session.sourceReady || setup.isRunning || session.tourSolveIssue != nil)
+                .help(session.tourSolveIssue ?? "Use the available solution, or solve the source and plan a tour")
+            if let issue = session.tourSolveIssue {
+                Text(issue).font(.caption).foregroundStyle(.orange)
+            }
             if session.hasScene {
                 Text("Plans on the prepared scene, including its depth planes and distance overrides. Applying the tour reuses that scene.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -387,15 +448,17 @@ struct ParallaxWorkspace: View {
                 TextField("Duration (s)", value: compositionBinding(\.seconds), format: .number)
                 Picker("Start", selection: compositionBinding(\.start)) { Text("Whole Image").tag("whole"); Text("At Focus").tag("focus") }
                 Button("Pick Destination") { session.pickingDistance = false; session.showsSource = true; session.pickingDestination = true }
-                Button("Use Image Center") { session.edit { $0.focus = [Double(session.width - 1) / 2, Double(session.height - 1) / 2]; $0.focusName = "Image center" } }
+                Button("Use Image Center") { session.edit { $0.focus = $0.imageCenter; $0.focusName = "Image center" } }
                 destinationCoordinates
                 Slider(value: compositionBinding(\.dolly), in: 0...0.95) { Text("Dolly") }
                 Slider(value: compositionBinding(\.pan), in: 0...1) { Text("Pan") }
                 TextField("Start roll (°)", value: compositionBinding(\.rotationStart), format: .number)
                 TextField("End roll (°)", value: compositionBinding(\.rotation), format: .number)
                 rollExplanation
-                TextField("Opening zoom", value: compositionBinding(\.zoom), format: .number)
-                TextField("End lens multiplier", value: compositionBinding(\.zoomEnd), format: .number)
+                zoomControl("Opening zoom", value: compositionBinding(\.zoom), minimum: 1,
+                    help: "Lens magnification at the opening. Dolly moves the camera through depth instead.")
+                zoomControl("End lens multiplier", value: compositionBinding(\.zoomEnd), minimum: 1,
+                    help: "Additional lens magnification at the end of the fly-in.")
                 TextField("Sideways swing", value: compositionBinding(\.truck), format: .number)
                 TextField("Swing direction (°)", value: compositionBinding(\.truckAngleDegrees), format: .number)
                 Picker("Easing", selection: compositionBinding(\.easing)) {
@@ -427,8 +490,28 @@ struct ParallaxWorkspace: View {
                 TextField("Travel to stop (s)", value: stopBinding(\.travel), format: .number).disabled(index == 0)
                 TextField("Hold (s)", value: stopBinding(\.hold), format: .number)
                 Text("Set hold to 0 to pass straight through. Glide, spin and push can keep a held stop moving.").font(.caption).foregroundStyle(.secondary)
-                Slider(value: stopBinding(\.dolly), in: 0...0.95) { Text("Dolly") }
-                TextField("Zoom", value: stopBinding(\.zoom), format: .number)
+                HStack {
+                    Text("Dolly")
+                    Slider(value: stopFramingBinding(\.dolly), in: 0...max(0.99, session.composition.stops[index].dolly), step: 0.01)
+                        .accessibilityLabel("Dolly camera travel")
+                        .help("Camera travel through depth: 0% pulls back toward whole-image framing; higher values move toward the selected target and create parallax. Zoom controls lens magnification separately.")
+                    Text("\(session.composition.stops[index].dolly * 100, specifier: "%.0f")%").monospacedDigit()
+                    Button("0%") { session.editStopFraming { $0.dolly = 0 } }.help("Reset camera travel toward whole-image framing")
+                }
+                zoomControl("Zoom", value: stopFramingBinding(\.zoom), minimum: 0.1,
+                    help: "Lens magnification: 0.5× gives a wider view, 1× is the base view, and 2× magnifies it. Dolly moves through depth instead. Overall zoom and camera fitting also apply.")
+                Button("Pull Back", action: session.pullBack)
+                    .help("Return toward whole-image framing at this stop while retaining the selected target or point.")
+                if session.composition.stops[index].pullBackToWholeImage == true {
+                    Text("Wide views move toward the image centre; tighter views return to the selected target.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Text("Dolly moves through scene depth; Zoom changes lens magnification. Fill Frame can tighten a wider view to hide image edges; Show Whole Image allows them.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if session.composition.framing == "fill", session.composition.stops[index].zoom < 1 {
+                    Button("Use Show Whole Image for wider views") { session.edit { $0.framing = "fit" } }
+                        .help("Changes Output framing for the entire video so wide stops can show image edges instead of being zoomed back in.")
+                }
                 Slider(value: stopBinding(\.pan), in: 0...1) { Text("Pan") }
                 TextField("Roll (°)", value: stopBinding(\.rotateDegrees), format: .number)
                 HStack {
@@ -458,8 +541,8 @@ struct ParallaxWorkspace: View {
         } else { Text("Select a stop below the image to edit its camera and timing.").foregroundStyle(.secondary) }
         if session.composition.motion == .tour {
             Section("Tour motion") {
-                TextField("Overall zoom", value: compositionBinding(\.zoom), format: .number)
-                    .help("Multiplies every stop's zoom, including the opening stop.")
+                zoomControl("Overall zoom", value: compositionBinding(\.zoom), minimum: 1,
+                    help: "Multiplies every stop's zoom, including the opening stop. Use a stop's Zoom to go below 1×; reset Overall zoom to 1× for no extra magnification.")
                 TextField("Glide through holds", value: compositionBinding(\.tourGlide), format: .number)
                 Text("A fraction of travel speed: 0 pauses, 0.2 glides gently. Spinning stops turn around their own destination.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -492,19 +575,32 @@ struct ParallaxWorkspace: View {
             .font(.caption).foregroundStyle(.secondary)
     }
 
+    private func zoomControl(_ title: String, value: Binding<Double>, minimum: Double, help: String) -> some View {
+        HStack {
+            Text(title)
+            Slider(value: value, in: min(minimum, value.wrappedValue)...max(8, value.wrappedValue), step: 0.05)
+                .accessibilityLabel(title + " lens magnification")
+                .help(help)
+            Text("\(value.wrappedValue, specifier: "%.2f")×").monospacedDigit()
+            Button("1×") { value.wrappedValue = 1 }.help("Reset \(title.lowercased()) to 1×")
+        }
+    }
+
     private var destinationCoordinates: some View {
         HStack {
             TextField("X", value: coordinateBinding(0), format: .number)
             TextField("Y", value: coordinateBinding(1), format: .number)
-        }.help("Destination in source pixels, measured from the top-left corner")
+        }.help("Destination in filmed-image pixels, measured from the crop's top-left corner")
     }
 
     private func coordinateBinding(_ axis: Int) -> Binding<Double> {
         Binding(get: {
-            pickedFocus?[axis] ?? Double((axis == 0 ? session.width : session.height) - 1) / 2
+            session.composition.videoPoint(pickedFocus ?? session.composition.imageCenter)[axis]
         }, set: { value in
-            var point = pickedFocus ?? [Double(session.width - 1) / 2, Double(session.height - 1) / 2]
+            var point = session.composition.videoPoint(pickedFocus ?? session.composition.imageCenter)
+            guard point[axis] != value else { return }
             point[axis] = value
+            point = session.composition.sourcePoint(point)
             if session.composition.motion == .tour {
                 session.editStop { $0.focus = point; $0.name = "Custom Point" }
             } else { session.edit { $0.focus = point; $0.focusName = "Custom Point" } }
@@ -513,15 +609,29 @@ struct ParallaxWorkspace: View {
 
     @ViewBuilder private var outputInspector: some View {
         Section("Video") {
+            Picker("Framing", selection: compositionBinding(\.framing)) {
+                Text("Fill Frame").tag("fill")
+                Text("Show Whole Image").tag("fit")
+            }
+            Text(session.composition.framing == "fit" ? "Shows the entire image, with black space when the frame has a different shape." : "Fills the frame by cropping image edges when the shapes differ.")
+                .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("720p") { session.edit { $0.width = 1280; $0.height = 720 } }
                 Button("1080p") { session.edit { $0.width = 1920; $0.height = 1080 } }
                 Button("1440p") { session.edit { $0.width = 2560; $0.height = 1440 } }
                 Button("4K") { session.edit { $0.width = 3840; $0.height = 2160 } }
             }
+            Toggle("Match image shape", isOn: compositionBinding(\.matchImageShape))
             Button("Swap Orientation") { session.edit { swap(&$0.width, &$0.height) } }
-            TextField("Width", value: compositionBinding(\.width), format: .number)
-            TextField("Height", value: compositionBinding(\.height), format: .number)
+                .disabled(session.composition.matchImageShape)
+            TextField("Width", value: Binding(get: { session.composition.outputSize.width },
+                set: { value in session.edit { $0.width = value } }), format: .number)
+                .disabled(session.composition.matchImageShape)
+            TextField("Height", value: Binding(get: { session.composition.outputSize.height },
+                set: { value in session.edit { $0.height = value } }), format: .number)
+                .disabled(session.composition.matchImageShape)
+            Text("Video: \(session.composition.outputSize.width) × \(session.composition.outputSize.height) pixels")
+                .font(.caption).monospacedDigit()
             Picker("Frames per second", selection: compositionBinding(\.fps)) {
                 ForEach([24, 30, 60], id: \.self) { Text(String($0)).tag($0) }
             }
@@ -546,6 +656,7 @@ struct ParallaxWorkspace: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(session.composition.validationMessage ??
+                    (!session.isBusy && !session.isReconfiguring ? session.preparationIssue : nil) ??
                     (session.isBusy && !session.activity.cancellationRequested ? session.activity.networkPhase : nil) ?? session.status)
                     .font(.caption).lineLimit(2)
                 if session.isBusy || session.isReconfiguring {
@@ -595,17 +706,17 @@ struct ParallaxWorkspace: View {
                 VStack(alignment: .leading) {
                     TextField("Text", text: labelBinding(label.id, \.text, fallback: ""))
                     HStack {
-                        TextField("X", value: labelBinding(label.id, \.x, fallback: 0), format: .number)
-                        TextField("Y", value: labelBinding(label.id, \.y, fallback: 0), format: .number)
+                        TextField("X", value: labelPositionBinding(label.id, axis: 0), format: .number)
+                        TextField("Y", value: labelPositionBinding(label.id, axis: 1), format: .number)
                     }
                     TextField("Radius (px)", value: labelBinding(label.id, \.radius, fallback: 0), format: .number)
                     Button("Remove Label") { session.edit { $0.labels.removeAll { $0.id == label.id } } }
                 }
             }
             Button("Add Label") {
-                session.edit { $0.labels.append(ParallaxLabel(x: Double(session.width - 1) / 2, y: Double(session.height - 1) / 2)) }
+                session.edit { $0.labels.append(ParallaxLabel(x: $0.imageCenter[0], y: $0.imageCenter[1])) }
             }
-            Text("Positions and radius use source pixels.").font(.caption).foregroundStyle(.secondary)
+            Text("Positions use filmed-image pixels from the crop's top-left corner; radius uses image pixels.").font(.caption).foregroundStyle(.secondary)
         }
         Section("Credit and logo") {
             Toggle("Show credit", isOn: compositionBinding(\.creditEnabled))
@@ -706,15 +817,66 @@ struct ParallaxWorkspace: View {
     }
 
     private func distanceCoordinate(_ axis: Int) -> Binding<Double> {
-        Binding(get: { session.composition.scene.distanceFocus?[axis] ?? 0 }, set: { value in
+        Binding(get: { session.composition.videoPoint(session.composition.scene.distanceFocus ?? session.composition.imageCenter)[axis] }, set: { value in
+            let current = session.composition.videoPoint(session.composition.scene.distanceFocus ?? session.composition.imageCenter)
+            guard current[axis] != value else { return }
             session.edit {
-                var point = $0.scene.distanceFocus ?? [Double(session.width - 1) / 2, Double(session.height - 1) / 2]
-                point[axis] = value; $0.scene.distanceFocus = point; $0.distanceName = "Custom point"
+                var point = $0.videoPoint($0.scene.distanceFocus ?? $0.imageCenter)
+                point[axis] = value; $0.scene.distanceFocus = $0.sourcePoint(point); $0.distanceName = "Custom point"
+            }
+        })
+    }
+
+    // Commit a complete number on submit/focus loss. Clamping each partial
+    // keystroke (for example the first "1" in "1350") rewrites the edit.
+    private static let cropNumberFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.allowsFloats = false
+        return formatter
+    }()
+
+    private func cropBinding(_ key: WritableKeyPath<ParallaxCrop, Int>) -> Binding<Int> {
+        Binding(get: {
+            (session.composition.scene.crop ?? ParallaxCrop(x: 0, y: 0, width: session.width, height: session.height))[keyPath: key]
+        }, set: { value in
+            var crop = session.composition.scene.crop ?? ParallaxCrop(x: 0, y: 0, width: session.width, height: session.height)
+            crop[keyPath: key] = value
+            crop.x = min(max(0, crop.x), max(0, session.width - 16))
+            crop.y = min(max(0, crop.y), max(0, session.height - 16))
+            crop.width = min(max(16, crop.width), session.width - crop.x)
+            crop.height = min(max(16, crop.height), session.height - crop.y)
+            if lockCropToFrame {
+                let frame = session.composition.outputSize
+                let aspect = Double(max(16, frame.width)) / Double(max(16, frame.height))
+                if let locked = ParallaxCrop.selecting(from: CGPoint(x: crop.x, y: crop.y),
+                    to: CGPoint(x: crop.x + crop.width, y: crop.y + crop.height), width: session.width, height: session.height, aspect: aspect) {
+                    crop = locked
+                }
+            }
+            session.edit { $0.setCrop(crop) }
+        })
+    }
+
+    private func labelPositionBinding(_ id: UUID, axis: Int) -> Binding<Double> {
+        Binding(get: {
+            guard let label = session.composition.labels.first(where: { $0.id == id }) else { return 0 }
+            return session.composition.videoPoint([label.x, label.y])[axis]
+        }, set: { value in
+            session.edit {
+                guard let index = $0.labels.firstIndex(where: { $0.id == id }) else { return }
+                var point = $0.videoPoint([$0.labels[index].x, $0.labels[index].y]); point[axis] = value
+                point = $0.sourcePoint(point)
+                $0.labels[index].x = point[0]; $0.labels[index].y = point[1]
             }
         })
     }
     private func stopBinding(_ key: WritableKeyPath<ParallaxStop, Double>) -> Binding<Double> {
         Binding(get: { session.selectedIndex.map { session.composition.stops[$0][keyPath: key] } ?? 0 },
                 set: { value in session.editStop { $0[keyPath: key] = value } })
+    }
+    private func stopFramingBinding(_ key: WritableKeyPath<ParallaxStop, Double>) -> Binding<Double> {
+        Binding(get: { session.selectedIndex.map { session.composition.stops[$0][keyPath: key] } ?? 0 },
+                set: { value in session.editStopFraming { $0[keyPath: key] = value } })
     }
 }

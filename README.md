@@ -57,6 +57,9 @@ distance, which is preserved when saving and loading tours.
 
 Export a silent MP4 in **H.264 or HEVC** with the Mac's native video encoder.
 Choose 720p through 4K presets, portrait or landscape, or custom dimensions.
+Use **Show Whole Image** to retain the complete photograph with black space
+beside it, or **Match image shape** for a square or tall video without cropping
+its edges. Draw a crop in Source when you want to film a particular region.
 Save and load tour itineraries as JSON to revisit the route later.
 
 In **Source → Stars and dust**, choose a dust map painted white where dust is
@@ -75,7 +78,7 @@ names and distances, with controls to replace, reload or remove each mask.
 
 1. **Open your finished image** and choose **File → Parallax Video…** or the
    film toolbar button. In **Source**, import matching, stretched starless and
-   unscreened stars PNG/TIFF layers and confirm their alignment. An installed,
+   unscreened stars PNG/TIFF layers. Matching alignment is enabled by default. An installed,
    licensed StarXTerminator CLI is also supported.
 2. **Give the scene depth.** Download solving catalogues and **Offline parallax**
    data in Settings. The Source inspector also offers the offline distance
@@ -94,7 +97,7 @@ names and distances, with controls to replace, reload or remove each mask.
 ![Seiza's Output inspector beside the Iris Nebula tour, with resolution presets, orientation, frame rate, codec, quality, and MP4 export controls](docs/images/seiza-parallax-output.jpg)
 
 Use **Save…** and **Load…** in the Tour Stops strip to exchange JSON itineraries.
-An itinerary saves the route and tour motion options; it does not include source
+An itinerary saves the route, crop, and tour motion options; it does not include source
 images, overall zoom, scene settings, labels, or export preferences. Full
 video-project recovery remains planned. See the
 [implementation scope and remaining work](docs/PARALLAX-VIDEO.md).
@@ -348,8 +351,8 @@ DerivedData/Build/Products/Debug/Seiza.app
 
 Open `Seiza.xcodeproj` to run and sign it with a local development team.
 
-The app uses published `seiza-cabi` 0.30.1, `seiza` 0.30.1,
-`seiza-parallax` 0.7.0, `seiza-stacking` 0.32.0 and `seiza-download` 0.8.0, with dust maps, depth planes and
+The app uses published `seiza-cabi` 0.33.0, `seiza` 0.33.0,
+`seiza-parallax` 0.10.0, `seiza-stacking` 0.36.0 and `seiza-download` 0.9.0, with dust maps, depth planes and
 image reading and writing through `seiza-image-io`. Library and bridge header
 must be updated together. About reports the linked release version and source
 commit.
