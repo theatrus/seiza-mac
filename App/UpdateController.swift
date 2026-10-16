@@ -8,9 +8,8 @@ import SwiftUI
 /// GitHub release, and updates.seiza.fyi mirrors it. Sparkle reads one feed per
 /// check, so the fallback is decided around each check rather than inside it.
 /// A check the user starts probes our feed first and goes straight to GitHub
-/// if it does not answer. A scheduled check that fails to fetch or verify our
-/// feed is retried once against GitHub. Every check after that starts from our
-/// feed again.
+/// if it does not answer. A check that fails to fetch or verify our feed is
+/// retried once against GitHub. Every check after that starts from our feed again.
 struct UpdateFeedSelection {
     static let primaryFeedURL = "https://updates.seiza.fyi/mac/appcast.xml"
     static let fallbackFeedURL =
@@ -37,14 +36,14 @@ struct UpdateFeedSelection {
     }
 
     /// Called when Sparkle finishes a check. Returns true when the caller
-    /// should run the scheduled check again against the fallback feed.
-    mutating func finishCycle(scheduled: Bool, error: Error?) -> Bool {
+    /// should run the same kind of check again against the fallback feed.
+    mutating func finishCycle(error: Error?) -> Bool {
         if cycleUsedFallback {
             usesFallback = false
             cycleUsedFallback = false
             return false
         }
-        guard scheduled, let error = error as NSError?,
+        guard let error = error as NSError?,
               error.domain == Self.sparkleErrorDomain,
               Self.feedErrorCodes.contains(error.code)
         else {
@@ -56,15 +55,24 @@ struct UpdateFeedSelection {
 }
 
 @MainActor
-final class UpdateController: NSObject, SPUUpdaterDelegate {
+protocol UpdateCheckRunning: AnyObject {
+    func checkForUpdates()
+    func checkForUpdatesInBackground()
+    func checkForUpdateInformation()
+}
+
+extension SPUUpdater: UpdateCheckRunning {}
+
+@MainActor
+final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
     private var updaterController: SPUStandardUpdaterController!
     private var feedSelection = UpdateFeedSelection()
-    private var preparingUserCheck = false
+    @Published private(set) var preparingUserCheck = false
 
-    override init() {
+    init(startingUpdater: Bool = true) {
         super.init()
         updaterController = SPUStandardUpdaterController(
-            startingUpdater: true,
+            startingUpdater: startingUpdater,
             updaterDelegate: self,
             userDriverDelegate: nil
         )
@@ -78,11 +86,27 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
     /// covers both copies; Sparkle itself would show an error and stop.
     func checkForUpdates() {
         guard !preparingUserCheck else { return }
+        if updater.sessionInProgress {
+            // Sparkle focuses an update that is already being presented.
+            updater.checkForUpdates()
+            return
+        }
         preparingUserCheck = true
         Task {
+            defer { preparingUserCheck = false }
             let reachable = await Self.feedIsReachable(UpdateFeedSelection.primaryFeedURL)
+            // An automatic check or scheduling probe can start while HEAD is
+            // suspended. Do not change the feed of that in-flight session.
+            while updater.sessionInProgress {
+                if updater.canCheckForUpdates {
+                    updater.checkForUpdates()
+                    return
+                }
+                for await busy in updater.publisher(for: \.sessionInProgress).values {
+                    if !busy { break }
+                }
+            }
             feedSelection.prepareUserCheck(primaryReachable: reachable)
-            preparingUserCheck = false
             updater.checkForUpdates()
         }
     }
@@ -106,30 +130,36 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
         return (result.1 as? HTTPURLResponse)?.statusCode == 200
     }
 
-    // Sparkle calls its delegate on the main thread.
-
-    nonisolated func feedURLString(for updater: SPUUpdater) -> String? {
-        MainActor.assumeIsolated {
-            feedSelection.feedURLString()
-        }
+    func feedURLString(for updater: SPUUpdater) -> String? {
+        feedSelection.feedURLString()
     }
 
-    nonisolated func updater(
+    func updater(
         _ updater: SPUUpdater,
         didFinishUpdateCycleFor updateCheck: SPUUpdateCheck,
         error: Error?
     ) {
-        MainActor.assumeIsolated {
-            let retry = feedSelection.finishCycle(
-                scheduled: updateCheck == .updatesInBackground,
-                error: error
-            )
-            if retry {
-                // Let Sparkle finish tearing down this cycle first.
-                DispatchQueue.main.async {
-                    updater.checkForUpdatesInBackground()
-                }
-            }
+        finishUpdateCycle(updateCheck, error: error, checking: updater)
+    }
+
+    func finishUpdateCycle(
+        _ updateCheck: SPUUpdateCheck,
+        error: Error?,
+        checking updater: UpdateCheckRunning
+    ) {
+        guard feedSelection.finishCycle(error: error) else { return }
+        // Sparkle has cleared the finished session before this callback. Start
+        // the retry now: deferring it lets Sparkle's scheduling probe reserve a
+        // new session and reject our retry as "session in progress".
+        switch updateCheck {
+        case .updates:
+            updater.checkForUpdates()
+        case .updatesInBackground:
+            updater.checkForUpdatesInBackground()
+        case .updateInformation:
+            updater.checkForUpdateInformation()
+        @unknown default:
+            break
         }
     }
 }
@@ -138,8 +168,10 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
 final class CheckForUpdatesViewModel: ObservableObject {
     @Published private(set) var canCheckForUpdates = false
 
-    init(updater: SPUUpdater) {
-        updater.publisher(for: \.canCheckForUpdates)
+    init(controller: UpdateController) {
+        controller.updater.publisher(for: \.canCheckForUpdates)
+            .combineLatest(controller.$preparingUserCheck)
+            .map { $0 && !$1 }
             .assign(to: &$canCheckForUpdates)
     }
 }
@@ -150,7 +182,7 @@ struct CheckForUpdatesView: View {
 
     init(controller: UpdateController) {
         self.controller = controller
-        model = CheckForUpdatesViewModel(updater: controller.updater)
+        model = CheckForUpdatesViewModel(controller: controller)
     }
 
     var body: some View {
@@ -168,12 +200,15 @@ final class UpdateSettingsViewModel: ObservableObject {
     private let updater: SPUUpdater
     private var cancellables: Set<AnyCancellable> = []
 
-    init(updater: SPUUpdater) {
+    init(controller: UpdateController) {
+        let updater = controller.updater
         self.updater = updater
         automaticallyChecksForUpdates = updater.automaticallyChecksForUpdates
         automaticallyDownloadsUpdates = updater.automaticallyDownloadsUpdates
 
         updater.publisher(for: \.canCheckForUpdates)
+            .combineLatest(controller.$preparingUserCheck)
+            .map { $0 && !$1 }
             .assign(to: &$canCheckForUpdates)
 
         updater.publisher(for: \.automaticallyChecksForUpdates)
@@ -207,7 +242,7 @@ struct UpdateSettingsSection: View {
     init(controller: UpdateController) {
         self.controller = controller
         _model = StateObject(
-            wrappedValue: UpdateSettingsViewModel(updater: controller.updater)
+            wrappedValue: UpdateSettingsViewModel(controller: controller)
         )
     }
 

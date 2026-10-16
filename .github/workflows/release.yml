@@ -285,7 +285,11 @@ jobs:
           plutil -extract SURequireSignedFeed raw \
             DerivedData/Build/Products/Release/Seiza.app/Contents/Info.plist \
             | grep -qx true
-          grep -q '^<!-- sparkle-signatures:$' dist/appcast.xml
+          printf '%s' "$SPARKLE_ED_PRIVATE_KEY" \
+            | DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update \
+                --verify \
+                --ed-key-file - \
+                dist/appcast.xml
 
       - name: Produce checksums
         run: |
