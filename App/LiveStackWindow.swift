@@ -39,6 +39,7 @@ final class LiveStackWindowModel: ObservableObject {
     @Published var calibrationMode = LiveStackCalibrationMode.none
     @Published var manualCalibration = ImageStackCalibration()
     @Published var calibrationLibrary: URL?
+    @Published var flatQualityOptions = FlatQualityOptions()
     @Published var calibrationSummary = ""
     @Published var isPreparingCalibration = false
     @Published var calibrationProgress: Double?
@@ -84,6 +85,7 @@ final class LiveStackWindowModel: ObservableObject {
             else {
                 return "Choose a calibration library folder."
             }
+            if let message = flatQualityOptions.validationMessage { return message }
         }
         if let message = options.validationMessage { return message }
         if calibrationMode == .masters,
@@ -244,7 +246,8 @@ final class LiveStackWindowModel: ObservableObject {
         let request = CalibrationPreparationRequest(
             reference: reference,
             sourcePaths: [calibrationLibrary.path],
-            cacheDirectory: CalibrationCachePaths.forLibrary(calibrationLibrary.path))
+            cacheDirectory: CalibrationCachePaths.forLibrary(calibrationLibrary.path),
+            options: CalibrationPreparationOptions(flatQuality: flatQualityOptions))
         let prepared = try await service.prepare(request) { [weak self] update in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -260,8 +263,9 @@ final class LiveStackWindowModel: ObservableObject {
         isPreparingCalibration = false
         calibrationProgress = nil
 
-        if !prepared.warnings.isEmpty {
-            let proceed = await confirmWarnings(prepared.warnings)
+        let review = prepared.warnings + prepared.reviewNotes
+        if !review.isEmpty {
+            let proceed = await confirmWarnings(review)
             guard proceed else {
                 configurationNotice =
                     "Live stacking was cancelled before any light frames were "
@@ -333,6 +337,7 @@ final class LiveStackWindowModel: ObservableObject {
         if !result.warnings.isEmpty {
             text += " " + result.warnings.joined(separator: " ")
         }
+        if let qualitySummary = result.reviewNotes.first { text += " " + qualitySummary }
         return text
     }
 
@@ -768,6 +773,8 @@ private struct LiveStackConfigurationView: View {
                                 Button("Choose…") { model.chooseCalibrationLibrary() }
                             }
                         }
+                        FlatQualityControls(options: $model.flatQualityOptions)
+                            .disabled(model.isPreparingCalibration)
                         if model.isPreparingCalibration {
                             if let progress = model.calibrationProgress {
                                 ProgressView(value: progress)
@@ -1074,7 +1081,7 @@ struct CalibrationWarningsSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Calibration Needs Attention")
+            Text("Calibration Review")
                 .font(.title3.weight(.semibold))
             ScrollView {
                 Text(CalibrationPreparationWarningText.format(warnings))
@@ -1155,5 +1162,36 @@ final class LiveStackWindowController: NSObject, NSWindowDelegate {
         }
         window?.delegate = nil
         window = nil
+    }
+}
+
+/// Shared by directory and live stacking: geometry is optional and never
+/// inferred from focal length alone. Pixel size describes the recorded grid.
+struct FlatQualityControls: View {
+    @Binding var options: FlatQualityOptions
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Review flat quality", isOn: $options.enabled)
+                .help("Measure the selected raw flats and review clipping, illumination and dust before stacking. No frames are excluded automatically.")
+            if options.enabled {
+                TextField("Saturation level", value: $options.fullScale, format: .number)
+                    .help("The raw value at saturation: usually 65535 for 16-bit ADU, or 1 for normalized samples. Match your files' units.")
+                Toggle("Estimate dust distance", isOn: $options.useOptics)
+                if options.useOptics {
+                    TextField("Focal ratio (f/)", value: $options.focalRatio, format: .number)
+                    TextField("Pixel size after camera binning (µm)", value: $options.pixelSizeUm, format: .number)
+                        .help("Use the sensor pixel pitch multiplied by camera binning. Internal analysis downsampling is handled by Seiza.")
+                    TextField("Central obstruction (%)", value: Binding(
+                        get: { options.obstruction * 100 }, set: { options.obstruction = $0 / 100 }), format: .number)
+                        .help("Obstruction diameter as a percentage of the aperture; 0 for an unobstructed refractor.")
+                }
+                Text("Raw flats are read again, even for a cached master. The review shows dust and vignetting separately; steady dust is what flats correct.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if let message = options.validationMessage {
+                    Text(message).font(.caption).foregroundStyle(.red)
+                }
+            }
+        }
     }
 }

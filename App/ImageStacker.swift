@@ -1235,6 +1235,7 @@ struct ImageStackWorkflowView: View {
     @State private var calibration = ImageStackCalibration()
     @State private var calibrationSource = StackCalibrationSource.masters
     @State private var calibrationLibrary: URL?
+    @State private var flatQualityOptions = FlatQualityOptions()
     @State private var splitByFilenameFilter = true
     @State private var outputBaseName = "stacked"
     @State private var showsAdvancedOptions = false
@@ -1492,6 +1493,8 @@ struct ImageStackWorkflowView: View {
                                 Button("Choose…") { chooseCalibrationLibrary() }
                             }
                         }
+                        FlatQualityControls(options: $flatQualityOptions)
+                            .disabled(isPreparingCalibration || coordinator.isRunning)
                         if calibrationLibrary != nil {
                             Text("Masters will be matched independently for each "
                                 + "filter stack and cached for reuse.")
@@ -1657,7 +1660,7 @@ struct ImageStackWorkflowView: View {
             else {
                 return "Choose a calibration library folder."
             }
-            return options.validationMessage
+            return options.validationMessage ?? flatQualityOptions.validationMessage
         }
         return options.validationMessage ?? calibration.validationMessage(for: selectedFrames)
     }
@@ -1873,7 +1876,8 @@ struct ImageStackWorkflowView: View {
                 targetLights: Array(selection.eligible.dropFirst()),
                 sourcePaths: [library.path],
                 cacheDirectory: cacheDirectory,
-                protectedMasterPaths: protectedMasters)
+                protectedMasterPaths: protectedMasters,
+                options: CalibrationPreparationOptions(flatQuality: flatQualityOptions))
             let count = groups.count
             let position = index + 1
             let result = try await service.prepare(request) { update in
@@ -1885,7 +1889,7 @@ struct ImageStackWorkflowView: View {
             preparedResults.append(result)
             preparation.byGroup[group.id] = result.calibration
             preparation.warnings.append(
-                contentsOf: result.warnings.map { "\(title): \($0)" })
+                contentsOf: (result.warnings + result.reviewNotes).map { "\(title): \($0)" })
             protectedMasters.append(
                 contentsOf: result.summaries.compactMap(\.masterPath))
         }

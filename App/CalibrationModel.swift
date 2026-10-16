@@ -496,3 +496,132 @@ enum LiveStackCalibrationIdentity {
         return stripped.isEmpty ? nil : stripped
     }
 }
+
+// MARK: - Native flat quality review
+
+struct FlatQualityOptions: Equatable, Sendable {
+    var enabled = false
+    var fullScale = 65535.0
+    var useOptics = false
+    var focalRatio = 0.0
+    var pixelSizeUm = 0.0
+    var obstruction = 0.0
+
+    var validationMessage: String? {
+        guard enabled else { return nil }
+        guard fullScale.isFinite, fullScale > 0 else { return "Enter a positive flat saturation level." }
+        if useOptics {
+            guard focalRatio.isFinite, focalRatio > 0, pixelSizeUm.isFinite, pixelSizeUm > 0,
+                obstruction.isFinite, (0..<1).contains(obstruction)
+            else { return "Enter a positive focal ratio and pixel size, and an obstruction below 100%." }
+        }
+        return nil
+    }
+}
+
+struct FlatQualityMeasureRequest: Encodable, Sendable {
+    var path: String
+    var fullScale: Double
+    var largeFeatures = true
+    var focalRatio: Double?
+    var pixelSizeUm: Double?
+    var obstruction: Double?
+
+    init(path: String, options: FlatQualityOptions) {
+        self.path = path; fullScale = options.fullScale
+        focalRatio = options.useOptics ? options.focalRatio : nil
+        pixelSizeUm = options.useOptics ? options.pixelSizeUm : nil
+        obstruction = options.useOptics ? options.obstruction : nil
+    }
+}
+
+/// Keep the complete native measurement for screening: shapes and physical
+/// geometry must survive encoding back into the C ABI, not just the count.
+struct FlatQualityMeasurement: Codable, Sendable {
+    struct Illumination: Codable, Sendable {
+        var columns: Int; var rows: Int; var response: [Double]
+    }
+    struct Feature: Codable, Sendable {
+        struct SeenIn: Codable, Sendable { var frames: Int; var of: Int }
+        var x: Double; var y: Double
+        var left: Int; var top: Int; var right: Int; var bottom: Int
+        var pixels: Int; var depth: Double
+        var shape: String; var radius: Double
+        var hole: Double?; var distanceMm: Double?; var seenIn: SeenIn?
+    }
+    struct Vignetting: Codable, Sendable {
+        var edge: String; var x: Double; var y: Double; var area: Double; var depth: Double
+    }
+    var algorithmVersion: Int
+    var width: Int; var height: Int; var fullScale: Double
+    var level: Double; var channelLevels: [Double]; var clippedFraction: Double
+    var noise: Double; var detectionDepth: Double
+    var illumination: Illumination
+    var featureCount: Int; var features: [Feature]; var vignetting: [Vignetting]
+}
+
+struct FlatQualityReport: Decodable, Sendable {
+    struct Verdict: Decodable, Sendable {
+        struct Finding: Decodable, Sendable {
+            var code: String; var grade: String; var value: Double; var limit: Double
+            var description: String {
+                let name: String
+                switch code {
+                case "clipped": name = "Clipped pixels"
+                case "bright": name = "Brightest channel level"
+                case "dim": name = "Dimmest channel level"
+                case "illumination": name = "Illumination difference"
+                case "features": name = "Compact dips"
+                case "changing_features": name = "Changing dips"
+                case "carried_features": name = "Changing dips carried into the master"
+                default: name = code.replacingOccurrences(of: "_", with: " ").capitalized
+                }
+                let percent = ["clipped", "bright", "dim", "illumination"].contains(code)
+                return percent
+                    ? String(format: "%@: %.2f%% (limit %.2f%%)", name, value * 100, limit * 100)
+                    : String(format: "%@: %.0f (limit %.0f)", name, value, limit)
+            }
+        }
+        var grade: String; var findings: [Finding]
+    }
+    var schemaVersion: Int
+    var frames: [Verdict]; var master: Verdict
+    var steadyFeatures: Int; var changingFeatures: Int; var carriedFeatures: Int
+
+    func reviewNotes(paths: [String], measurements: [FlatQualityMeasurement]) -> [String] {
+        let suspect = frames.filter { $0.grade == "suspect" }.count
+        let poor = frames.filter { $0.grade == "poor" }.count
+        var notes = ["Flat quality: \(frames.count) frames reviewed; \(suspect) suspect, \(poor) poor. "
+            + "The selection is unchanged. These measurements describe the flats, not which set matches a light."]
+        let flagged = Array(zip(paths, frames).filter { $0.1.grade != "ok" })
+        for (path, verdict) in flagged.prefix(50) {
+            notes.append("\(URL(fileURLWithPath: path).lastPathComponent) (\(verdict.grade)): "
+                + verdict.findings.map(\.description).joined(separator: "; "))
+        }
+        if flagged.count > 50 { notes.append("\(flagged.count - 50) additional flagged flats.") }
+        if master.grade != "ok" {
+            notes.append("Combined master (\(master.grade)): " + master.findings.map(\.description).joined(separator: "; "))
+        }
+        notes.append("Compact dust: \(steadyFeatures) steady, \(changingFeatures) changing, \(carriedFeatures) changing dips may survive in the master. Steady dust belongs to the light path and is what a flat corrects.")
+        let features = measurements.flatMap(\.features)
+        let shapes = Dictionary(grouping: features, by: \.shape)
+        let counts = ["disk", "donut", "patch", "compact", "irregular"].compactMap { shape -> String? in
+            guard let count = shapes[shape]?.count, count > 0 else { return nil }
+            return "\(shape): \(count)"
+        }
+        let vignetting = measurements.reduce(0) { $0 + $1.vignetting.count }
+        notes.append("Dust detections across all frames: " + (counts.isEmpty ? "none" : counts.joined(separator: ", "))
+            + ". Vignetting regions (reported separately): \(vignetting).")
+        let located = zip(paths, measurements).flatMap { path, measured in
+            measured.features.filter { $0.distanceMm != nil }.map { (path, $0) }
+        }.sorted { $0.1.depth > $1.1.depth }.prefix(8)
+        for (path, feature) in located {
+            if let distance = feature.distanceMm {
+                notes.append(String(format: "%@: %@ at (%.0f, %.0f), radius %.1f px, depth %.2f%%: about %.2f mm in front of the sensor.",
+                    URL(fileURLWithPath: path).lastPathComponent, feature.shape.capitalized, feature.x, feature.y,
+                    feature.radius, feature.depth * 100, distance))
+            }
+        }
+        return notes
+    }
+}

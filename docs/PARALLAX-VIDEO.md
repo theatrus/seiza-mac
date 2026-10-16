@@ -24,11 +24,11 @@ Seiza for Mac **0.8.2** uses published core/C ABI **0.30.1**, parallax
 **0.7.0**, stacking **0.32.0**, and image I/O **0.5.0**. Its header matches the
 published C ABI; the versioned release descriptions above are historical.
 
-The current development build uses published core/C ABI **0.33.0**, downloader
-**0.9.0**, parallax **0.10.0**, stacking **0.36.0**, and image I/O **0.8.0**,
-from [Seiza 0.33.0](https://github.com/theatrus/seiza/releases/tag/v0.33.0).
+The current development build uses published core/C ABI **0.34.0**, downloader
+**0.9.0**, parallax **0.11.0**, stacking **0.37.0**, and image I/O **0.8.0**,
+from [Seiza 0.34.0](https://github.com/theatrus/seiza/releases/tag/v0.34.0).
 Cargo locks registry checksums; the complete C ABI header matches the published
-package, whose source commit is `9868b7878165cf01508cef9458c4c72e287654ad`.
+package, whose source commit is `0525901ba406f8944b9d6ae65be09780808676e7`.
 The temporary Git pins have been removed.
 
 This release includes [#283](https://github.com/theatrus/seiza/pull/283): tour
@@ -87,10 +87,9 @@ coordinates, so importing them restores the original positions exactly once.
 Older tours without a crop use the full image. The summary's WCS remains the
 uncropped source solution, safe to use for another preparation.
 
-Dust-map reloads extract the selected crop from source-aligned maps. Exporting
-from a cropped scene restores the original image dimensions and offset; an
-existing painted map preserves its pixels outside the crop, while counted dust
-exports clear pixels outside the filmed area. PNG/TIFF retain 16-bit precision
+Dust-map reloads sample the selected crop from source-aligned maps. Exporting
+from a cropped scene uses the original image dimensions and offset, with clear
+pixels outside the filmed area for both painted and counted maps. PNG/TIFF retain 16-bit precision
 and FITS/XISF retain floating-point precision.
 
 ## Workspace
