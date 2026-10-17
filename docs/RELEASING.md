@@ -183,9 +183,10 @@ with explicit sizing, including byte-for-byte reads from the mounted image.
 
 Unsigned CI retains Cargo outputs for the post-job Rust cache, removing only
 linked Rust archives and Xcode intermediates before creating its development
-DMG. CI and signed publishing use GitHub's standard Apple silicon `macos-15`
+DMG. CI and signed publishing use GitHub's standard Apple silicon `macos-26`
 runner. Both architectures are built and checked in the universal app; an Intel
-host is not required for publishing. Native tests also passed on Intel during
+host is not required for publishing. The deployment target remains macOS 15.
+Native tests also passed on Intel during
 0.8.5 validation. See GitHub's
 [hosted runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 for the available standard labels.
