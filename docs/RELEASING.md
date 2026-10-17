@@ -153,7 +153,7 @@ commit both to `main`, and make sure CI is green. Create and push an annotated
 tag with the same marketing version:
 
 ```sh
-version=0.8.5
+version=0.8.6
 git tag -a "v${version}" -m "Seiza for Mac ${version}"
 git push origin "v${version}"
 ```
@@ -183,9 +183,10 @@ with explicit sizing, including byte-for-byte reads from the mounted image.
 
 Unsigned CI retains Cargo outputs for the post-job Rust cache, removing only
 linked Rust archives and Xcode intermediates before creating its development
-DMG. CI and signed publishing use GitHub's standard `macos-15-intel` runner,
-which keeps macOS 15 validation on the Intel pool; both build the universal app.
-Local release validation also covers Apple silicon. See GitHub's
+DMG. CI and signed publishing use GitHub's standard Apple silicon `macos-15`
+runner. Both architectures are built and checked in the universal app; an Intel
+host is not required for publishing. Native tests also passed on Intel during
+0.8.5 validation. See GitHub's
 [hosted runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 for the available standard labels.
 
