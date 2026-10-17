@@ -188,3 +188,7 @@ which keeps macOS 15 validation on the Intel pool; both build the universal app.
 Local release validation also covers Apple silicon. See GitHub's
 [hosted runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 for the available standard labels.
+
+The native test suite runs serially in CI because it exercises app state and
+catalogue preferences. A failed native run prints its xcresult summary, with a
+legacy JSON fallback, so the failing assertion is available in CI diagnostics.
