@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   macos:
-    runs-on: macos-15
+    runs-on: macos-15-intel
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
@@ -55,8 +55,19 @@ jobs:
             -scheme Seiza \
             -configuration Debug \
             -destination 'platform=macOS' \
+            -parallel-testing-enabled NO \
+            -resultBundlePath "$RUNNER_TEMP/Seiza-tests.xcresult" \
             -derivedDataPath DerivedData \
             CODE_SIGNING_ALLOWED=NO
+
+      - name: Report native test failure details
+        if: failure()
+        run: |
+          result_bundle="$RUNNER_TEMP/Seiza-tests.xcresult"
+          if [[ -d "$result_bundle" ]]; then
+            xcrun xcresulttool get test-results summary --path "$result_bundle" ||
+              xcrun xcresulttool get --legacy --format json --path "$result_bundle"
+          fi
 
       - name: Build universal Release app
         run: |
@@ -72,6 +83,9 @@ jobs:
 
       - name: Package and verify development DMG
         run: |
+          # Retain target for Rust caching; the app no longer needs linked inputs.
+          rm -rf .build/rust DerivedData/Build/Intermediates.noindex
+          df -h .
           scripts/package-dmg.sh \
             DerivedData/Build/Products/Release/Seiza.app \
             dist/Seiza-development.dmg \

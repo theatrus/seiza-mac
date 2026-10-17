@@ -260,6 +260,12 @@ final class ParallaxSession: ObservableObject {
             panel.allowedContentTypes = [.png, .jpeg, .tiff, .fits, .xisf]
         }
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        selectInput(kind, url: url)
+    }
+
+    /// The picker and programmatic selections share validation and scope ownership.
+    func selectInput(_ kind: InputFile, url: URL) {
+        guard !isBusy, !closed else { return }
         if kind == .dustMap { chooseDustMap(ParallaxScopedURL(url)); return }
         if kind == .separator && !FileManager.default.isExecutableFile(atPath: url.path) {
             error = "Choose an executable rc-astro command."; return
