@@ -8,7 +8,7 @@ objects in it. Turn a finished image into a camera tour with depth, motion, and
 titles. Image processing and video encoding run locally; optional online
 stellar-distance lookup sends sky coordinates to astronomical catalogues.
 
-[**Download Seiza for Mac 0.8.5**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.5-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
+[**Download Seiza for Mac 0.8.6**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.6-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
 **Also from Seiza:** [Core, CLI, and libraries](https://github.com/theatrus/seiza) ·
 [Seiza for Windows](https://github.com/theatrus/seiza-win) ·
@@ -284,7 +284,7 @@ and refits the whole frame as its window changes size.
 
 ## Download
 
-[**Download Seiza for Mac 0.8.5**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.5-universal.dmg), open it, and drag Seiza to Applications.
+[**Download Seiza for Mac 0.8.6**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.6-universal.dmg), open it, and drag Seiza to Applications.
 
 Or install with [Homebrew](https://brew.sh) from the
 [theatrus/homebrew-seiza tap](https://github.com/theatrus/homebrew-seiza):
