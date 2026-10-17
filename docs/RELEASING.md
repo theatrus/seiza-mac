@@ -189,6 +189,8 @@ Local release validation also covers Apple silicon. See GitHub's
 [hosted runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 for the available standard labels.
 
-The native test suite runs serially in CI because it exercises app state and
-catalogue preferences. A failed native run prints its xcresult summary, with a
-legacy JSON fallback, so the failing assertion is available in CI diagnostics.
+The native test suite runs serially for clear per-test CI diagnostics. A failed
+native run prints its xcresult summary, with a legacy JSON fallback. Tour tests
+select fixture catalogues through the session input path rather than creating
+persistent security-scoped bookmarks, which require an app-scope key unavailable
+to the unsigned Intel test host.
