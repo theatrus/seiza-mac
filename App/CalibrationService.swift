@@ -78,6 +78,27 @@ enum CalibrationService {
         return result
     }
 
+    static func measureFlat(_ request: FlatQualityMeasureRequest) throws -> FlatQualityMeasurement {
+        let json = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
+        var failure: UnsafeMutablePointer<CChar>?
+        let response = json.withCString { seiza_calibration_measure_flat_json($0, &failure) }
+        let data = try takeOwnedJSON(response, &failure, whenMissing: "Could not measure the flat frame.")
+        return try JSONDecoder().decode(FlatQualityMeasurement.self, from: data)
+    }
+
+    static func screenFlats(_ measurements: [FlatQualityMeasurement]) throws -> FlatQualityReport {
+        struct Request: Encodable { var measurements: [FlatQualityMeasurement] }
+        let json = String(decoding: try JSONEncoder().encode(Request(measurements: measurements)), as: UTF8.self)
+        var failure: UnsafeMutablePointer<CChar>?
+        let response = json.withCString { seiza_calibration_screen_flats_json($0, &failure) }
+        let data = try takeOwnedJSON(response, &failure, whenMissing: "Could not screen the flat set.")
+        let report = try JSONDecoder().decode(FlatQualityReport.self, from: data)
+        guard report.schemaVersion == 1, report.frames.count == measurements.count else {
+            throw CalibrationServiceError.invalidResponse("The flat quality report does not match the selected set.")
+        }
+        return report
+    }
+
     static func buildMaster(
         _ request: CalibrationMasterBuildRequest,
         cancellation: CalibrationCancelSignal,
