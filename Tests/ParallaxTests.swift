@@ -8,6 +8,64 @@ import XCTest
 
 final class ParallaxTests: XCTestCase {
     @MainActor
+    func testRcAstroSettingsPersistRefreshAndClearWithoutChangingCatalogs() throws {
+        let suite = "RcAstro-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("catalogs", forKey: "catalogDirectory")
+        let url = URL(fileURLWithPath: "/tools with spaces/rc-astro")
+        func store(stale: Bool = false) -> RcAstroSettings {
+            RcAstroSettings(defaults: defaults,
+                makeBookmark: { Data($0.path.utf8) },
+                readBookmark: { (URL(fileURLWithPath: String(decoding: $0, as: UTF8.self)), stale) },
+                isExecutable: { $0 == url.path })
+        }
+        let first = store()
+        try first.save(url)
+        let restored = store(stale: true)
+        XCTAssertEqual(restored.resolve(), url)
+        XCTAssertEqual(restored.displayPath, url.path)
+        XCTAssertThrowsError(try restored.save(URL(fileURLWithPath: "/not-executable")))
+        XCTAssertEqual(restored.resolve(), url, "Invalid selection preserves the working preference")
+        restored.clear()
+        XCTAssertNil(store().resolve())
+        XCTAssertTrue(store().displayPath.isEmpty)
+        XCTAssertEqual(defaults.string(forKey: "catalogDirectory"), "catalogs")
+    }
+
+    @MainActor
+    func testRcAstroSettingsUpdateExistingAndNewParallaxWindows() async throws {
+        let suite = "RcAstro-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = RcAstroSettings(defaults: defaults,
+            makeBookmark: { Data($0.path.utf8) },
+            readBookmark: { (URL(fileURLWithPath: String(decoding: $0, as: UTF8.self)), false) },
+            isExecutable: { _ in true })
+        let (files, request) = try fixture()
+        defer { withExtendedLifetime(files) {} }
+        let first = ParallaxSession(sourceURL: URL(fileURLWithPath: request.inputs.image),
+            processing: .default, wcs: nil, rcAstroSettings: settings)
+        defer { first.close() }
+        try await waitUntil { !first.isBusy }
+        let executable = URL(fileURLWithPath: "/tools/rc-astro")
+        try settings.save(executable)
+        XCTAssertEqual(first.inputNames[.separator], "rc-astro")
+        let second = ParallaxSession(sourceURL: URL(fileURLWithPath: request.inputs.image),
+            processing: .default, wcs: nil, rcAstroSettings: settings)
+        defer { second.close() }
+        try await waitUntil { !second.isBusy }
+        XCTAssertEqual(second.inputNames[.separator], "rc-astro")
+        settings.clear()
+        XCTAssertNil(first.inputNames[.separator])
+        XCTAssertNil(second.inputNames[.separator])
+        first.close()
+        try settings.save(executable)
+        XCTAssertNil(first.inputNames[.separator], "Closed windows stop observing preferences")
+        XCTAssertEqual(second.inputNames[.separator], "rc-astro")
+    }
+
+    @MainActor
     func testReplacingALayerDoesNotStartBlindSolvingAKnownStarlessSource() async throws {
         let (files, request) = try fixture()
         defer { withExtendedLifetime(files) {} }
