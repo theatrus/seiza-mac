@@ -1,7 +1,7 @@
 # Shared stacking references
 
-Seiza for Mac uses published `seiza-cabi` and `seiza` **0.33.0**,
-`seiza-stacking` **0.36.0**, and `seiza-download` **0.9.0**. The registry
+Seiza for Mac uses published `seiza-cabi` and `seiza` **0.39.0**,
+`seiza-stacking` **0.42.0**, and `seiza-download` **0.9.0**. The registry
 checksums are locked in `Cargo.lock`; `Shared/seiza_cabi.h` matches the
 published C ABI header. These replace the tested upstream Git pin.
 
@@ -71,3 +71,11 @@ explicit reference integration, checkpoint round trips, source protection for
 snapshot/reintegration/final export, batch cross-group protection, and live
 selection/resume. Existing stack recipes and parallax tests run against the
 same pinned core. See the pull request for the completed check results.
+
+## Flat quality review
+
+Both directory and live stacking offer **Review flat quality** when building
+masters from calibration frames. It measures the selected raw flats and shows
+native frame/master verdicts before any light is processed. See
+[Calibration quality](CALIBRATION-QUALITY.md) for saturation units, optical
+geometry, the review's limits and the API coverage audit.

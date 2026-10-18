@@ -1401,6 +1401,23 @@ final class CalibrationPreparationServiceTests: XCTestCase {
             XCTAssertTrue(summary.cacheReused, kind)
         }
         XCTAssertEqual(first.calibration.flat, second.calibration.flat)
+        XCTAssertFalse(second.reviewNotes.contains { $0.hasPrefix("Flat quality:") })
+        var reviewedRequest = request
+        reviewedRequest.options.flatQuality.enabled = true
+        let reviewed = try await service.prepare(reviewedRequest)
+        defer { reviewed.release() }
+        XCTAssertTrue(reviewed.reviewNotes.contains { $0.hasPrefix("Flat quality: 2 frames reviewed;") }, "\(reviewed.reviewNotes)")
+        XCTAssertFalse(reviewed.warnings.contains { $0.contains("review could not be completed") })
+        let structured = try XCTUnwrap(reviewed.flatQualityReviews.first)
+        XCTAssertEqual(structured.paths.count, 2)
+        XCTAssertEqual(structured.report.frames.count, 2)
+        XCTAssertFalse(structured.dustNotes.contains { $0.hasPrefix("Flat quality:") })
+
+        XCTAssertEqual(reviewed.calibration.flat, second.calibration.flat, "Review must not change frame selection or cache identity")
+        XCTAssertTrue(try XCTUnwrap(reviewed.summaries.first { $0.kind == "flat" }).cacheReused)
+        let summary = await LiveStackWindowModel.describeCalibration(reviewed)
+        XCTAssertTrue(summary.contains("Flat quality: 2 frames reviewed;"))
+        XCTAssertFalse(summary.contains("Dust detections across all frames:"), "Keep the full report in its review sheet")
     }
 
     func testAnIneligibleTargetIsRejectedBeforeAnyWork() async {
@@ -1608,5 +1625,90 @@ final class LiveStackCoordinatorTests: XCTestCase {
             }
             try await Task.sleep(for: .milliseconds(50))
         }
+    }
+}
+
+// MARK: - Published 0.34 flat-quality bridge
+
+final class FlatQualityTests: XCTestCase {
+    func testReviewSeparatesFrameIssuesFromDustDetails() throws {
+        let json = #"{"schemaVersion":1,"frames":[{"grade":"ok","findings":[]},{"grade":"suspect","findings":[{"code":"dim","grade":"suspect","value":0.0381,"limit":0.1}]},{"grade":"poor","findings":[{"code":"clipped","grade":"poor","value":0.2,"limit":0.01}]}],"master":{"grade":"suspect","findings":[]},"steadyFeatures":2,"changingFeatures":1,"carriedFeatures":1}"#
+        let report = try JSONDecoder().decode(FlatQualityReport.self, from: Data(json.utf8))
+        let review = FlatQualityReview(paths: ["/flats/good.fits", "/flats/dim.fits", "/flats/clipped.fits"], measurements: [], report: report)
+        XCTAssertEqual(review.suspectCount, 1)
+        XCTAssertEqual(review.poorCount, 1)
+        XCTAssertEqual(review.flaggedIndices, [1, 2])
+        XCTAssertEqual(review.filename(at: 1), "dim.fits")
+        XCTAssertTrue(review.notes.contains { $0.contains("3.81%") })
+        XCTAssertTrue(review.notes.contains { $0.contains("Combined master") })
+        XCTAssertFalse(review.dustNotes.contains { $0.contains("dim.fits") || $0.contains("Combined master") })
+        XCTAssertTrue(review.dustNotes.contains { $0.contains("2 steady, 1 changing") })
+    }
+
+    func testOptionsRequireCompleteGeometryOnlyWhenEnabled() throws {
+        var options = FlatQualityOptions()
+        options.fullScale = 0; options.useOptics = true
+        XCTAssertNil(options.validationMessage)
+        options.enabled = true
+        XCTAssertNotNil(options.validationMessage)
+        options.fullScale = 65535
+        XCTAssertNotNil(options.validationMessage)
+        options.focalRatio = 5; options.pixelSizeUm = 3.76
+        XCTAssertNil(options.validationMessage)
+        options.obstruction = 1
+        XCTAssertNotNil(options.validationMessage)
+        options.useOptics = false
+        let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(
+            FlatQualityMeasureRequest(path: "/flat.fits", options: options))) as! [String: Any]
+        XCTAssertNil(object["focalRatio"]); XCTAssertNil(object["pixelSizeUm"]); XCTAssertNil(object["obstruction"])
+        XCTAssertEqual(object["largeFeatures"] as? Bool, true)
+    }
+
+    func testNativeMeasurementPreservesDustGeometryAndScreening() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("flat-quality-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let width = 256, height = 256
+        // Keep fixture arithmetic simple for Xcode 16's type checker.
+        var values: [Int16] = []
+        values.reserveCapacity(width * height)
+        for i in 0..<(width * height) {
+            let x: Int = i % width
+            let y: Int = i / width
+            let dx: Int = x - 128
+            let dy: Int = y - 128
+            let radiusSquared: Int = dx * dx + dy * dy
+            let shadow: Int = radiusSquared < 35 * 35 ? 800 : 0
+            let noise: Int = i % 11 - 5
+            let sample: Int = 40000 - 32768 - shadow + noise
+            values.append(Int16(sample))
+        }
+        let file = try SyntheticFrame.write(width: width, height: height, values: values,
+            cards: ["IMAGETYP= 'FLAT'"], directory: directory, name: "dust-disk.fits")
+        var options = FlatQualityOptions()
+        options.enabled = true; options.useOptics = true; options.focalRatio = 5; options.pixelSizeUm = 3.76
+        let measured = try CalibrationService.measureFlat(FlatQualityMeasureRequest(path: file.path, options: options))
+        XCTAssertEqual(measured.algorithmVersion, 2)
+        XCTAssertEqual(measured.width, width); XCTAssertEqual(measured.height, height)
+        XCTAssertEqual(measured.fullScale, 65535)
+        let disk = try XCTUnwrap(measured.features.first { $0.shape == "disk" })
+        XCTAssertEqual(disk.x, 128, accuracy: 5); XCTAssertEqual(disk.y, 128, accuracy: 5)
+        XCTAssertGreaterThan(try XCTUnwrap(disk.distanceMm), 1)
+        XCTAssertLessThan(try XCTUnwrap(disk.distanceMm), 2)
+        let kept = try JSONDecoder().decode(FlatQualityMeasurement.self, from: JSONEncoder().encode(measured))
+        XCTAssertEqual(kept.features.first { $0.shape == "disk" }?.distanceMm, disk.distanceMm)
+        let report = try CalibrationService.screenFlats([kept, kept, kept])
+        XCTAssertEqual(report.frames.count, 3)
+        XCTAssertEqual(report.changingFeatures, 0)
+        XCTAssertEqual(report.carriedFeatures, 0)
+        let notes = report.reviewNotes(paths: [file.path, file.path, file.path], measurements: [kept, kept, kept])
+        XCTAssertTrue(notes.contains { $0.contains("disk:") })
+        XCTAssertTrue(notes.contains { $0.contains("Vignetting regions") })
+        XCTAssertTrue(notes.contains { $0.contains("mm in front of the sensor") })
+        XCTAssertTrue(notes.contains { $0.contains("selection is unchanged") })
+        var wrongSize = kept; wrongSize.width = width + 1
+        XCTAssertThrowsError(try CalibrationService.screenFlats([kept, wrongSize]))
+        options.fullScale = 0
+        XCTAssertThrowsError(try CalibrationService.measureFlat(FlatQualityMeasureRequest(path: file.path, options: options)))
     }
 }
