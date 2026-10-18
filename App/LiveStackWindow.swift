@@ -257,7 +257,7 @@ final class LiveStackWindowModel: ObservableObject {
                     if let group = state.groups.first(where: { $0.id == selectedFilterKey }) {
                         let child = await session.coordinator(for: group.id)
                         guard selectedFilterKey == group.id else { continue }
-                        coordinator = child
+                        self.coordinator = child
                         apply(group.snapshot)
                         if let error = group.error { runError = error }
                     }
@@ -267,17 +267,17 @@ final class LiveStackWindowModel: ObservableObject {
             try await session.start()
             return
         }
-        let coordinator = try LiveStackCoordinator(configuration: configuration)
-        self.coordinator = coordinator
+        let singleCoordinator = try LiveStackCoordinator(configuration: configuration)
+        self.coordinator = singleCoordinator
         observationTask = Task { [weak self] in
-            for await snapshot in await coordinator.snapshots() {
+            for await snapshot in await singleCoordinator.snapshots() {
                 guard let self else { return }
                 self.apply(snapshot)
             }
         }
         mode = .running
         do {
-            try await coordinator.start()
+            try await singleCoordinator.start()
         } catch {
             runError = error.localizedDescription
         }

@@ -1927,14 +1927,16 @@ actor LiveStackFilterSession {
         config.initialReferencePath = nil
         config.applyCalibrationOnResume = prepareCalibration == nil && configuration.applyCalibrationOnResume
         let gate = calibrationGate
-        let prepare = prepareCalibration
-        let callback: (@Sendable (CalibrationFrameProbe) async throws -> ImageStackCalibration)? = prepare.map { operation in
-            { probe in
+        let callback: (@Sendable (CalibrationFrameProbe) async throws -> ImageStackCalibration)?
+        if let operation = prepareCalibration {
+            callback = { probe in
                 await gate.acquire()
                 defer { gate.release() }
                 try Task.checkCancellation()
                 return try await operation(probe)
             }
+        } else {
+            callback = nil
         }
         let child = try LiveStackCoordinator(configuration: config,
             sharedProcessingGate: processingGates[children.count % processingGates.count], prepareCalibration: callback)
@@ -2085,7 +2087,7 @@ actor LiveStackFilterSession {
         var metadata = [registryURL]
         if let files = FileManager.default.enumerator(at: configuration.sessionRootDirectory,
                 includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]) {
-            for case let url as URL in files {
+            while let url = files.nextObject() as? URL {
                 let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
                 if values?.isSymbolicLink == true { files.skipDescendants() }
                 if values?.isRegularFile == true { metadata.append(url) }
