@@ -28,11 +28,18 @@ final class LiveStackWindowModel: ObservableObject {
         case running
     }
 
+    enum FilterView: String, CaseIterable, Identifiable {
+        case allFilters = "All Filters"
+        case selectedFilter = "Selected Filter"
+        var id: Self { self }
+    }
+
     // Configuration state.
     @Published var mode = Mode.configuration
     @Published var watchFolder: URL?
     @Published var includeSubdirectories = false
     @Published var separatesFilters = false
+    @Published var filterView = FilterView.allFilters
     @Published private(set) var filterGroups: [LiveStackFilterGroupSnapshot] = []
     @Published private(set) var selectedFilterKey = ""
     @Published private(set) var allFiltersPaused = false
@@ -93,6 +100,7 @@ final class LiveStackWindowModel: ObservableObject {
     }
 
     var isConfigured: Bool { mode == .running }
+    var showsAllFilters: Bool { separatesFilters && filterView == .allFilters }
 
     var validationMessage: String? {
         guard let watchFolder,
@@ -444,6 +452,11 @@ final class LiveStackWindowModel: ObservableObject {
         }
     }
 
+    func inspectFilter(_ key: String) {
+        selectFilter(key)
+        filterView = .selectedFilter
+    }
+
     func openSelectedCompletedOutput() {
         guard let group = filterGroups.first(where: { $0.id == selectedFilterKey }), group.completed,
               let path = group.outputPath else { return }
@@ -674,15 +687,17 @@ struct LiveStackWindowView: View {
                     model.pauseOrResume()
                 }
                 .disabled(!model.pauseButtonEnabled)
-                Button("Save Snapshot…") {
-                    model.saveSnapshot()
+                if !model.showsAllFilters {
+                    Button("Save Snapshot…") {
+                        model.saveSnapshot()
+                    }
+                    .disabled(!model.snapshotButtonEnabled)
+                    Button("Finish and Save…") {
+                        model.finish()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!model.finishButtonEnabled)
                 }
-                .disabled(!model.snapshotButtonEnabled)
-                Button("Finish and Save…") {
-                    model.finish()
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!model.finishButtonEnabled)
             } else {
                 Button("Start Live Stack") {
                     model.start()
@@ -695,7 +710,10 @@ struct LiveStackWindowView: View {
     }
 
     private var footerHint: String {
-        model.isConfigured
+        if model.isConfigured, model.showsAllFilters {
+            return "Select a filter for details, snapshots or finishing. Closing saves all filter stacks."
+        }
+        return model.isConfigured
             ? "Closing pauses and checkpoints the session so it can resume later."
             : "The folder is only read; checkpoints and outputs are stored separately."
     }
@@ -939,17 +957,155 @@ private struct LiveStackConfigurationView: View {
     }
 }
 
+private struct LiveStackFilterCard: View {
+    let group: LiveStackFilterGroupSnapshot
+    let previewHeight: CGFloat
+    let inspect: () -> Void
+    @State private var image: CGImage?
+
+    var body: some View {
+        Button(action: inspect) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text(group.filter.displayName).font(.headline)
+                    Spacer()
+                    Text(group.snapshot.state.title)
+                        .font(.caption)
+                        .foregroundStyle(group.error != nil || group.snapshot.state == .faulted ? Color.red : .secondary)
+                }
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color(red: 0.035, green: 0.04, blue: 0.047))
+                    if let image {
+                        Image(decorative: image, scale: 1)
+                            .resizable().interpolation(.high).aspectRatio(contentMode: .fit)
+                            .padding(4)
+                    } else {
+                        VStack(spacing: 8) {
+                            if group.snapshot.state.isRunning { ProgressView().controlSize(.small) }
+                            Text("Waiting for preview").font(.caption).foregroundStyle(.white)
+                        }
+                    }
+                }
+                .frame(height: previewHeight)
+                .accessibilityHidden(true)
+                HStack {
+                    count(group.snapshot.acceptedFrames, "Accepted")
+                    Spacer()
+                    count(group.snapshot.rejectedFrames, "Rejected")
+                    Spacer()
+                    count(group.snapshot.skippedFrames, "Skipped")
+                }
+                Text(group.error ?? group.snapshot.statusMessage)
+                    .font(.caption)
+                    .foregroundStyle(group.error == nil ? Color.secondary : .red)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, minHeight: 30, alignment: .topLeading)
+                    .help(group.error ?? group.snapshot.statusMessage)
+                if let attention = group.snapshot.attention.last {
+                    Label(attention.message, systemImage: "exclamationmark.circle")
+                        .font(.caption).foregroundStyle(.orange).lineLimit(2)
+                        .help(attention.message)
+                }
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Show \(group.filter.displayName) details")
+        .onChange(of: group.snapshot.previewRevision, initial: true) { _, _ in
+            image = group.snapshot.preview?.makeCGImage()
+        }
+    }
+
+    private func count(_ value: Int, _ title: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value.formatted()).font(.title3.monospacedDigit().weight(.semibold))
+            Text(title).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
 private struct LiveStackRunningView: View {
     @ObservedObject var model: LiveStackWindowModel
 
     var body: some View {
-        HSplitView {
-            previewPane
-                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
-            detailsPane
-                .frame(minWidth: 340, idealWidth: 400, maxWidth: 460)
+        VStack(spacing: 12) {
+            if model.separatesFilters {
+                HStack {
+                    Picker("View", selection: $model.filterView) {
+                        ForEach(LiveStackWindowModel.FilterView.allCases) { view in
+                            Text(view.rawValue).tag(view)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 280)
+                    Spacer()
+                    if model.showsAllFilters {
+                        previewStretchPicker.frame(maxWidth: 260)
+                    }
+                }
+            }
+            if model.showsAllFilters {
+                allFiltersPane
+            } else {
+                HSplitView {
+                    previewPane
+                        .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+                    detailsPane
+                        .frame(minWidth: 340, idealWidth: 400, maxWidth: 460)
+                }
+            }
         }
         .padding(14)
+    }
+
+    private var previewStretchPicker: some View {
+        Picker("Preview stretch", selection: $model.previewStretch) {
+            ForEach(LiveStackRunConfiguration.previewStretchTypes) { type in Text(type.title).tag(type) }
+        }
+        .help("Display only. Linear stacking and saved FITS pixels stay unchanged.")
+    }
+
+    private var allFiltersPane: some View {
+        let active = model.filterGroups.filter { !$0.completed }
+        return VStack(alignment: .leading, spacing: 10) {
+            Text(model.filterSessionStatus).font(.callout).foregroundStyle(.secondary)
+            if model.isPreparingCalibration {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text(model.calibrationSummary).font(.caption)
+                }
+            }
+            if let error = model.runError {
+                Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled)
+            }
+            if active.isEmpty {
+                ContentUnavailableView(
+                    model.filterGroups.isEmpty ? "Waiting for filters" : "All filters complete",
+                    systemImage: "square.grid.2x2",
+                    description: Text(model.filterGroups.isEmpty
+                        ? "Previews appear as complete light frames arrive."
+                        : "Use Selected Filter to open a completed stack. New filters will appear here."))
+            } else {
+                GeometryReader { geometry in
+                    let columns = max(1, Int((geometry.size.width + 12) / 262))
+                    let rows = max(1, (active.count + columns - 1) / columns)
+                    let previewHeight = max(80, min(240, geometry.size.height / CGFloat(rows) - 160))
+                    ScrollView {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: 12)], spacing: 12) {
+                            ForEach(active) { group in
+                                LiveStackFilterCard(group: group, previewHeight: previewHeight) { model.inspectFilter(group.id) }
+                                    .disabled(model.isBusy)
+                            }
+                        }
+                        .padding(2)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var previewPane: some View {
@@ -997,10 +1153,7 @@ private struct LiveStackRunningView: View {
                     }
                 }
                 statusCard
-                Picker("Preview stretch", selection: $model.previewStretch) {
-                    ForEach(LiveStackRunConfiguration.previewStretchTypes) { type in Text(type.title).tag(type) }
-                }
-                .help("Display only. Linear stacking and saved FITS pixels stay unchanged.")
+                previewStretchPicker
                 depthCard
                 if let notice = model.snapshotNotice {
                     Text(notice)

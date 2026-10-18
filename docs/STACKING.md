@@ -102,8 +102,12 @@ Enable **Separate stacks by filter** in Live Stack, and **Include subfolders**
 when capture files are nested. Metadata filter names take precedence over filename
 fallbacks; absent filter information goes to **Unfiltered**. Each discovered
 filter owns its accumulator, reference light, preview, admission ledger,
-calibration history and checkpoint. The Filter picker shows each group's count
-and completed status. Existing single-stack behavior and checkpoints remain the
+calibration history and checkpoint. **All Filters** shows live preview cards for
+every unfinished filter together, including per-filter state, accepted/rejected/
+skipped counts and attention messages. Cards resize with the window and group
+count; larger sessions can scroll. Click a card to switch to **Selected Filter**
+for the full preview, depth chart, snapshots and finishing. The Filter picker
+retains access to every group, including completed stacks. Existing single-stack behavior and checkpoints remain the
 default when the option is off.
 
 Automatic calibration is matched independently to each filter's first light;
