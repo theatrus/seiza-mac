@@ -79,3 +79,62 @@ masters from calibration frames. It measures the selected raw flats and shows
 native frame/master verdicts before any light is processed. See
 [Calibration quality](CALIBRATION-QUALITY.md) for saturation units, optical
 geometry, the review's limits and the API coverage audit.
+
+## Median Anchor and Layered display stretches
+
+The image stretch panel includes Median Anchor and Layered under Automatic.
+Median Anchor exposes target median, optional robust black-point clipping (or
+the image minimum), quarter-tone curves boost, highlight compression/knee and
+normalization. Layered exposes target background, aggressiveness, star-core
+compression, large/detail scale separation, contrast recovery, saturation lift
+and protection for dark noise. Every parameter survives recipe/clipboard JSON,
+ordered stages, undo/redo and full-resolution 16-bit export.
+
+Layered defaults to linked colour handling so it works with mono and RGB data.
+Per-channel mode is rejected; RGB users can also select Preserve Luminance Color.
+Live Stack offers Auto MTF, Median Anchor and Layered before and during a run.
+Changing that choice only redraws the preview: physical sample-domain mapping,
+linear accumulation, checkpoints and saved FITS pixels remain unchanged.
+
+## Independent live stacks by filter
+
+Enable **Separate stacks by filter** in Live Stack, and **Include subfolders**
+when capture files are nested. Metadata filter names take precedence over filename
+fallbacks; absent filter information goes to **Unfiltered**. Each discovered
+filter owns its accumulator, reference light, preview, admission ledger,
+calibration history and checkpoint. **All Filters** shows live preview cards for
+every unfinished filter together, including per-filter state, accepted/rejected/
+skipped counts and attention messages. Cards resize with the window and group
+count; larger sessions can scroll. Click a card to switch to **Selected Filter**
+for the full preview, depth chart, snapshots and finishing. The Filter picker
+retains access to every group, including completed stacks. Existing single-stack behavior and checkpoints remain the
+default when the option is off.
+
+Automatic calibration is matched independently to each filter's first light;
+quality reviews are presented sequentially. Manual masters apply to every group
+and must be compatible. An optional shared alignment image gives all filters a
+common canvas without mixing their brightness/noise normalization. At most two
+group startup/ingestion operations run concurrently. A failing filter does not
+stop the other groups.
+
+**Pause and Save All** stops discovery and checkpoints every unfinished group.
+**Resume All Filters** restarts them. Snapshot and Finish affect the selected
+filter; finishing opens its output and leaves the other filters running.
+Completed groups retain their output location and do not restart when more files
+of that filter arrive. A saved session restores completed and unfiltered groups
+even when the original capture files are no longer present. One window owns a
+capture session at a time.
+
+Save outputs outside both the capture tree and session checkpoint tree. The
+preflight also rejects hard-link/symlink aliases to any group's protected inputs
+or checkpoint metadata. A completion record is saved before retiring the native
+checkpoint; a failed completion write retains the checkpoint for recovery.
+
+Native regressions cover recursive discovery, filter isolation, late groups
+inheriting the chosen display stretch, independent finish, continued ingestion,
+source-less resume, exclusive ownership, per-filter calibration failure/cancellation and
+cross-group output protection. Cancelling a calibration review pauses only that
+filter and does not retry the review or count the light as unreadable. Pause/close
+suppresses pending and queued calibration reviews before waiting for workers;
+calibration failures never enter the automatic-reference fallback path. The UI was exercised with H-alpha, OIII and
+Unfiltered lights, including finish, pause and resume.

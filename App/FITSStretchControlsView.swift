@@ -218,7 +218,7 @@ struct FITSStretchControlsView: View {
                             Text("Color")
                                 .font(.subheadline.weight(.semibold))
                             Picker("Color handling", selection: configurationBinding.colorStrategy) {
-                                ForEach(FITSStretchColorStrategy.allCases) { strategy in
+                                ForEach(FITSStretchColorStrategy.allCases.filter { configuration.type != .layered || $0 != .unlinked }) { strategy in
                                     Text(strategy.title)
                                         .tag(strategy)
                                         .help(strategy.help)
@@ -323,6 +323,29 @@ struct FITSStretchControlsView: View {
     @ViewBuilder
     private var parameterControls: some View {
         switch configuration.type {
+        case .medianAnchor:
+            StretchParameterRow(title: "Target median", value: configurationBinding.targetMedian, range: 0.01...0.95, step: 0.01)
+            StretchParameterRow(title: "Curves boost", value: configurationBinding.curvesBoost, range: 0...0.9, step: 0.01)
+            StretchParameterRow(title: "Highlight compression", value: configurationBinding.hdrAmount, range: 0...1, step: 0.01)
+            StretchParameterRow(title: "Highlight knee", value: configurationBinding.hdrKnee, range: 0.01...0.99, step: 0.01)
+            Toggle("Use image minimum as black point", isOn: Binding(
+                get: { configuration.blackPointSigma == nil },
+                set: { configurationBinding.wrappedValue.blackPointSigma = $0 ? nil : 2.7 }))
+            if configuration.blackPointSigma != nil {
+                StretchParameterRow(title: "Black point (sigma)", value: Binding(
+                    get: { configuration.blackPointSigma ?? 2.7 },
+                    set: { configurationBinding.wrappedValue.blackPointSigma = $0 }), range: 0.1...10, step: 0.1)
+            }
+            Toggle("Normalize brightest sample", isOn: configurationBinding.normalize)
+        case .layered:
+            StretchParameterRow(title: "Target background", value: configurationBinding.targetBackground, range: 0.01...0.95, step: 0.01)
+            StretchParameterRow(title: "Aggressiveness", value: configurationBinding.aggressiveness, range: 0...1, step: 0.01)
+            StretchParameterRow(title: "Star-core compression", value: configurationBinding.dynamicRangeCompression, range: 0...1, step: 0.01)
+            StretchParameterRow(title: "Contrast recovery", value: configurationBinding.contrastRecovery, range: 0...1, step: 0.01)
+            StretchParameterRow(title: "Saturation lift", value: configurationBinding.saturationAmount, range: 0...1, step: 0.01)
+            StretchParameterRow(title: "Saturation boost", value: configurationBinding.saturationBoost, range: 0...1, step: 0.01)
+            Stepper("Structure scale: \(configuration.scaleSeparation) px", value: configurationBinding.scaleSeparation, in: 8...1024, step: 8)
+            Toggle("Protect dark noise from saturation", isOn: configurationBinding.lightnessMask)
         case .autoMtf:
             StretchParameterRow(
                 title: "Target median",

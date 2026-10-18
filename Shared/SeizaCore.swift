@@ -183,6 +183,8 @@ struct ImageHistogram: Decodable, Equatable {
 
 enum FITSStretchType: String, CaseIterable, Identifiable {
     case autoMtf
+    case medianAnchor
+    case layered
     case percentileAsinh
     case linear
     case asinh
@@ -192,12 +194,14 @@ enum FITSStretchType: String, CaseIterable, Identifiable {
 
     var id: Self { self }
 
-    static let automatic: [Self] = [.autoMtf, .percentileAsinh]
+    static let automatic: [Self] = [.autoMtf, .medianAnchor, .layered, .percentileAsinh]
     static let manual: [Self] = [.linear, .asinh, .mtf, .ghs]
     static let utility: [Self] = [.identity]
 
     var title: String {
         switch self {
+        case .medianAnchor: "Median Anchor"
+        case .layered: "Layered"
         case .autoMtf: "Auto MTF"
         case .percentileAsinh: "Percentile Asinh"
         case .linear: "Linear"
@@ -210,6 +214,10 @@ enum FITSStretchType: String, CaseIterable, Identifiable {
 
     var help: String {
         switch self {
+        case .medianAnchor:
+            "Place the background median on a target, with optional quarter-tone lift and highlight compression."
+        case .layered:
+            "Stretch luminance at separate scales, recovering structure and controlling star cores and colour."
         case .autoMtf:
             "Choose an MTF curve from the image median and median absolute deviation."
         case .percentileAsinh:
@@ -266,12 +274,30 @@ struct FITSStretchConfiguration: Equatable, Codable {
         return configuration
     }
 
-    var type: FITSStretchType = .autoMtf
+    var type: FITSStretchType = .autoMtf {
+        didSet {
+            if type == .medianAnchor && oldValue != type { targetMedian = 0.25 }
+            if type == .layered && colorStrategy == .unlinked { colorStrategy = .linked }
+        }
+    }
     var colorStrategy: FITSStretchColorStrategy = .unlinked
     var maxAnalysisSamples = 200_000
 
     var targetMedian = 0.2
     var shadowsClip = -2.8
+    var blackPointSigma: Double? = 2.7
+    var curvesBoost: Double = 0.0
+    var hdrAmount: Double = 0.0
+    var hdrKnee: Double = 0.75
+    var normalize: Bool = false
+    var targetBackground: Double = 0.15
+    var aggressiveness: Double = 0.5
+    var dynamicRangeCompression: Double = 0.0
+    var scaleSeparation: Int = 256
+    var contrastRecovery: Double = 0.0
+    var saturationAmount: Double = 0.0
+    var saturationBoost: Double = 0.5
+    var lightnessMask: Bool = true
 
     var blackPercentile = 0.01
     var whitePercentile = 0.995
@@ -292,7 +318,9 @@ struct FITSStretchConfiguration: Equatable, Codable {
 
     var validationMessage: String? {
         let finiteValues = [
-            targetMedian, shadowsClip, blackPercentile, whitePercentile,
+            targetMedian, shadowsClip, blackPointSigma ?? 1, curvesBoost, hdrAmount, hdrKnee,
+            targetBackground, aggressiveness, dynamicRangeCompression, contrastRecovery, saturationAmount, saturationBoost,
+            blackPercentile, whitePercentile,
             strength, black, white, shadows, midtone, highlights,
             stretchFactor, localIntensity, symmetryPoint, protectShadows,
             protectHighlights,
@@ -305,6 +333,18 @@ struct FITSStretchConfiguration: Equatable, Codable {
         }
 
         switch type {
+        case .medianAnchor:
+            guard targetMedian > 0, targetMedian < 1,
+                  (blackPointSigma.map { $0 > 0 } ?? true),
+                  (0...0.9).contains(curvesBoost), (0...1).contains(hdrAmount), hdrKnee > 0, hdrKnee < 1 else {
+                return "Median Anchor needs a target and highlight knee between 0 and 1, positive black-point sigma, curves boost 0–0.9 and compression 0–1."
+            }
+        case .layered:
+            guard colorStrategy != .unlinked else { return "Layered uses luminance; choose linked channels or preserve luminance colour." }
+            guard targetBackground > 0, targetBackground < 1, (8...1024).contains(scaleSeparation),
+                  [aggressiveness, dynamicRangeCompression, contrastRecovery, saturationAmount, saturationBoost].allSatisfy({ (0...1).contains($0) }) else {
+                return "Layered needs a background between 0 and 1, scale 8–1024 pixels, and other amounts between 0 and 1."
+            }
         case .autoMtf:
             guard (0.0..<1.0).contains(targetMedian) else {
                 return "Target median must be between 0 and 1."
@@ -359,6 +399,8 @@ struct FITSStretchConfiguration: Equatable, Codable {
         return String(decoding: data, as: UTF8.self)
     }
 
+    private enum AdvancedModelKeys: String, CodingKey { case blackPointSigma = "black_point_sigma" }
+
     private enum CodingKeys: String, CodingKey {
         case model
         case colorStrategy = "color_strategy"
@@ -386,6 +428,26 @@ struct FITSStretchConfiguration: Equatable, Codable {
 
         let model = try container.decode(StretchModelDecodingPayload.self, forKey: .model)
         switch model.type {
+        case "median-anchor":
+            type = .medianAnchor
+            targetMedian = model.targetMedian ?? 0.25
+            let raw = try container.nestedContainer(keyedBy: AdvancedModelKeys.self, forKey: .model)
+            blackPointSigma = raw.contains(.blackPointSigma) ? try raw.decodeIfPresent(Double.self, forKey: .blackPointSigma) : 2.7
+            curvesBoost = model.curvesBoost ?? 0.0
+            hdrAmount = model.hdrAmount ?? 0.0
+            hdrKnee = model.hdrKnee ?? 0.75
+            normalize = model.normalize ?? false
+        case "layered":
+            type = .layered
+            colorStrategy = try container.decodeIfPresent(FITSStretchColorStrategy.self, forKey: .colorStrategy) ?? .linked
+            targetBackground = model.targetBackground ?? 0.15
+            aggressiveness = model.aggressiveness ?? 0.5
+            dynamicRangeCompression = model.dynamicRangeCompression ?? 0.0
+            scaleSeparation = model.scaleSeparation ?? 256
+            contrastRecovery = model.contrastRecovery ?? 0.0
+            saturationAmount = model.saturationAmount ?? 0.0
+            saturationBoost = model.saturationBoost ?? 0.5
+            lightnessMask = model.lightnessMask ?? true
         case "auto-mtf":
             type = .autoMtf
             targetMedian = try model.required(model.targetMedian, named: "target_median")
@@ -942,6 +1004,19 @@ private struct StretchModelPayload: Encodable {
         case type
         case targetMedian = "target_median"
         case shadowsClip = "shadows_clip"
+        case blackPointSigma = "black_point_sigma"
+        case curvesBoost = "curves_boost"
+        case hdrAmount = "hdr_amount"
+        case hdrKnee = "hdr_knee"
+        case normalize
+        case targetBackground = "target_background"
+        case aggressiveness
+        case dynamicRangeCompression = "dynamic_range_compression"
+        case scaleSeparation = "scale_separation"
+        case contrastRecovery = "contrast_recovery"
+        case saturationAmount = "saturation_amount"
+        case saturationBoost = "saturation_boost"
+        case lightnessMask = "lightness_mask"
         case blackPercentile = "black_percentile"
         case whitePercentile = "white_percentile"
         case strength
@@ -961,6 +1036,25 @@ private struct StretchModelPayload: Encodable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         let configuration = configuration
         switch configuration.type {
+        case .medianAnchor:
+            try container.encode("median-anchor", forKey: .type)
+            try container.encode(configuration.targetMedian, forKey: .targetMedian)
+            if let sigma = configuration.blackPointSigma { try container.encode(sigma, forKey: .blackPointSigma) }
+            else { try container.encodeNil(forKey: .blackPointSigma) }
+            try container.encode(configuration.curvesBoost, forKey: .curvesBoost)
+            try container.encode(configuration.hdrAmount, forKey: .hdrAmount)
+            try container.encode(configuration.hdrKnee, forKey: .hdrKnee)
+            try container.encode(configuration.normalize, forKey: .normalize)
+        case .layered:
+            try container.encode("layered", forKey: .type)
+            try container.encode(configuration.targetBackground, forKey: .targetBackground)
+            try container.encode(configuration.aggressiveness, forKey: .aggressiveness)
+            try container.encode(configuration.dynamicRangeCompression, forKey: .dynamicRangeCompression)
+            try container.encode(configuration.scaleSeparation, forKey: .scaleSeparation)
+            try container.encode(configuration.contrastRecovery, forKey: .contrastRecovery)
+            try container.encode(configuration.saturationAmount, forKey: .saturationAmount)
+            try container.encode(configuration.saturationBoost, forKey: .saturationBoost)
+            try container.encode(configuration.lightnessMask, forKey: .lightnessMask)
         case .autoMtf:
             try container.encode("auto-mtf", forKey: .type)
             try container.encode(configuration.targetMedian, forKey: .targetMedian)
@@ -1003,6 +1097,19 @@ private struct StretchModelDecodingPayload: Decodable {
     let type: String
     let targetMedian: Double?
     let shadowsClip: Double?
+    let blackPointSigma: Double?
+    let curvesBoost: Double?
+    let hdrAmount: Double?
+    let hdrKnee: Double?
+    let normalize: Bool?
+    let targetBackground: Double?
+    let aggressiveness: Double?
+    let dynamicRangeCompression: Double?
+    let scaleSeparation: Int?
+    let contrastRecovery: Double?
+    let saturationAmount: Double?
+    let saturationBoost: Double?
+    let lightnessMask: Bool?
     let blackPercentile: Double?
     let whitePercentile: Double?
     let strength: Double?
@@ -1021,6 +1128,19 @@ private struct StretchModelDecodingPayload: Decodable {
         case type
         case targetMedian = "target_median"
         case shadowsClip = "shadows_clip"
+        case blackPointSigma = "black_point_sigma"
+        case curvesBoost = "curves_boost"
+        case hdrAmount = "hdr_amount"
+        case hdrKnee = "hdr_knee"
+        case normalize
+        case targetBackground = "target_background"
+        case aggressiveness
+        case dynamicRangeCompression = "dynamic_range_compression"
+        case scaleSeparation = "scale_separation"
+        case contrastRecovery = "contrast_recovery"
+        case saturationAmount = "saturation_amount"
+        case saturationBoost = "saturation_boost"
+        case lightnessMask = "lightness_mask"
         case blackPercentile = "black_percentile"
         case whitePercentile = "white_percentile"
         case strength

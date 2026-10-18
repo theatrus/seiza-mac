@@ -28,13 +28,38 @@ final class LiveStackWindowModel: ObservableObject {
         case running
     }
 
+    enum FilterView: String, CaseIterable, Identifiable {
+        case allFilters = "All Filters"
+        case selectedFilter = "Selected Filter"
+        var id: Self { self }
+    }
+
     // Configuration state.
     @Published var mode = Mode.configuration
     @Published var watchFolder: URL?
     @Published var includeSubdirectories = false
+    @Published var separatesFilters = false
+    @Published var filterView = FilterView.allFilters
+    @Published private(set) var filterGroups: [LiveStackFilterGroupSnapshot] = []
+    @Published private(set) var selectedFilterKey = ""
+    @Published private(set) var allFiltersPaused = false
+    @Published private(set) var filterSessionStatus = ""
     @Published var resumeExisting = true
     @Published var choosesReferenceAutomatically = false
     @Published var referenceImage: URL?
+    @Published var previewStretch = FITSStretchType.autoMtf {
+        didSet {
+            let type = previewStretch
+            guard coordinator != nil || filterSession != nil else { return }
+            Task {
+                do {
+                    if let filterSession { try await filterSession.setPreviewStretch(type) }
+                    else { try await coordinator?.setPreviewStretch(type) }
+                }
+                catch { self.runError = error.localizedDescription }
+            }
+        }
+    }
     @Published var options = ImageStackOptions()
     @Published var calibrationMode = LiveStackCalibrationMode.none
     @Published var manualCalibration = ImageStackCalibration()
@@ -59,6 +84,8 @@ final class LiveStackWindowModel: ObservableObject {
     var requestClose: () -> Void = {}
 
     private var coordinator: LiveStackCoordinator?
+    private var filterSession: LiveStackFilterSession?
+    private var retainedFilterCalibrations: [String: CalibrationPreparationResult] = [:]
     private var observationTask: Task<Void, Never>?
     private var preparationTask: Task<Void, Error>?
     private var preparedCalibration: CalibrationPreparationResult?
@@ -67,12 +94,14 @@ final class LiveStackWindowModel: ObservableObject {
     private var warningContinuation: CheckedContinuation<Bool, Never>?
     private var closing = false
     private var closeInProgress = false
+    private var calibrationSuspended = false
 
     init(initialFolder: URL?) {
         watchFolder = initialFolder
     }
 
     var isConfigured: Bool { mode == .running }
+    var showsAllFilters: Bool { separatesFilters && filterView == .allFilters }
 
     var validationMessage: String? {
         guard let watchFolder,
@@ -186,7 +215,7 @@ final class LiveStackWindowModel: ObservableObject {
         case .masters:
             calibration = manualCalibration
         case .automatic:
-            calibration = try await prepareAutomaticCalibration()
+            if !separatesFilters { calibration = try await prepareAutomaticCalibration() }
         }
         try Task.checkCancellation()
 
@@ -202,39 +231,79 @@ final class LiveStackWindowModel: ObservableObject {
         configuration.choosesReferenceAutomatically = choosesReferenceAutomatically
         configuration.options = options
         configuration.calibration = calibration
+        configuration.previewProcessingJSON = try LiveStackRunConfiguration.previewProcessingJSON(for: previewStretch)
 
-        let coordinator = try LiveStackCoordinator(configuration: configuration)
-        self.coordinator = coordinator
+        if separatesFilters {
+            var prepare: (@Sendable (CalibrationFrameProbe) async throws -> ImageStackCalibration)?
+            if calibrationMode == .automatic {
+                prepare = { [weak self] probe in
+                    guard let self else { throw CancellationError() }
+                    return try await self.prepareAutomaticCalibration(referenceOverride: probe)
+                }
+            }
+            let session = try LiveStackFilterSession(configuration: configuration, prepareCalibration: prepare)
+            filterSession = session
+            observationTask = Task { [weak self] in
+                for await state in await session.snapshots() {
+                    guard let self else { return }
+                    filterGroups = state.groups
+                    allFiltersPaused = state.paused
+                    filterSessionStatus = state.status
+                    if !state.groups.contains(where: { $0.id == selectedFilterKey }) {
+                        selectedFilterKey = state.groups.first?.id ?? ""
+                        displayedPreviewRevision = -1
+                        previewImage = nil
+                    }
+                    if let group = state.groups.first(where: { $0.id == selectedFilterKey }) {
+                        let child = await session.coordinator(for: group.id)
+                        guard selectedFilterKey == group.id else { continue }
+                        self.coordinator = child
+                        apply(group.snapshot)
+                        if let error = group.error { runError = error }
+                    }
+                }
+            }
+            mode = .running
+            try await session.start()
+            return
+        }
+        let singleCoordinator = try LiveStackCoordinator(configuration: configuration)
+        self.coordinator = singleCoordinator
         observationTask = Task { [weak self] in
-            for await snapshot in await coordinator.snapshots() {
+            for await snapshot in await singleCoordinator.snapshots() {
                 guard let self else { return }
                 self.apply(snapshot)
             }
         }
         mode = .running
         do {
-            try await coordinator.start()
+            try await singleCoordinator.start()
         } catch {
             runError = error.localizedDescription
         }
     }
 
-    private func prepareAutomaticCalibration() async throws -> ImageStackCalibration {
+    private func prepareAutomaticCalibration(referenceOverride: CalibrationFrameProbe? = nil) async throws -> ImageStackCalibration {
+        try checkCalibrationCanContinue()
         guard let watchFolder, let calibrationLibrary else {
             throw LiveStackRunError.invalidConfiguration(
                 "Choose a calibration library folder.")
         }
         isPreparingCalibration = true
+        defer { isPreparingCalibration = false; calibrationProgress = nil }
         calibrationProgress = nil
         calibrationSummary = "Finding a reference light…"
 
         let includeSubdirectories = includeSubdirectories
         let watchPath = watchFolder.path
         let excludedPaths = [referenceImage?.path].compactMap { $0 }
-        let reference = try await runBlocking {
-            try Self.findReferenceLight(
-                inFolder: watchPath,
-                includeSubdirectories: includeSubdirectories, excludedPaths: excludedPaths)
+        let reference: CalibrationFrameProbe?
+        if let referenceOverride { reference = referenceOverride }
+        else {
+            reference = try await runBlocking {
+                try Self.findReferenceLight(inFolder: watchPath,
+                    includeSubdirectories: includeSubdirectories, excludedPaths: excludedPaths)
+            }
         }
         guard let reference else {
             throw LiveStackRunError.invalidConfiguration(
@@ -258,8 +327,15 @@ final class LiveStackWindowModel: ObservableObject {
                     : nil
             }
         }
-        preparedCalibration?.release()
-        preparedCalibration = prepared
+        try checkCalibrationCanContinue()
+        if filterSession != nil {
+            let key = LiveStackFilterIdentity.fromProbe(reference).key
+            retainedFilterCalibrations[key]?.release()
+            retainedFilterCalibrations[key] = prepared
+        } else {
+            preparedCalibration?.release()
+            preparedCalibration = prepared
+        }
         calibrationSummary = Self.describeCalibration(prepared)
         isPreparingCalibration = false
         calibrationProgress = nil
@@ -267,13 +343,18 @@ final class LiveStackWindowModel: ObservableObject {
         if !prepared.warnings.isEmpty || !prepared.flatQualityReviews.isEmpty {
             let proceed = await confirmWarnings(prepared.warnings, reviews: prepared.flatQualityReviews)
             guard proceed else {
-                configurationNotice =
-                    "Live stacking was cancelled before any light frames were "
-                    + "processed."
+                if filterSession == nil {
+                    configurationNotice = "Live stacking was cancelled before any light frames were processed."
+                }
                 throw CancellationError()
             }
         }
         return prepared.calibration
+    }
+
+    private func checkCalibrationCanContinue() throws {
+        try Task.checkCancellation()
+        if calibrationSuspended || closeInProgress || closing { throw CancellationError() }
     }
 
     nonisolated static func findReferenceLight(
@@ -342,7 +423,8 @@ final class LiveStackWindowModel: ObservableObject {
     }
 
     private func confirmWarnings(_ warnings: [String], reviews: [FlatQualityReview]) async -> Bool {
-        await withCheckedContinuation { continuation in
+        guard !calibrationSuspended, !closeInProgress, !closing, !Task.isCancelled else { return false }
+        return await withCheckedContinuation { continuation in
             warningContinuation = continuation
             pendingFlatReviews = reviews
             pendingWarnings = warnings
@@ -367,9 +449,33 @@ final class LiveStackWindowModel: ObservableObject {
         }
     }
 
+    func selectFilter(_ key: String) {
+        guard let filterSession, let group = filterGroups.first(where: { $0.id == key }) else { return }
+        selectedFilterKey = key
+        displayedPreviewRevision = -1; previewImage = nil; runError = group.error
+        apply(group.snapshot)
+        Task {
+            let child = await filterSession.coordinator(for: key)
+            guard selectedFilterKey == key else { return }
+            coordinator = child
+        }
+    }
+
+    func inspectFilter(_ key: String) {
+        selectFilter(key)
+        filterView = .selectedFilter
+    }
+
+    func openSelectedCompletedOutput() {
+        guard let group = filterGroups.first(where: { $0.id == selectedFilterKey }), group.completed,
+              let path = group.outputPath else { return }
+        onOpenOutput(URL(fileURLWithPath: path))
+    }
+
     // MARK: Running actions
 
     var pauseButtonTitle: String {
+        if filterSession != nil { return allFiltersPaused ? "Resume All Filters" : "Pause and Save All" }
         if snapshot.requiresReopenToResume { return "Reopen Required" }
         if snapshot.state == .paused { return "Resume" }
         if snapshot.state == .needsAttention { return "Retry Checkpoint" }
@@ -377,30 +483,38 @@ final class LiveStackWindowModel: ObservableObject {
     }
 
     var pauseButtonEnabled: Bool {
-        !snapshot.requiresReopenToResume && !isBusy
+        if filterSession != nil { return !isBusy }
+        return !snapshot.requiresReopenToResume && !isBusy
             && (snapshot.state.isRunning
                 || snapshot.state == .paused
                 || snapshot.state == .needsAttention)
     }
 
     var snapshotButtonEnabled: Bool {
-        !snapshot.requiresReopenToResume && !isBusy && snapshot.hasStack
+        !snapshot.requiresReopenToResume && !isBusy && snapshot.hasStack && snapshot.state != .completed
     }
 
     var finishButtonEnabled: Bool {
-        !snapshot.requiresReopenToResume && !isBusy && snapshot.hasStack
+        !snapshot.requiresReopenToResume && !isBusy && snapshot.hasStack && snapshot.state != .completed
     }
 
     func pauseOrResume() {
-        guard let coordinator else { return }
+        guard coordinator != nil || filterSession != nil else { return }
+        if filterSession != nil {
+            calibrationSuspended = !allFiltersPaused
+            if calibrationSuspended { resolveWarnings(proceed: false) }
+        }
         isBusy = true
         runError = nil
         Task {
             do {
-                if snapshot.state == .paused || snapshot.state == .needsAttention {
-                    try await coordinator.start()
+                if let filterSession {
+                    if allFiltersPaused { try await filterSession.start() }
+                    else { try await filterSession.pauseAndSave() }
+                } else if snapshot.state == .paused || snapshot.state == .needsAttention {
+                    try await coordinator?.start()
                 } else {
-                    try await coordinator.pauseAndSave()
+                    try await coordinator?.pauseAndSave()
                 }
             } catch {
                 runError = error.localizedDescription
@@ -411,6 +525,7 @@ final class LiveStackWindowModel: ObservableObject {
 
     func saveSnapshot() {
         guard let coordinator, snapshotButtonEnabled else { return }
+        let filterKey = selectedFilterKey
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.fits]
         panel.nameFieldStringValue = "live-stack-snapshot.fits"
@@ -421,7 +536,9 @@ final class LiveStackWindowModel: ObservableObject {
         snapshotNotice = nil
         Task {
             do {
-                let result = try await coordinator.saveSnapshot(to: url.path)
+                let result: LiveStackExportResult
+                if let filterSession { result = try await filterSession.saveSnapshot(for: filterKey, to: url.path) }
+                else { result = try await coordinator.saveSnapshot(to: url.path) }
                 snapshotNotice = "Saved \(url.lastPathComponent) with "
                     + "\(result.acceptedFrames) accepted frame(s)."
             } catch {
@@ -433,6 +550,7 @@ final class LiveStackWindowModel: ObservableObject {
 
     func finish() {
         guard let coordinator, finishButtonEnabled else { return }
+        let filterKey = selectedFilterKey
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.fits]
         panel.nameFieldStringValue = "live-stack.fits"
@@ -443,9 +561,12 @@ final class LiveStackWindowModel: ObservableObject {
         runError = nil
         Task {
             do {
-                let result = try await coordinator.finish(to: url.path)
+                let result: LiveStackExportResult
+                let isFilterSession = filterSession != nil
+                if let filterSession { result = try await filterSession.finish(filterKey, to: url.path) }
+                else { result = try await coordinator.finish(to: url.path) }
                 let output = URL(fileURLWithPath: result.outputPath)
-                await teardown()
+                if !isFilterSession { await teardown() }
                 isBusy = false
                 if let note = result.transientNote {
                     let alert = NSAlert()
@@ -456,7 +577,7 @@ final class LiveStackWindowModel: ObservableObject {
                     alert.runModal()
                 }
                 onOpenOutput(output)
-                requestClose()
+                if !isFilterSession { requestClose() }
             } catch {
                 runError = error.localizedDescription
                 isBusy = false
@@ -473,7 +594,7 @@ final class LiveStackWindowModel: ObservableObject {
         if closeInProgress { return false }
         preparationTask?.cancel()
         resolveWarnings(proceed: false)
-        guard coordinator != nil else { return true }
+        guard coordinator != nil || filterSession != nil else { return true }
         beginClose()
         return false
     }
@@ -483,10 +604,11 @@ final class LiveStackWindowModel: ObservableObject {
         closeInProgress = true
         isBusy = true
         Task {
-            let save = !snapshot.requiresReopenToResume
-            if save, let coordinator {
+            let save = filterSession != nil || !snapshot.requiresReopenToResume
+            if save, coordinator != nil || filterSession != nil {
                 do {
-                    try await coordinator.pauseAndSave()
+                    if let filterSession { try await filterSession.pauseAndSave() }
+                    else { try await coordinator?.pauseAndSave() }
                 } catch {
                     closeInProgress = false
                     isBusy = false
@@ -504,6 +626,10 @@ final class LiveStackWindowModel: ObservableObject {
     }
 
     func discardAndClose() {
+        closeInProgress = true
+        calibrationSuspended = true
+        preparationTask?.cancel()
+        resolveWarnings(proceed: false)
         Task {
             await teardown()
             closing = true
@@ -514,10 +640,12 @@ final class LiveStackWindowModel: ObservableObject {
     private func teardown() async {
         observationTask?.cancel()
         observationTask = nil
-        if let coordinator {
-            await coordinator.dispose()
-        }
+        if let filterSession { await filterSession.dispose() }
+        else if let coordinator { await coordinator.dispose() }
+        filterSession = nil
         coordinator = nil
+        for prepared in retainedFilterCalibrations.values { prepared.release() }
+        retainedFilterCalibrations.removeAll()
         preparedCalibration?.release()
         preparedCalibration = nil
     }
@@ -576,15 +704,17 @@ struct LiveStackWindowView: View {
                     model.pauseOrResume()
                 }
                 .disabled(!model.pauseButtonEnabled)
-                Button("Save Snapshot…") {
-                    model.saveSnapshot()
+                if !model.showsAllFilters {
+                    Button("Save Snapshot…") {
+                        model.saveSnapshot()
+                    }
+                    .disabled(!model.snapshotButtonEnabled)
+                    Button("Finish and Save…") {
+                        model.finish()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!model.finishButtonEnabled)
                 }
-                .disabled(!model.snapshotButtonEnabled)
-                Button("Finish and Save…") {
-                    model.finish()
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!model.finishButtonEnabled)
             } else {
                 Button("Start Live Stack") {
                     model.start()
@@ -597,7 +727,10 @@ struct LiveStackWindowView: View {
     }
 
     private var footerHint: String {
-        model.isConfigured
+        if model.isConfigured, model.showsAllFilters {
+            return "Select a filter for details, snapshots or finishing. Closing saves all filter stacks."
+        }
+        return model.isConfigured
             ? "Closing pauses and checkpoints the session so it can resume later."
             : "The folder is only read; checkpoints and outputs are stored separately."
     }
@@ -624,6 +757,10 @@ private struct LiveStackConfigurationView: View {
             Divider()
 
             Form {
+                Picker("Preview stretch", selection: $model.previewStretch) {
+                    ForEach(LiveStackRunConfiguration.previewStretchTypes) { type in Text(type.title).tag(type) }
+                }
+                .help("Display only. Linear stacking and saved FITS pixels stay unchanged.")
                 Section("Capture Folder") {
                     LabeledContent("Folder") {
                         HStack {
@@ -637,13 +774,15 @@ private struct LiveStackConfigurationView: View {
                         }
                     }
                     Toggle("Include subfolders", isOn: $model.includeSubdirectories)
+                    Toggle("Separate stacks by filter", isOn: $model.separatesFilters)
+                    Text("Each filter keeps its own calibration, preview and resumable accumulator. New filters are discovered automatically. Single-stack mode retains existing checkpoints.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Toggle(
                         "Resume the most recent compatible session",
                         isOn: $model.resumeExisting)
-                    Text("The first compatible light locks image dimensions and "
-                        + "filter for this window. Files for other filters are "
-                        + "ignored; use a separate capture folder for each "
-                        + "simultaneous filter stack.")
+                    Text(model.separatesFilters
+                        ? "Each filter gets an independent stack. Automatic calibration is matched to that filter's first light; a saved group retains its own calibration."
+                        : "The first compatible light locks image dimensions and filter for this window. Other filters are ignored in single-stack mode.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -835,17 +974,155 @@ private struct LiveStackConfigurationView: View {
     }
 }
 
+private struct LiveStackFilterCard: View {
+    let group: LiveStackFilterGroupSnapshot
+    let previewHeight: CGFloat
+    let inspect: () -> Void
+    @State private var image: CGImage?
+
+    var body: some View {
+        Button(action: inspect) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text(group.filter.displayName).font(.headline)
+                    Spacer()
+                    Text(group.snapshot.state.title)
+                        .font(.caption)
+                        .foregroundStyle(group.error != nil || group.snapshot.state == .faulted ? Color.red : .secondary)
+                }
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color(red: 0.035, green: 0.04, blue: 0.047))
+                    if let image {
+                        Image(decorative: image, scale: 1)
+                            .resizable().interpolation(.high).aspectRatio(contentMode: .fit)
+                            .padding(4)
+                    } else {
+                        VStack(spacing: 8) {
+                            if group.snapshot.state.isRunning { ProgressView().controlSize(.small) }
+                            Text("Waiting for preview").font(.caption).foregroundStyle(.white)
+                        }
+                    }
+                }
+                .frame(height: previewHeight)
+                .accessibilityHidden(true)
+                HStack {
+                    count(group.snapshot.acceptedFrames, "Accepted")
+                    Spacer()
+                    count(group.snapshot.rejectedFrames, "Rejected")
+                    Spacer()
+                    count(group.snapshot.skippedFrames, "Skipped")
+                }
+                Text(group.error ?? group.snapshot.statusMessage)
+                    .font(.caption)
+                    .foregroundStyle(group.error == nil ? Color.secondary : .red)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, minHeight: 30, alignment: .topLeading)
+                    .help(group.error ?? group.snapshot.statusMessage)
+                if let attention = group.snapshot.attention.last {
+                    Label(attention.message, systemImage: "exclamationmark.circle")
+                        .font(.caption).foregroundStyle(.orange).lineLimit(2)
+                        .help(attention.message)
+                }
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Show \(group.filter.displayName) details")
+        .onChange(of: group.snapshot.previewRevision, initial: true) { _, _ in
+            image = group.snapshot.preview?.makeCGImage()
+        }
+    }
+
+    private func count(_ value: Int, _ title: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value.formatted()).font(.title3.monospacedDigit().weight(.semibold))
+            Text(title).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
 private struct LiveStackRunningView: View {
     @ObservedObject var model: LiveStackWindowModel
 
     var body: some View {
-        HSplitView {
-            previewPane
-                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
-            detailsPane
-                .frame(minWidth: 340, idealWidth: 400, maxWidth: 460)
+        VStack(spacing: 12) {
+            if model.separatesFilters {
+                HStack {
+                    Picker("View", selection: $model.filterView) {
+                        ForEach(LiveStackWindowModel.FilterView.allCases) { view in
+                            Text(view.rawValue).tag(view)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 280)
+                    Spacer()
+                    if model.showsAllFilters {
+                        previewStretchPicker.frame(maxWidth: 260)
+                    }
+                }
+            }
+            if model.showsAllFilters {
+                allFiltersPane
+            } else {
+                HSplitView {
+                    previewPane
+                        .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+                    detailsPane
+                        .frame(minWidth: 340, idealWidth: 400, maxWidth: 460)
+                }
+            }
         }
         .padding(14)
+    }
+
+    private var previewStretchPicker: some View {
+        Picker("Preview stretch", selection: $model.previewStretch) {
+            ForEach(LiveStackRunConfiguration.previewStretchTypes) { type in Text(type.title).tag(type) }
+        }
+        .help("Display only. Linear stacking and saved FITS pixels stay unchanged.")
+    }
+
+    private var allFiltersPane: some View {
+        let active = model.filterGroups.filter { !$0.completed }
+        return VStack(alignment: .leading, spacing: 10) {
+            Text(model.filterSessionStatus).font(.callout).foregroundStyle(.secondary)
+            if model.isPreparingCalibration {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text(model.calibrationSummary).font(.caption)
+                }
+            }
+            if let error = model.runError {
+                Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled)
+            }
+            if active.isEmpty {
+                ContentUnavailableView(
+                    model.filterGroups.isEmpty ? "Waiting for filters" : "All filters complete",
+                    systemImage: "square.grid.2x2",
+                    description: Text(model.filterGroups.isEmpty
+                        ? "Previews appear as complete light frames arrive."
+                        : "Use Selected Filter to open a completed stack. New filters will appear here."))
+            } else {
+                GeometryReader { geometry in
+                    let columns = max(1, Int((geometry.size.width + 12) / 262))
+                    let rows = max(1, (active.count + columns - 1) / columns)
+                    let previewHeight = max(80, min(240, geometry.size.height / CGFloat(rows) - 160))
+                    ScrollView {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: 12)], spacing: 12) {
+                            ForEach(active) { group in
+                                LiveStackFilterCard(group: group, previewHeight: previewHeight) { model.inspectFilter(group.id) }
+                                    .disabled(model.isBusy)
+                            }
+                        }
+                        .padding(2)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var previewPane: some View {
@@ -874,7 +1151,26 @@ private struct LiveStackRunningView: View {
     private var detailsPane: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                if model.separatesFilters {
+                    Text(model.filterSessionStatus).font(.callout).foregroundStyle(.secondary)
+                    if !model.filterGroups.isEmpty {
+                        Picker("Filter", selection: Binding(get: { model.selectedFilterKey }, set: { model.selectFilter($0) })) {
+                            ForEach(model.filterGroups) { group in
+                                Text(group.displayTitle).tag(group.id)
+                            }
+                        }
+                        .disabled(model.isBusy)
+                        if model.filterGroups.first(where: { $0.id == model.selectedFilterKey })?.completed == true {
+                            Button("Open Completed Stack") { model.openSelectedCompletedOutput() }
+                        }
+                    }
+                    if model.isPreparingCalibration {
+                        ProgressView(value: model.calibrationProgress)
+                        Text(model.calibrationSummary).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 statusCard
+                previewStretchPicker
                 depthCard
                 if let notice = model.snapshotNotice {
                     Text(notice)

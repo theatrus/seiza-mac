@@ -258,7 +258,7 @@ final class SharedStackReferenceTests: XCTestCase {
         config.options = f.options
         config.monitorStabilityDuration = 0.01
         config.monitorScanInterval = 3600
-        let run = try LiveStackCoordinator(configuration: config) { urls in
+        let run = try LiveStackCoordinator(configuration: config, referenceSelector: { urls in
             XCTAssertFalse(urls.contains(f.common))
             let index = try XCTUnwrap(urls.firstIndex(of: f.turned))
             let scores = urls.map { _ in ["stars": 12, "medianStarArea": 2,
@@ -267,7 +267,7 @@ final class SharedStackReferenceTests: XCTestCase {
             return try JSONDecoder().decode(StackReferenceSelection.self, from: JSONSerialization.data(withJSONObject: [
                 "schemaVersion": 1, "referenceIndex": index, "referencePath": f.turned.path,
                 "scores": scores, "ranking": ranking]))
-        }
+        })
         try await run.start()
         let initial = await run.currentSnapshot()
         XCTAssertEqual(initial.acceptedFrames, 1)
@@ -277,10 +277,10 @@ final class SharedStackReferenceTests: XCTestCase {
         try await run.pauseAndSave()
         await run.dispose()
         config.referenceImagePath = nil // A reopened window has no picker selection yet.
-        let restored = try LiveStackCoordinator(configuration: config) { _ in
+        let restored = try LiveStackCoordinator(configuration: config, referenceSelector: { _ in
             XCTFail("A resumed stack must retain its channel reference")
             throw CancellationError()
-        }
+        })
         try await restored.start()
         let snapshot = await restored.currentSnapshot()
         XCTAssertEqual(snapshot.acceptedFrames, 1)
@@ -1450,6 +1450,36 @@ final class CalibrationPreparationServiceTests: XCTestCase {
 // MARK: - Coordinator end to end
 
 final class LiveStackCoordinatorTests: XCTestCase {
+    func testChangingLivePreviewStretchDoesNotChangeTheLinearStack() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let watch = root.appendingPathComponent("lights")
+        try FileManager.default.createDirectory(at: watch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let light = try SyntheticFrame.write(width: 160, height: 128,
+            values: SyntheticFrame.noisyStarField(), cards: SyntheticFrame.lightCards(), directory: watch)
+        var config = LiveStackRunConfiguration(watchFolder: watch.path,
+            sessionRootDirectory: root.appendingPathComponent("sessions"))
+        config.initialReferencePath = light.path
+        config.monitorScanInterval = 3600
+        let coordinator = try LiveStackCoordinator(configuration: config)
+        try await coordinator.start()
+        try await coordinator.pauseAndSave()
+        let before = await coordinator.currentSnapshot()
+        let original = root.appendingPathComponent("original.fits")
+        _ = try await coordinator.saveSnapshot(to: original.path)
+        for type in LiveStackRunConfiguration.previewStretchTypes {
+            try await coordinator.setPreviewStretch(type)
+            let snapshot = await coordinator.currentSnapshot()
+            XCTAssertEqual(snapshot.acceptedFrames, before.acceptedFrames)
+            XCTAssertGreaterThan(snapshot.previewRevision, before.previewRevision)
+            XCTAssertNotNil(snapshot.preview)
+        }
+        let after = root.appendingPathComponent("after.fits")
+        _ = try await coordinator.saveSnapshot(to: after.path)
+        XCTAssertEqual(try Data(contentsOf: original), try Data(contentsOf: after))
+        await coordinator.dispose()
+    }
+
     func testAutomaticReferenceFiltersCandidatesAndRestoresBeforeScoring() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let watch = root.appendingPathComponent("lights")
@@ -1464,20 +1494,20 @@ final class LiveStackCoordinatorTests: XCTestCase {
         config.choosesReferenceAutomatically = true
         config.monitorStabilityDuration = 0.01
         config.monitorScanInterval = 3600
-        let coordinator = try LiveStackCoordinator(configuration: config) { urls in
+        let coordinator = try LiveStackCoordinator(configuration: config, referenceSelector: { urls in
             XCTAssertEqual(urls.map(\.lastPathComponent), ["a.fits", "b.fits"])
             return try StackReferenceSelector.choose(urls)
-        }
+        })
         try await coordinator.start()
         let first = await coordinator.currentSnapshot()
         XCTAssertEqual(first.acceptedFrames, 1)
         XCTAssertEqual(first.filter?.key, "hydrogen-alpha")
         try await coordinator.pauseAndSave()
         await coordinator.dispose()
-        let restored = try LiveStackCoordinator(configuration: config) { _ in
+        let restored = try LiveStackCoordinator(configuration: config, referenceSelector: { _ in
             XCTFail("A restored stack must not score a new reference")
             throw CancellationError()
-        }
+        })
         try await restored.start()
         let resumed = await restored.currentSnapshot()
         XCTAssertEqual(resumed.acceptedFrames, 1)
@@ -1495,13 +1525,13 @@ final class LiveStackCoordinatorTests: XCTestCase {
         config.choosesReferenceAutomatically = true
         config.monitorStabilityDuration = 0.01
         config.monitorScanInterval = 3600
-        let coordinator = try LiveStackCoordinator(configuration: config) { urls in
+        let coordinator = try LiveStackCoordinator(configuration: config, referenceSelector: { urls in
             let result = try StackReferenceSelector.choose(urls)
             var changed = try Data(contentsOf: light)
             changed.append(0)
             try changed.write(to: light)
             return result
-        }
+        })
         try await coordinator.start()
         let snapshot = await coordinator.currentSnapshot()
         XCTAssertEqual(snapshot.acceptedFrames, 0)
@@ -1631,6 +1661,21 @@ final class LiveStackCoordinatorTests: XCTestCase {
 // MARK: - Published 0.34 flat-quality bridge
 
 final class FlatQualityTests: XCTestCase {
+    func testCopiedReviewIncludesFindingsBeyondFiftyFlaggedFlats() {
+        let verdict = FlatQualityReport.Verdict(grade: "poor", findings: [
+            .init(code: "clipped", grade: "poor", value: 0.08, limit: 0.01)
+        ])
+        let paths = (1...52).map { "/flats/flat-\($0).fits" }
+        let report = FlatQualityReport(schemaVersion: 1, frames: Array(repeating: verdict, count: paths.count),
+            master: .init(grade: "ok", findings: []), steadyFeatures: 0, changingFeatures: 0, carriedFeatures: 0)
+        let review = FlatQualityReview(paths: paths, measurements: [], report: report)
+        let copied = review.notes.joined(separator: "\n\n")
+        XCTAssertTrue(copied.contains("flat-1.fits (poor): Clipped pixels: 8.00% (limit 1.00%)"))
+        XCTAssertTrue(copied.contains("flat-52.fits (poor): Clipped pixels: 8.00% (limit 1.00%)"))
+        XCTAssertEqual(review.notes.filter { $0.hasPrefix("flat-") }.count, 52)
+        XCTAssertFalse(copied.contains("additional flagged flats"))
+    }
+
     func testReviewSeparatesFrameIssuesFromDustDetails() throws {
         let json = #"{"schemaVersion":1,"frames":[{"grade":"ok","findings":[]},{"grade":"suspect","findings":[{"code":"dim","grade":"suspect","value":0.0381,"limit":0.1}]},{"grade":"poor","findings":[{"code":"clipped","grade":"poor","value":0.2,"limit":0.01}]}],"master":{"grade":"suspect","findings":[]},"steadyFeatures":2,"changingFeatures":1,"carriedFeatures":1}"#
         let report = try JSONDecoder().decode(FlatQualityReport.self, from: Data(json.utf8))
@@ -1710,5 +1755,229 @@ final class FlatQualityTests: XCTestCase {
         XCTAssertThrowsError(try CalibrationService.screenFlats([kept, wrongSize]))
         options.fullScale = 0
         XCTAssertThrowsError(try CalibrationService.measureFlat(FlatQualityMeasureRequest(path: file.path, options: options)))
+    }
+}
+
+final class LiveStackFilterSessionTests: XCTestCase {
+    private func setup() throws -> (URL, URL, LiveStackRunConfiguration) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let watch = root.appendingPathComponent("captures")
+        try FileManager.default.createDirectory(at: watch, withIntermediateDirectories: true)
+        var config = LiveStackRunConfiguration(watchFolder: watch.path,
+            sessionRootDirectory: root.appendingPathComponent("sessions"))
+        config.includeSubdirectories = true
+        config.monitorScanInterval = 0.02
+        config.monitorStabilityDuration = 0.01
+        config.checkpointAcceptedFrameInterval = 1
+        config.maximumReadAttempts = 1
+        return (root, watch, config)
+    }
+    private func light(_ name: String, filter: String?, in directory: URL) throws -> URL {
+        var cards = SyntheticFrame.lightCards(filter: filter ?? "")
+        if filter == nil { cards.removeAll { $0.hasPrefix("FILTER") } }
+        return try SyntheticFrame.write(width: 160, height: 128,
+            values: SyntheticFrame.noisyStarField(), cards: cards, directory: directory, name: name)
+    }
+    private func waitFor(_ session: LiveStackFilterSession,
+                         _ condition: (LiveStackFilterSessionSnapshot) -> Bool) async throws -> LiveStackFilterSessionSnapshot {
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline {
+            let state = await session.currentSnapshot()
+            if condition(state) { return state }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let state = await session.currentSnapshot()
+        XCTFail("Timed out: \(state.status), groups: \(state.groups.map { "\($0.filter.key)=\($0.snapshot.acceptedFrames):\($0.snapshot.statusMessage)" })")
+        throw CancellationError()
+    }
+
+    func testRecursiveGroupsFinishIndependentlyAndResumeWithoutSources() async throws {
+        let (root, watch, config) = try setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let nested = watch.appendingPathComponent("night")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        _ = try light("first.fits", filter: "Ha", in: watch)
+        _ = try light("second.fits", filter: "OIII", in: nested)
+        _ = try light("unknown.fits", filter: nil, in: nested)
+        let session = try LiveStackFilterSession(configuration: config)
+        try await session.start()
+        let state = try await waitFor(session) { $0.groups.count == 3 && $0.groups.allSatisfy { $0.snapshot.acceptedFrames == 1 } }
+        XCTAssertEqual(Set(state.groups.map(\.id)), ["hydrogen-alpha", "oxygen-iii", "unfiltered"])
+        try await session.setPreviewStretch(.layered)
+        // Parent snapshots arrive through an AsyncStream; query the completed
+        // child render rather than racing that stream's UI notification.
+        let optionalReferenceChild = await session.coordinator(for: "unfiltered")
+        let referenceChild = try XCTUnwrap(optionalReferenceChild)
+        let referenceSnapshot = await referenceChild.currentSnapshot()
+        let expectedPreview = try XCTUnwrap(referenceSnapshot.preview?.rgba)
+        let other = try LiveStackFilterSession(configuration: config)
+        do { try await other.start(); XCTFail("A second window must not own the registry") } catch {}
+        await other.dispose()
+        do {
+            _ = try await session.saveSnapshot(for: "hydrogen-alpha", to: nested.appendingPathComponent("output.fits").path)
+            XCTFail("Outputs inside the capture tree must be rejected")
+        } catch {}
+        let alias = root.appendingPathComponent("other-filter-alias.fits")
+        try FileManager.default.linkItem(at: nested.appendingPathComponent("second.fits"), to: alias)
+        do { _ = try await session.saveSnapshot(for: "hydrogen-alpha", to: alias.path); XCTFail("Other filters' input aliases are protected") } catch {}
+        let registryAlias = root.appendingPathComponent("registry-alias.fits")
+        try FileManager.default.linkItem(at: config.sessionRootDirectory.appendingPathComponent("filters.json"), to: registryAlias)
+        do { _ = try await session.saveSnapshot(for: "hydrogen-alpha", to: registryAlias.path); XCTFail("Registry aliases are protected") } catch {}
+        let output = root.appendingPathComponent("ha.fits")
+        _ = try await session.finish("hydrogen-alpha", to: output.path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: output.path))
+        _ = try light("second-oxygen.fits", filter: "OIII", in: nested)
+        _ = try light("new-sulfur.fits", filter: "SII", in: nested)
+        _ = try light("later-ha.fits", filter: "Ha", in: nested)
+        let expanded = try await waitFor(session) { state in
+            state.groups.count == 4 && state.groups.first { $0.id == "oxygen-iii" }?.snapshot.acceptedFrames == 2
+                && state.groups.first { $0.id == "sulfur-ii" }?.snapshot.acceptedFrames == 1
+                && state.groups.first { $0.id == "sulfur-ii" }?.snapshot.preview != nil
+        }
+        XCTAssertEqual(expanded.groups.first { $0.id == "sulfur-ii" }?.snapshot.preview?.rgba, expectedPreview,
+            "A newly discovered group inherits the session's current Layered preview")
+        try await session.pauseAndSave()
+        await session.dispose()
+        try FileManager.default.removeItem(at: watch)
+        try FileManager.default.createDirectory(at: watch, withIntermediateDirectories: true)
+        let resumed = try LiveStackFilterSession(configuration: config)
+        try await resumed.start()
+        let restored = try await waitFor(resumed) { state in
+            state.groups.count == 4 && state.groups.first { $0.id == "oxygen-iii" }?.snapshot.acceptedFrames == 2
+                && state.groups.first { $0.id == "unfiltered" }?.snapshot.acceptedFrames == 1
+        }
+        let completed = try XCTUnwrap(restored.groups.first { $0.id == "hydrogen-alpha" })
+        XCTAssertTrue(completed.completed)
+        XCTAssertEqual(completed.snapshot.acceptedFrames, 1)
+        XCTAssertEqual(completed.outputPath, output.path)
+        try await resumed.pauseAndSave()
+        await resumed.dispose()
+    }
+
+    func testCalibrationFailureIsIsolatedToItsFilter() async throws {
+        actor Attempts {
+            var count = 0
+            func record() { count += 1 }
+        }
+        let (root, watch, originalConfig) = try setup()
+        var config = originalConfig
+        config.choosesReferenceAutomatically = true
+        let attempts = Attempts()
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try light("a.fits", filter: "Ha", in: watch)
+        _ = try light("b.fits", filter: "OIII", in: watch)
+        let session = try LiveStackFilterSession(configuration: config) { probe in
+            if LiveStackFilterIdentity.fromProbe(probe).key == "oxygen-iii" {
+                await attempts.record()
+                throw LiveStackRunError.invalidConfiguration("Test calibration failure for oxygen")
+            }
+            return ImageStackCalibration()
+        }
+        try await session.start()
+        let state = try await waitFor(session) { state in
+            state.groups.first { $0.id == "hydrogen-alpha" }?.snapshot.acceptedFrames == 1
+                && state.groups.first { $0.id == "oxygen-iii" }?.snapshot.state == .faulted
+        }
+        XCTAssertEqual(state.groups.first { $0.id == "oxygen-iii" }?.snapshot.acceptedFrames, 0)
+        XCTAssertEqual(state.groups.first { $0.id == "oxygen-iii" }?.snapshot.unreadableFrames, 0)
+        XCTAssertTrue(state.groups.first { $0.id == "oxygen-iii" }?.snapshot.attention.contains {
+            $0.message.contains("Test calibration failure")
+        } ?? false)
+        let count = await attempts.count
+        XCTAssertEqual(count, 1, "Automatic reference selection must not retry a calibration failure through first-light fallback")
+        try await session.pauseAndSave()
+        await session.dispose()
+    }
+
+    @MainActor
+    func testPauseAndCloseSuppressQueuedCalibrationReviews() async throws {
+        for close in [false, true] {
+            let (root, watch, _) = try setup()
+            defer { try? FileManager.default.removeItem(at: root) }
+            _ = try light("ha.fits", filter: "Ha", in: watch)
+            _ = try light("oxygen.fits", filter: "OIII", in: watch)
+            let library = root.appendingPathComponent("empty-library")
+            try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+            let model = LiveStackWindowModel(initialFolder: watch)
+            model.separatesFilters = true
+            model.calibrationMode = .automatic
+            model.calibrationLibrary = library
+            var closed = false
+            model.requestClose = { closed = true }
+            model.start()
+            let reviewDeadline = Date().addingTimeInterval(15)
+            while model.pendingWarnings == nil, Date() < reviewDeadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertNotNil(model.pendingWarnings, "The first filter should request calibration review")
+            if close { XCTAssertFalse(model.canCloseImmediately()) }
+            else { model.pauseOrResume() }
+            let stopDeadline = Date().addingTimeInterval(5)
+            while !(close ? closed : model.allFiltersPaused && !model.isBusy), Date() < stopDeadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertNil(model.pendingWarnings, "A queued filter must not open another review while stopping")
+            if close { XCTAssertTrue(closed) }
+            else {
+                XCTAssertTrue(model.allFiltersPaused)
+                XCTAssertFalse(model.isBusy)
+                _ = model.canCloseImmediately()
+            }
+            // Drain a review if the assertion failed, so regression failures
+            // cannot leave a native operation/lease waiting in the test app.
+            model.resolveWarnings(proceed: false)
+            let closeDeadline = Date().addingTimeInterval(5)
+            while !closed, Date() < closeDeadline {
+                model.resolveWarnings(proceed: false)
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+    }
+
+    func testCancelledCalibrationPausesOnlyThatFilterWithoutRetryingReview() async throws {
+        actor Attempts {
+            var count = 0
+            func record() { count += 1 }
+        }
+        let (root, watch, originalConfig) = try setup()
+        var config = originalConfig
+        config.choosesReferenceAutomatically = true
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try light("a.fits", filter: "Ha", in: watch)
+        _ = try light("b.fits", filter: "OIII", in: watch)
+        let attempts = Attempts()
+        let session = try LiveStackFilterSession(configuration: config) { probe in
+            if LiveStackFilterIdentity.fromProbe(probe).key == "oxygen-iii" {
+                await attempts.record()
+                throw CancellationError()
+            }
+            return ImageStackCalibration()
+        }
+        try await session.start()
+        let state = try await waitFor(session) { state in
+            state.groups.first { $0.id == "hydrogen-alpha" }?.snapshot.acceptedFrames == 1
+                && state.groups.first { $0.id == "oxygen-iii" }?.snapshot.state == .paused
+        }
+        let oxygen = try XCTUnwrap(state.groups.first { $0.id == "oxygen-iii" })
+        XCTAssertEqual(oxygen.snapshot.unreadableFrames, 0)
+        XCTAssertEqual(oxygen.snapshot.acceptedFrames, 0)
+        XCTAssertTrue(oxygen.snapshot.attention.contains { $0.message.contains("cancelled") })
+        try await Task.sleep(for: .milliseconds(100))
+        let count = await attempts.count
+        XCTAssertEqual(count, 1)
+        try await session.pauseAndSave()
+        await session.dispose()
+    }
+
+    func testRegistryRejectsUnsupportedOrInconsistentIdentity() async throws {
+        let (root, _, config) = try setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: config.sessionRootDirectory, withIntermediateDirectories: true)
+        let registry = config.sessionRootDirectory.appendingPathComponent("filters.json")
+        let data = Data("{\"schemaVersion\":1,\"filters\":[{\"name\":\"Ha\",\"key\":\"oxygen-iii\",\"completed\":false,\"acceptedFrames\":0}]}".utf8)
+        try data.write(to: registry)
+        let session = try LiveStackFilterSession(configuration: config)
+        do { try await session.start(); XCTFail("An inconsistent filter identity must fail") } catch {}
+        await session.dispose()
     }
 }
