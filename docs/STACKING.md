@@ -95,3 +95,40 @@ Per-channel mode is rejected; RGB users can also select Preserve Luminance Color
 Live Stack offers Auto MTF, Median Anchor and Layered before and during a run.
 Changing that choice only redraws the preview: physical sample-domain mapping,
 linear accumulation, checkpoints and saved FITS pixels remain unchanged.
+
+## Independent live stacks by filter
+
+Enable **Separate stacks by filter** in Live Stack, and **Include subfolders**
+when capture files are nested. Metadata filter names take precedence over filename
+fallbacks; absent filter information goes to **Unfiltered**. Each discovered
+filter owns its accumulator, reference light, preview, admission ledger,
+calibration history and checkpoint. The Filter picker shows each group's count
+and completed status. Existing single-stack behavior and checkpoints remain the
+default when the option is off.
+
+Automatic calibration is matched independently to each filter's first light;
+quality reviews are presented sequentially. Manual masters apply to every group
+and must be compatible. An optional shared alignment image gives all filters a
+common canvas without mixing their brightness/noise normalization. At most two
+group startup/ingestion operations run concurrently. A failing filter does not
+stop the other groups.
+
+**Pause and Save All** stops discovery and checkpoints every unfinished group.
+**Resume All Filters** restarts them. Snapshot and Finish affect the selected
+filter; finishing opens its output and leaves the other filters running.
+Completed groups retain their output location and do not restart when more files
+of that filter arrive. A saved session restores completed and unfiltered groups
+even when the original capture files are no longer present. One window owns a
+capture session at a time.
+
+Save outputs outside both the capture tree and session checkpoint tree. The
+preflight also rejects hard-link/symlink aliases to any group's protected inputs
+or checkpoint metadata. A completion record is saved before retiring the native
+checkpoint; a failed completion write retains the checkpoint for recovery.
+
+Native regressions cover recursive discovery, filter isolation, late groups
+inheriting the chosen display stretch, independent finish, continued ingestion,
+source-less resume, exclusive ownership, per-filter calibration failure/cancellation and
+cross-group output protection. Cancelling a calibration review pauses only that
+filter and does not retry the review or count the light as unreadable. The UI was exercised with H-alpha, OIII and
+Unfiltered lights, including finish, pause and resume.

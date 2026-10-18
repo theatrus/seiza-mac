@@ -7,6 +7,7 @@ struct LiveStackRunConfiguration: Sendable {
     var sessionRootDirectory: URL
     var groupId = "live"
     var groupTitle = "Live stack"
+    var targetFilter: LiveStackFilterIdentity? = nil
     var includeSubdirectories = false
     var resumeExisting = true
     var applyCalibrationOnResume = false
@@ -290,6 +291,9 @@ final class AsyncGate: @unchecked Sendable {
 actor LiveStackCoordinator {
     private let configuration: LiveStackRunConfiguration
     private var previewProcessingJSON: String
+    private let sharedProcessingGate: AsyncGate?
+    private let prepareCalibration: (@Sendable (CalibrationFrameProbe) async throws -> ImageStackCalibration)?
+    private var calibrationPrepared = false
     private let referenceSelector: @Sendable ([URL]) throws -> StackReferenceSelection
     private let store: LiveStackSessionStore
     private let monitor: StackFolderMonitor
@@ -342,6 +346,8 @@ actor LiveStackCoordinator {
 
     init(
         configuration: LiveStackRunConfiguration,
+        sharedProcessingGate: AsyncGate? = nil,
+        prepareCalibration: (@Sendable (CalibrationFrameProbe) async throws -> ImageStackCalibration)? = nil,
         referenceSelector: @escaping @Sendable ([URL]) throws -> StackReferenceSelection = { try StackReferenceSelector.choose($0) }
     ) throws {
         if let message = configuration.validationMessage() {
@@ -353,6 +359,9 @@ actor LiveStackCoordinator {
             .map { LiveStackPath.normalize($0) }
         normalized.referenceImagePath = StackInputProtection.referenceIdentity(configuration.referenceImagePath)
         self.configuration = normalized
+        self.sharedProcessingGate = sharedProcessingGate
+        self.prepareCalibration = prepareCalibration
+        self.lockedFilter = normalized.targetFilter
         self.previewProcessingJSON = normalized.previewProcessingJSON
         self.activeReferenceImagePath = normalized.referenceImagePath
         self.referenceSelector = referenceSelector
@@ -492,6 +501,8 @@ actor LiveStackCoordinator {
         if ingestionTask != nil { return }
 
         if !initialized {
+            await sharedProcessingGate?.acquire()
+            defer { sharedProcessingGate?.release() }
             do {
                 try await initialize()
                 initialized = true
@@ -501,6 +512,11 @@ actor LiveStackCoordinator {
                     setState(.paused,
                         "Live-stack startup was cancelled; the open stack remains "
                             + "resumable.")
+                } else {
+                    if !Task.isCancelled, prepareCalibration != nil, !calibrationPrepared {
+                        addAttention("Calibration preparation was cancelled; this filter is paused.")
+                    }
+                    setState(.paused, "Live-stack startup was cancelled before integrating a light.")
                 }
                 throw CancellationError()
             } catch {
@@ -666,6 +682,7 @@ actor LiveStackCoordinator {
     private func manifestMatchesConfiguration(_ state: LiveStackPersistedState) -> Bool {
         state.groupId == configuration.groupId
             && LiveStackPath.equals(state.watchFolder, configuration.watchFolder)
+            && (configuration.targetFilter.map { $0.matches(.fromStoredName(state.filterName)) } ?? true)
             && state.includesSubdirectories == configuration.includeSubdirectories
             && state.stackOptionsJSON == (try? optionsJSON()) ?? ""
             && (configuration.referenceImagePath == nil
@@ -856,6 +873,7 @@ actor LiveStackCoordinator {
                     return probe
                 }
                 guard let probe else { continue }
+                if let target = config.targetFilter, !target.matches(.fromProbe(probe)) { continue }
                 if let anchor {
                     guard LiveStackFilterIdentity.fromProbe(anchor).matches(.fromProbe(probe)),
                         LiveStackCalibrationIdentity.mismatchReason(
@@ -949,6 +967,8 @@ actor LiveStackCoordinator {
 
     /// Handles one candidate; returns false when ingestion must stop.
     private func ingest(_ candidate: StackFileCandidate) async -> Bool {
+        await sharedProcessingGate?.acquire()
+        defer { sharedProcessingGate?.release() }
         await operationGate.acquire()
         defer { operationGate.release() }
         guard !checkpointBlocked else {
@@ -961,6 +981,9 @@ actor LiveStackCoordinator {
             return true
         } catch is CancellationError {
             monitor.retryNow(candidate.path)
+            if !Task.isCancelled, prepareCalibration != nil, !calibrationPrepared {
+                addAttention("Calibration preparation was cancelled; this filter is paused.")
+            }
             return false
         } catch {
             monitor.retryNow(candidate.path)
@@ -982,6 +1005,12 @@ actor LiveStackCoordinator {
             }
         } catch {
             completeReadFailure(candidate, message: error.localizedDescription)
+            return
+        }
+
+        if let target = configuration.targetFilter, !target.matches(.fromProbe(probe)) {
+            monitor.complete(candidate, disposition: .ignored)
+            finishCandidate("Waiting for \(target.displayName) lights.")
             return
         }
 
@@ -1056,9 +1085,15 @@ actor LiveStackCoordinator {
 
         if session == nil {
             do {
-                try await openReference(probe: probe, reason: "Reference frame")
+                try await openReference(probe: probe, reason: "Reference frame", expected: candidate)
                 monitor.complete(candidate, disposition: .accepted)
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
+                // Preparation/review failure belongs to the filter, not the
+                // light file. Stop it without retrying a modal review or
+                // marking an otherwise readable light as unreadable.
+                if prepareCalibration != nil, !calibrationPrepared { throw error }
                 completeReadFailure(candidate, message: error.localizedDescription)
                 return
             }
@@ -1077,6 +1112,15 @@ actor LiveStackCoordinator {
         guard FileManager.default.fileExists(atPath: probe.path) else {
             throw LiveStackRunError.invalidOperation(
                 "The reference frame is unavailable.")
+        }
+        if let target = configuration.targetFilter, !target.matches(.fromProbe(probe)) {
+            throw LiveStackRunError.invalidConfiguration("The reference belongs to a different filter.")
+        }
+        if !calibrationPrepared, let prepareCalibration {
+            setState(.processing, "Preparing calibration for \(configuration.targetFilter?.displayName ?? "this filter")…")
+            calibration = try await prepareCalibration(probe)
+            calibrationPrepared = true
+            seedCalibrationPaths()
         }
         let optionsJSONString = try optionsJSON()
         let referencePath = probe.path
@@ -1500,6 +1544,14 @@ actor LiveStackCoordinator {
         }
     }
 
+    func validateOutputPath(_ path: String) throws {
+        try ensureSafeOutputPath(path)
+        let paths = frames.map(\.path) + calibrationHistory.flatMap {
+            [$0.biasPath, $0.darkPath, $0.flatPath].compactMap { $0 }
+        } + [configuration.initialReferencePath, activeReferenceImagePath].compactMap { $0 }
+        try StackInputProtection.validate(output: URL(fileURLWithPath: path), sources: paths.map { URL(fileURLWithPath: $0) })
+    }
+
     private func ensureSafeOutputPath(_ path: String) throws {
         let normalized = LiveStackPath.normalize(path)
         if let image = activeReferenceImagePath {
@@ -1596,7 +1648,7 @@ actor LiveStackCoordinator {
     /// Finalizes the accumulator into its published FITS output, then
     /// retires the session. A failure after finalization leaves the
     /// pre-finalization checkpoint recoverable in a reopened window.
-    func finish(to path: String) async throws -> LiveStackExportResult {
+    func finish(to path: String, beforeRetiring: (@Sendable (LiveStackExportResult) async throws -> Void)? = nil) async throws -> LiveStackExportResult {
         await lifecycleGate.acquire()
         defer { lifecycleGate.release() }
         guard state != .completed else {
@@ -1659,6 +1711,15 @@ actor LiveStackCoordinator {
 
         monitor.seedProcessedPaths([normalized])
         exportedPaths.append(normalized)
+        if let beforeRetiring {
+            do {
+                try await beforeRetiring(.init(outputPath: normalized, acceptedFrames: acceptedAtFinish,
+                    rejectedFrames: nativeRejectedFrames + policyRejectedFrames, transientNote: transientNote))
+            } catch {
+                setState(.needsAttention, "The output was saved, but session completion could not be recorded. Reopen the saved checkpoint.")
+                throw error
+            }
+        }
         do {
             try await store.retire(sessionId: sessionId)
         } catch {
@@ -1753,5 +1814,323 @@ actor LiveStackCoordinator {
 private extension StackFileCandidate {
     var fileName: String {
         URL(fileURLWithPath: path).lastPathComponent
+    }
+}
+
+// MARK: - A capture session with one independent accumulator per filter
+
+struct LiveStackFilterGroupSnapshot: Identifiable, Sendable {
+    var id: String { filter.key }
+    var filter: LiveStackFilterIdentity
+    var snapshot = LiveStackRunSnapshot()
+    var completed = false
+    var error: String?
+    var outputPath: String?
+    var displayTitle: String {
+        "\(filter.displayName) · \(snapshot.acceptedFrames.formatted()) \(snapshot.acceptedFrames == 1 ? "frame" : "frames")\(completed ? " · Complete" : "")"
+    }
+}
+
+struct LiveStackFilterSessionSnapshot: Sendable {
+    var groups: [LiveStackFilterGroupSnapshot]
+    var paused: Bool
+    var status: String
+}
+
+/// Owns discovery and the registry. Child coordinators retain their own native
+/// accumulator, admission gates, calibration history and checkpoint lease.
+actor LiveStackFilterSession {
+    private struct Entry: Codable {
+        var name: String?
+        var key: String
+        var completed: Bool
+        var acceptedFrames: Int
+        var rejectedFrames: Int?
+        var ignoredFrames: Int?
+        var unreadableFrames: Int?
+        var outputPath: String?
+    }
+    private struct Registry: Codable { var schemaVersion = 1; var filters: [Entry] }
+    private let configuration: LiveStackRunConfiguration
+    private let prepareCalibration: (@Sendable (CalibrationFrameProbe) async throws -> ImageStackCalibration)?
+    private let calibrationGate = AsyncGate()
+    // Assign children to two FIFO gates: at most two startup/ingestion calls
+    // can enter native work, regardless of how many filters are discovered.
+    private let processingGates = [AsyncGate(), AsyncGate()]
+    private let monitor: StackFolderMonitor
+    private let registryURL: URL
+    private var lease: CalibrationFileLease?
+    private var groups: [String: LiveStackFilterGroupSnapshot] = [:]
+    private var children: [String: LiveStackCoordinator] = [:]
+    private var observations: [String: Task<Void, Never>] = [:]
+    private var starts: [String: Task<Void, Never>] = [:]
+    private var discovery: Task<Void, Never>?
+    private let lifecycleGate = AsyncGate()
+    private var loaded = false
+    private let previewGate = AsyncGate()
+    private var disposed = false
+    private var paused = true
+    private var previewStretch: FITSStretchType?
+    private var status = "Waiting for filter groups."
+    private var continuations: [UUID: AsyncStream<LiveStackFilterSessionSnapshot>.Continuation] = [:]
+
+    init(configuration: LiveStackRunConfiguration,
+         prepareCalibration: (@Sendable (CalibrationFrameProbe) async throws -> ImageStackCalibration)? = nil) throws {
+        if let message = configuration.validationMessage() { throw LiveStackRunError.invalidConfiguration(message) }
+        self.configuration = configuration
+        self.prepareCalibration = prepareCalibration
+        registryURL = configuration.sessionRootDirectory.appendingPathComponent("filters.json")
+        monitor = StackFolderMonitor(configuration: .init(watchFolder: configuration.watchFolder,
+            includeSubdirectories: configuration.includeSubdirectories,
+            excludedPaths: configuration.monitorExcludedPaths(),
+            excludedDirectories: [configuration.sessionRootDirectory.path],
+            scanInterval: configuration.monitorScanInterval,
+            tracker: .init(minimumStableDuration: configuration.monitorStabilityDuration)))
+    }
+
+    func currentSnapshot() -> LiveStackFilterSessionSnapshot {
+        .init(groups: groups.values.sorted { $0.filter.displayName.localizedStandardCompare($1.filter.displayName) == .orderedAscending },
+              paused: paused, status: status)
+    }
+
+    func snapshots() -> AsyncStream<LiveStackFilterSessionSnapshot> {
+        let id = UUID()
+        return AsyncStream { continuation in
+            continuations[id] = continuation
+            continuation.yield(currentSnapshot())
+            continuation.onTermination = { [weak self] _ in Task { await self?.removeContinuation(id) } }
+        }
+    }
+    private func removeContinuation(_ id: UUID) { continuations[id] = nil }
+    private func publish() { let snapshot = currentSnapshot(); for continuation in continuations.values { continuation.yield(snapshot) } }
+    func coordinator(for key: String) -> LiveStackCoordinator? { children[key] }
+
+    private func addGroup(_ filter: LiveStackFilterIdentity, completed: Bool = false,
+                          acceptedFrames: Int = 0, outputPath: String? = nil) throws {
+        guard children[filter.key] == nil else { return }
+        var config = configuration
+        config.groupId = "filter-" + filter.key
+        config.groupTitle = filter.displayName
+        config.targetFilter = filter
+        if let previewStretch { config.previewProcessingJSON = try LiveStackRunConfiguration.previewProcessingJSON(for: previewStretch) }
+        config.initialReferencePath = nil
+        config.applyCalibrationOnResume = prepareCalibration == nil && configuration.applyCalibrationOnResume
+        let gate = calibrationGate
+        let prepare = prepareCalibration
+        let callback: (@Sendable (CalibrationFrameProbe) async throws -> ImageStackCalibration)? = prepare.map { operation in
+            { probe in
+                await gate.acquire()
+                defer { gate.release() }
+                try Task.checkCancellation()
+                return try await operation(probe)
+            }
+        }
+        let child = try LiveStackCoordinator(configuration: config,
+            sharedProcessingGate: processingGates[children.count % processingGates.count], prepareCalibration: callback)
+        children[filter.key] = child
+        var value = LiveStackFilterGroupSnapshot(filter: filter, completed: completed, outputPath: outputPath)
+        if completed { value.snapshot.state = .completed; value.snapshot.acceptedFrames = acceptedFrames; value.snapshot.statusMessage = "Completed stack" }
+        groups[filter.key] = value
+        if !completed {
+            observations[filter.key] = Task { [weak self] in
+                for await snapshot in await child.snapshots() { await self?.update(filter.key, snapshot: snapshot) }
+            }
+        }
+    }
+
+    private func update(_ key: String, snapshot: LiveStackRunSnapshot) {
+        guard !disposed, groups[key] != nil else { return }
+        groups[key]?.snapshot = snapshot
+        publish()
+    }
+    private func recordError(_ key: String, _ message: String) { groups[key]?.error = message; publish() }
+    private func startChild(_ key: String) {
+        guard let child = children[key], groups[key]?.completed == false, starts[key] == nil else { return }
+        groups[key]?.error = nil
+        starts[key] = Task { [weak self] in
+            do { try await child.start() }
+            catch is CancellationError {}
+            catch { await self?.recordError(key, error.localizedDescription) }
+            await self?.finishedStarting(key)
+        }
+    }
+    private func finishedStarting(_ key: String) { starts[key] = nil }
+
+    func start() async throws {
+        await lifecycleGate.acquire(); defer { lifecycleGate.release() }
+        guard !disposed else { throw LiveStackSessionError.closed }
+        guard paused else { return }
+        if lease == nil {
+            try FileManager.default.createDirectory(at: configuration.sessionRootDirectory, withIntermediateDirectories: true)
+            guard let acquired = CalibrationFileLease.tryAcquireExclusive(at: configuration.sessionRootDirectory.appendingPathComponent("filters.lock")) else {
+                throw LiveStackRunError.invalidOperation("This multi-filter capture session is already open in another window.")
+            }
+            lease = acquired
+        }
+        if !loaded {
+            if configuration.resumeExisting, FileManager.default.fileExists(atPath: registryURL.path) {
+                let registry = try JSONDecoder().decode(Registry.self, from: Data(contentsOf: registryURL))
+                guard registry.schemaVersion == 1 else { throw LiveStackRunError.invalidConfiguration("Unsupported live filter registry.") }
+                var keys = Set<String>()
+                for entry in registry.filters {
+                    let filter = LiveStackFilterIdentity.fromStoredName(entry.name)
+                    guard filter.key == entry.key, keys.insert(entry.key).inserted else {
+                        throw LiveStackRunError.invalidConfiguration("The saved filter registry is inconsistent.")
+                    }
+                }
+                for entry in registry.filters {
+                    let filter = LiveStackFilterIdentity.fromStoredName(entry.name)
+                    try addGroup(filter, completed: entry.completed,
+                                 acceptedFrames: entry.acceptedFrames, outputPath: entry.outputPath)
+                    if entry.completed {
+                        groups[filter.key]?.snapshot.rejectedFrames = entry.rejectedFrames ?? 0
+                        groups[filter.key]?.snapshot.ignoredFrames = entry.ignoredFrames ?? 0
+                        groups[filter.key]?.snapshot.unreadableFrames = entry.unreadableFrames ?? 0
+                    }
+                }
+            }
+            loaded = true
+        }
+        paused = false
+        for key in children.keys { startChild(key) }
+        let candidates = monitor.candidates()
+        discovery = Task { [weak self] in
+            for await candidate in candidates {
+                if Task.isCancelled { break }
+                await self?.discover(candidate)
+            }
+        }
+        status = "Watching all filters; new groups appear as complete lights arrive."
+        publish()
+    }
+
+    private func discover(_ candidate: StackFileCandidate) async {
+        guard !disposed, !paused else { return }
+        do {
+            let probe = try await runBlocking { try CalibrationService.probe(path: candidate.path) }
+            guard !disposed, !paused, monitor.isCandidateCurrent(candidate), StackFolderMonitor.isUnchanged(candidate) else { return }
+            if CalibrationLightEligibility.ineligibilityReason(probe) == nil {
+                let filter = LiveStackFilterIdentity.fromProbe(probe)
+                if children[filter.key] == nil { try addGroup(filter) }
+                if groups[filter.key]?.completed == false, groups[filter.key]?.snapshot.state == .created, starts[filter.key] == nil {
+                    // Persist before starting a native accumulator.
+                    try saveRegistry()
+                    startChild(filter.key)
+                    status = "Discovered \(filter.displayName); watching \(groups.count) filter groups."
+                    publish()
+                }
+            }
+            monitor.complete(candidate, disposition: .accepted)
+        } catch {
+            monitor.complete(candidate, disposition: .retryableFailure)
+            status = "Could not inspect \(URL(fileURLWithPath: candidate.path).lastPathComponent): \(error.localizedDescription)"
+            publish()
+        }
+    }
+
+    private func saveRegistry() throws {
+        let entries = currentSnapshot().groups.map {
+            Entry(name: $0.filter.source == .unspecified ? nil : $0.filter.displayName,
+                  key: $0.filter.key, completed: $0.completed,
+                  acceptedFrames: $0.snapshot.acceptedFrames, rejectedFrames: $0.snapshot.rejectedFrames,
+                  ignoredFrames: $0.snapshot.ignoredFrames, unreadableFrames: $0.snapshot.unreadableFrames,
+                  outputPath: $0.outputPath)
+        }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        try encoder.encode(Registry(filters: entries)).write(to: registryURL, options: .atomic)
+    }
+
+    func pauseAndSave() async throws {
+        await lifecycleGate.acquire(); defer { lifecycleGate.release() }
+        paused = true
+        discovery?.cancel(); monitor.stop()
+        await discovery?.value; discovery = nil
+        let starting = Array(starts.values)
+        for task in starting { task.cancel() }
+        for task in starting { await task.value }
+        var failures: [String] = []
+        for (key, child) in children where groups[key]?.completed == false {
+            do { try await child.pauseAndSave() }
+            catch { failures.append("\(groups[key]?.filter.displayName ?? key): \(error.localizedDescription)") }
+            let snapshot = await child.currentSnapshot()
+            groups[key]?.snapshot = snapshot
+        }
+        try saveRegistry()
+        status = failures.isEmpty ? "All filter stacks paused and saved." : failures.joined(separator: "\n")
+        publish()
+        if !failures.isEmpty { throw LiveStackRunError.checkpointFailed(status) }
+    }
+
+    private func validateOutputPath(_ path: String) async throws {
+        let root = URL(fileURLWithPath: configuration.watchFolder).resolvingSymlinksInPath().standardizedFileURL.path
+        let output = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+        guard output != root, !output.hasPrefix(root + "/") else {
+            throw LiveStackRunError.unsafeOutputPath("Save outputs outside the capture folder so no filter ingests an exported stack.")
+        }
+        let sessionRoot = configuration.sessionRootDirectory.resolvingSymlinksInPath().standardizedFileURL.path
+        guard output != sessionRoot, !output.hasPrefix(sessionRoot + "/") else {
+            throw LiveStackRunError.unsafeOutputPath("Choose an output outside the session checkpoint folder.")
+        }
+        var metadata = [registryURL]
+        if let files = FileManager.default.enumerator(at: configuration.sessionRootDirectory,
+                includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]) {
+            for case let url as URL in files {
+                let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                if values?.isSymbolicLink == true { files.skipDescendants() }
+                if values?.isRegularFile == true { metadata.append(url) }
+            }
+        }
+        try StackInputProtection.validate(output: URL(fileURLWithPath: path), sources: metadata)
+        for child in children.values { try await child.validateOutputPath(path) }
+    }
+
+    func saveSnapshot(for key: String, to path: String) async throws -> LiveStackExportResult {
+        guard let child = children[key], groups[key]?.completed == false else { throw LiveStackSessionError.closed }
+        try await validateOutputPath(path)
+        return try await child.saveSnapshot(to: path)
+    }
+
+    func finish(_ key: String, to path: String) async throws -> LiveStackExportResult {
+        await lifecycleGate.acquire(); defer { lifecycleGate.release() }
+        guard let child = children[key], groups[key]?.completed == false else { throw LiveStackSessionError.closed }
+        try await validateOutputPath(path)
+        let result = try await child.finish(to: path) { result in try await self.recordCompletion(key, result: result) }
+        let snapshot = await child.currentSnapshot()
+        groups[key]?.snapshot = snapshot
+        publish()
+        return result
+    }
+
+    private func recordCompletion(_ key: String, result: LiveStackExportResult) throws {
+        groups[key]?.completed = true
+        groups[key]?.outputPath = result.outputPath
+        groups[key]?.snapshot.state = .completed
+        groups[key]?.snapshot.acceptedFrames = result.acceptedFrames
+        do { try saveRegistry() }
+        catch { groups[key]?.completed = false; publish(); throw error }
+        publish()
+    }
+
+    func setPreviewStretch(_ type: FITSStretchType) async throws {
+        await previewGate.acquire(); defer { previewGate.release() }
+        _ = try LiveStackRunConfiguration.previewProcessingJSON(for: type)
+        previewStretch = type
+        for (key, child) in children where groups[key]?.completed == false { try await child.setPreviewStretch(type) }
+    }
+
+    func dispose() async {
+        await lifecycleGate.acquire(); defer { lifecycleGate.release() }
+        guard !disposed else { return }
+        paused = true; discovery?.cancel(); monitor.stop()
+        await discovery?.value; discovery = nil
+        let starting = Array(starts.values)
+        for task in starting { task.cancel() }
+        for task in starting { await task.value }
+        for child in children.values { await child.dispose() }
+        for task in observations.values { task.cancel() }
+        observations.removeAll(); children.removeAll()
+        lease?.release(); lease = nil; disposed = true
+        for continuation in continuations.values { continuation.finish() }
+        continuations.removeAll()
     }
 }

@@ -95,8 +95,9 @@ A fit can return `no_shadows` or `unfitted`; these are inconclusive evidence,
 not a passing review. This update does not silently start using these APIs to
 replace flats. The existing frame review retains original selection and units.
 
-Compared with Windows #66, further desktop work includes Median Anchor and
-Layered controls, persistent RC-Astro settings, and multi-filter live sessions.
+The Windows #66 parity work adds Median Anchor/Layered controls and independent
+multi-filter live sessions; persistent RC-Astro settings are in a separate Mac PR.
+See [DESKTOP-PARITY.md](DESKTOP-PARITY.md) for scope and merge order.
 Core 0.39 also exports stacking/stretch output versions, automatic sensor-defect
 learning, and one-step Gaia colour calibration plus stretch. Existing Mac
 master/thumbnail cache identities include the full core release, conservatively
