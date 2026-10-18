@@ -1880,6 +1880,24 @@ final class RenderBoundaryTests: XCTestCase {
         }
     }
 
+    func testAdvancedStretchesRenderThroughNativeImagePipeline() throws {
+        let size = 32
+        let values: [Int16] = (0..<(size * size)).map { index in Int16(-30000 + (index % 257) * 30) }
+        let url = try writeSyntheticFITS(width: size, height: size, values: values)
+        defer { try? FileManager.default.removeItem(at: url) }
+        var outputs: [Data] = []
+        for type in [FITSStretchType.medianAnchor, .layered] {
+            var stage = FITSStretchConfiguration.default; stage.type = type
+            let processing = FITSImageProcessingConfiguration(stretchStack: FITSStretchStack(stages: [stage]), extractsBackground: false)
+            let rendered = try SeizaCore.render16(url: url, maxDimension: 4096, processing: processing)
+            XCTAssertEqual(rendered.image.width, size)
+            XCTAssertEqual(rendered.image.height, size)
+            XCTAssertEqual(rendered.image.bitsPerComponent, 16)
+            outputs.append(try XCTUnwrap(rendered.image.dataProvider?.data) as Data)
+        }
+        XCTAssertNotEqual(outputs[0], outputs[1], "The two native models produce distinct display pixels")
+    }
+
     private func writeSyntheticFITS(
         width: Int,
         height: Int,
@@ -1978,6 +1996,38 @@ final class RenderBoundaryTests: XCTestCase {
 }
 
 final class FITSStretchConfigurationTests: XCTestCase {
+    func testAdvancedStretchDefaultsNullSigmaAndValidation() throws {
+        var anchor = FITSStretchConfiguration.default
+        anchor.type = .medianAnchor
+        anchor.blackPointSigma = nil
+        anchor.curvesBoost = 0.3; anchor.hdrAmount = 0.4; anchor.normalize = true
+        XCTAssertEqual(try JSONDecoder().decode(FITSStretchConfiguration.self, from: anchor.jsonData), anchor)
+        anchor.hdrKnee = 1
+        XCTAssertNotNil(anchor.validationMessage)
+        var layered = FITSStretchConfiguration.default
+        layered.type = .layered
+        XCTAssertEqual(layered.colorStrategy, .linked)
+        XCTAssertNil(layered.validationMessage)
+        layered.colorStrategy = .unlinked
+        XCTAssertNotNil(layered.validationMessage)
+        XCTAssertThrowsError(try JSONDecoder().decode(FITSStretchConfiguration.self, from: layered.jsonData))
+        layered.colorStrategy = .linked; layered.scaleSeparation = 7
+        XCTAssertNotNil(layered.validationMessage)
+    }
+
+    func testLivePreviewStretchesRetainPhysicalDomainAndNativeModels() throws {
+        for type in LiveStackRunConfiguration.previewStretchTypes {
+            let json = try LiveStackRunConfiguration.previewProcessingJSON(for: type)
+            let request = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+            let domain = try XCTUnwrap(request["sample_domain"] as? [String: Any])
+            XCTAssertEqual(domain["type"] as? String, "physical-linear")
+            let stages = try XCTUnwrap(request["stretch"] as? [[String: Any]])
+            let stage = try JSONDecoder().decode(FITSStretchConfiguration.self, from: JSONSerialization.data(withJSONObject: stages[0]))
+            XCTAssertEqual(stage.type, type)
+            XCTAssertNil(stage.validationMessage)
+        }
+    }
+
     func testImageEditCoordinatorSharesAvailabilityAndRequests() {
         let coordinator = ImageEditCommandCoordinator()
         var availabilityChanges = 0
@@ -2058,12 +2108,12 @@ final class FITSStretchConfigurationTests: XCTestCase {
     }
 
     func testStretchFamiliesRemainGroupedAndEncodeTheirUpstreamNames() throws {
-        XCTAssertEqual(FITSStretchType.automatic, [.autoMtf, .percentileAsinh])
+        XCTAssertEqual(FITSStretchType.automatic, [.autoMtf, .medianAnchor, .layered, .percentileAsinh])
         XCTAssertEqual(FITSStretchType.manual, [.linear, .asinh, .mtf, .ghs])
         XCTAssertEqual(FITSStretchType.utility, [.identity])
 
         let expectedNames = [
-            "auto-mtf", "percentile-asinh", "linear", "asinh", "mtf", "ghs", "identity",
+            "auto-mtf", "median-anchor", "layered", "percentile-asinh", "linear", "asinh", "mtf", "ghs", "identity",
         ]
         let encodedNames = try FITSStretchType.allCases.map { type in
             var configuration = FITSStretchConfiguration.default

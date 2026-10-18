@@ -36,6 +36,19 @@ struct LiveStackRunConfiguration: Sendable {
         "max_analysis_samples":200000}]}
         """
 
+    static let previewStretchTypes: [FITSStretchType] = [.autoMtf, .medianAnchor, .layered]
+
+    static func previewProcessingJSON(for type: FITSStretchType) throws -> String {
+        guard previewStretchTypes.contains(type) else {
+            throw LiveStackRunError.invalidConfiguration("Choose an automatic live preview stretch.")
+        }
+        var stage = FITSStretchConfiguration.default
+        stage.type = type
+        var request = try JSONSerialization.jsonObject(with: Data(defaultPreviewProcessingJSON.utf8)) as! [String: Any]
+        request["stretch"] = [try JSONSerialization.jsonObject(with: stage.jsonData)]
+        return String(decoding: try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys]), as: UTF8.self)
+    }
+
     func validationMessage() -> String? {
         if watchFolder.trimmingCharacters(in: .whitespaces).isEmpty {
             return "Choose an existing capture folder."
@@ -276,6 +289,7 @@ final class AsyncGate: @unchecked Sendable {
 /// is on disk.
 actor LiveStackCoordinator {
     private let configuration: LiveStackRunConfiguration
+    private var previewProcessingJSON: String
     private let referenceSelector: @Sendable ([URL]) throws -> StackReferenceSelection
     private let store: LiveStackSessionStore
     private let monitor: StackFolderMonitor
@@ -339,6 +353,7 @@ actor LiveStackCoordinator {
             .map { LiveStackPath.normalize($0) }
         normalized.referenceImagePath = StackInputProtection.referenceIdentity(configuration.referenceImagePath)
         self.configuration = normalized
+        self.previewProcessingJSON = normalized.previewProcessingJSON
         self.activeReferenceImagePath = normalized.referenceImagePath
         self.referenceSelector = referenceSelector
         self.calibration = normalized.calibration
@@ -1312,6 +1327,15 @@ actor LiveStackCoordinator {
         }
     }
 
+    func setPreviewStretch(_ type: FITSStretchType) async throws {
+        let json = try LiveStackRunConfiguration.previewProcessingJSON(for: type)
+        await operationGate.acquire()
+        defer { operationGate.release() }
+        guard !disposed else { throw LiveStackSessionError.closed }
+        previewProcessingJSON = json
+        await tryRenderPreview(force: true)
+    }
+
     private func tryRenderPreview(force: Bool) async {
         guard let session else { return }
         if !force, let lastPreviewAtUTC,
@@ -1321,7 +1345,7 @@ actor LiveStackCoordinator {
         }
         do {
             let rendered = try await session.renderPreview(
-                configJSON: configuration.previewProcessingJSON,
+                configJSON: previewProcessingJSON,
                 maxDimension: configuration.previewMaxDimension)
             preview = rendered
             previewRevision += 1

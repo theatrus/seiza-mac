@@ -35,6 +35,16 @@ final class LiveStackWindowModel: ObservableObject {
     @Published var resumeExisting = true
     @Published var choosesReferenceAutomatically = false
     @Published var referenceImage: URL?
+    @Published var previewStretch = FITSStretchType.autoMtf {
+        didSet {
+            let type = previewStretch
+            guard let coordinator else { return }
+            Task {
+                do { try await coordinator.setPreviewStretch(type) }
+                catch { self.runError = error.localizedDescription }
+            }
+        }
+    }
     @Published var options = ImageStackOptions()
     @Published var calibrationMode = LiveStackCalibrationMode.none
     @Published var manualCalibration = ImageStackCalibration()
@@ -202,6 +212,7 @@ final class LiveStackWindowModel: ObservableObject {
         configuration.choosesReferenceAutomatically = choosesReferenceAutomatically
         configuration.options = options
         configuration.calibration = calibration
+        configuration.previewProcessingJSON = try LiveStackRunConfiguration.previewProcessingJSON(for: previewStretch)
 
         let coordinator = try LiveStackCoordinator(configuration: configuration)
         self.coordinator = coordinator
@@ -624,6 +635,10 @@ private struct LiveStackConfigurationView: View {
             Divider()
 
             Form {
+                Picker("Preview stretch", selection: $model.previewStretch) {
+                    ForEach(LiveStackRunConfiguration.previewStretchTypes) { type in Text(type.title).tag(type) }
+                }
+                .help("Display only. Linear stacking and saved FITS pixels stay unchanged.")
                 Section("Capture Folder") {
                     LabeledContent("Folder") {
                         HStack {
@@ -875,6 +890,10 @@ private struct LiveStackRunningView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 statusCard
+                Picker("Preview stretch", selection: $model.previewStretch) {
+                    ForEach(LiveStackRunConfiguration.previewStretchTypes) { type in Text(type.title).tag(type) }
+                }
+                .help("Display only. Linear stacking and saved FITS pixels stay unchanged.")
                 depthCard
                 if let notice = model.snapshotNotice {
                     Text(notice)

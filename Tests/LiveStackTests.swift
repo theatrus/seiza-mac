@@ -1450,6 +1450,36 @@ final class CalibrationPreparationServiceTests: XCTestCase {
 // MARK: - Coordinator end to end
 
 final class LiveStackCoordinatorTests: XCTestCase {
+    func testChangingLivePreviewStretchDoesNotChangeTheLinearStack() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let watch = root.appendingPathComponent("lights")
+        try FileManager.default.createDirectory(at: watch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let light = try SyntheticFrame.write(width: 160, height: 128,
+            values: SyntheticFrame.noisyStarField(), cards: SyntheticFrame.lightCards(), directory: watch)
+        var config = LiveStackRunConfiguration(watchFolder: watch.path,
+            sessionRootDirectory: root.appendingPathComponent("sessions"))
+        config.initialReferencePath = light.path
+        config.monitorScanInterval = 3600
+        let coordinator = try LiveStackCoordinator(configuration: config)
+        try await coordinator.start()
+        try await coordinator.pauseAndSave()
+        let before = await coordinator.currentSnapshot()
+        let original = root.appendingPathComponent("original.fits")
+        _ = try await coordinator.saveSnapshot(to: original.path)
+        for type in LiveStackRunConfiguration.previewStretchTypes {
+            try await coordinator.setPreviewStretch(type)
+            let snapshot = await coordinator.currentSnapshot()
+            XCTAssertEqual(snapshot.acceptedFrames, before.acceptedFrames)
+            XCTAssertGreaterThan(snapshot.previewRevision, before.previewRevision)
+            XCTAssertNotNil(snapshot.preview)
+        }
+        let after = root.appendingPathComponent("after.fits")
+        _ = try await coordinator.saveSnapshot(to: after.path)
+        XCTAssertEqual(try Data(contentsOf: original), try Data(contentsOf: after))
+        await coordinator.dispose()
+    }
+
     func testAutomaticReferenceFiltersCandidatesAndRestoresBeforeScoring() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let watch = root.appendingPathComponent("lights")
