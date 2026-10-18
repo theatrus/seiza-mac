@@ -1503,18 +1503,12 @@ final class ParallaxTests: XCTestCase {
     func testSessionPlansToursOnThePreparedSceneAndKeepsIt() async throws {
         let (files, request) = try planeFixture()
         try writeTourCatalog(in: files)
-        let bookmark = UserDefaults.standard.object(forKey: "catalogBookmark")
-        let catalogPath = UserDefaults.standard.object(forKey: "catalogDirectory")
-        defer {
-            UserDefaults.standard.set(bookmark, forKey: "catalogBookmark")
-            UserDefaults.standard.set(catalogPath, forKey: "catalogDirectory")
-        }
-        try CatalogAccess.save(files.directory)
         defer { withExtendedLifetime(files) {} }
         let session = ParallaxSession(sourceURL: URL(fileURLWithPath: request.inputs.image),
             processing: .default, wcs: request.inputs.wcs)
         defer { session.close() }
         try await waitUntil { !session.isBusy }
+        session.selectInput(.objects, url: files.directory.appendingPathComponent("objects.bin"))
         session.importLayer(URL(fileURLWithPath: request.inputs.starless!), starless: true)
         try await waitUntil { !session.isBusy }
         session.importLayer(URL(fileURLWithPath: request.inputs.stars!), starless: false)

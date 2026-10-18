@@ -8,7 +8,7 @@ objects in it. Turn a finished image into a camera tour with depth, motion, and
 titles. Image processing and video encoding run locally; optional online
 stellar-distance lookup sends sky coordinates to astronomical catalogues.
 
-[**Download Seiza for Mac 0.8.3**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.3-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
+[**Download Seiza for Mac 0.8.6**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.6-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
 **Also from Seiza:** [Core, CLI, and libraries](https://github.com/theatrus/seiza) ·
 [Seiza for Windows](https://github.com/theatrus/seiza-win) ·
@@ -93,6 +93,13 @@ names and distances, with controls to replace, reload or remove each mask.
    **Labels**. In **Output**,
    choose dimensions, frame rate, H.264 or HEVC, and quality, then click
    **Export Video…**. Rendering and encoding run locally.
+
+Pull back a target or custom point with its **Dolly** slider, and use **Zoom**
+for finer framing. Pull-back moves toward the whole image while preserving the
+opening shot and other stops. Aligned stars supply the solve for a starless
+source; the Source inspector makes the solving choice explicit.
+
+![A BigQ target pulled back toward whole-image framing](docs/images/parallax-framing/bigq-target-after-pullback.jpg)
 
 ![Seiza's Output inspector beside the Iris Nebula tour, with resolution presets, orientation, frame rate, codec, quality, and MP4 export controls](docs/images/seiza-parallax-output.jpg)
 
@@ -277,7 +284,7 @@ and refits the whole frame as its window changes size.
 
 ## Download
 
-[**Download Seiza for Mac 0.8.3**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.3-universal.dmg), open it, and drag Seiza to Applications.
+[**Download Seiza for Mac 0.8.6**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.6-universal.dmg), open it, and drag Seiza to Applications.
 
 Or install with [Homebrew](https://brew.sh) from the
 [theatrus/homebrew-seiza tap](https://github.com/theatrus/homebrew-seiza):

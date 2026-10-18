@@ -15,7 +15,7 @@ jobs:
   dmg:
     if: github.repository == 'theatrus/seiza-mac' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     environment: signing
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
@@ -103,6 +103,15 @@ jobs:
             'ARCHS=arm64 x86_64'
           scripts/validate-unsigned-app.sh DerivedData/Build/Products/Release/Seiza.app
 
+      - name: Free build space before signing and packaging
+        run: |
+          test -d DerivedData/Build/Products/Release/Seiza.app
+          test -x DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast
+          df -h .
+          du -sh target .build/rust DerivedData/Build/Intermediates.noindex || true
+          rm -rf target .build/rust DerivedData/Build/Intermediates.noindex
+          df -h .
+
       - name: Import Developer ID certificate
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_BUILD_CERTIFICATE }}
@@ -172,6 +181,7 @@ jobs:
           xcrun stapler staple "$app_path"
           xcrun stapler validate "$app_path"
           spctl --assess --type execute --verbose=4 "$app_path"
+          rm -f "$submission_path"
 
       - name: Package signed release
         run: |
@@ -226,13 +236,13 @@ jobs:
             '' \
             "### New in ${version}" \
             '' \
-            '- Open a capture folder recursively and browse images throughout its nested subfolders.' \
-            '- Group the sidebar by Folder Path, File Type, filename filter, or None, with collapsible groups and parent paths for duplicate filenames.' \
-            '- Preserve the current image and adjustments while regrouping, with navigation following the displayed group order.' \
-            '- Stack FITS and XISF frames across the whole opened folder tree, including collapsed sidebar groups.' \
-            '- Cancel discovery when closing or replacing a viewer, support valid image file links, and show details for unreadable locations.' \
-            '- Use the shorter Open Images or Folder dialog heading.' \
-            '- Uses published Seiza/C ABI 0.30.1, parallax 0.7.0, stacking 0.32.0 and image I/O 0.5.0.' \
+            '- Generate tours from starless sources using their aligned stars layer for plate solving; matching alignment is enabled by default.' \
+            '- Prepare previews reliably with explicit solving status and source/output crop controls.' \
+            '- Pull targets and custom points back toward whole-image framing without changing the opening shot or neighboring tour stops.' \
+            '- Adjust per-stop Zoom and Dolly with sliders and see temporary transition zoom feedback; endpoint spin fitting keeps the image in frame.' \
+            '- Import, paint, export, and reload parallax dust maps in original source coordinates, with unfilmed pixels clear.' \
+            '- Check signed updates through updates.seiza.fyi with a GitHub fallback, using Sparkle 2.9.6.' \
+            '- Uses published Seiza/C ABI 0.33.0, parallax 0.10.0, stacking 0.36.0 and image I/O 0.8.0.' \
             '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
             "- [Download the zipped application](${release_base}/Seiza-${version}-universal.zip)" \
@@ -259,7 +269,7 @@ jobs:
             '' \
             "![Seiza plate-solved FITS view](${screenshot_base}/seiza-solved-overlays.png)" \
             '' \
-            "![Seiza parallax tour editor](${screenshot_base}/seiza-parallax-tour.jpg)" \
+            "![Seiza parallax target pulled back toward the whole image](${screenshot_base}/parallax-framing/bigq-target-after-pullback.jpg)" \
             > release-notes.md
 
           appcast_directory="$RUNNER_TEMP/sparkle-appcast"

@@ -153,7 +153,7 @@ commit both to `main`, and make sure CI is green. Create and push an annotated
 tag with the same marketing version:
 
 ```sh
-version=0.8.3
+version=0.8.6
 git tag -a "v${version}" -m "Seiza for Mac ${version}"
 git push origin "v${version}"
 ```
@@ -165,3 +165,34 @@ archive even when an earlier step fails.
 
 Do not label an artifact signed or notarized until all verification steps pass
 on the exact uploaded DMG.
+
+## Packaging space
+
+After the universal app is built and validated, the signing job removes only
+Cargo outputs, the copied Rust archive and Xcode intermediates. It retains the
+app in `DerivedData/Build/Products/Release` and Sparkle tools in
+`DerivedData/SourcePackages`. The temporary app notarization ZIP is removed once
+its ticket is stapled and verified. Disk usage is logged around cleanup.
+
+The DMG uses logical file sizes plus 25% and 64 MiB of headroom. Automatic image
+sizing can underestimate sparse files, resulting in ENOSPC while copying the
+app even when the host has free storage. Explicit capacity also leaves room for
+filesystem metadata and extended attributes. A local regression fixture with a
+512 MiB sparse file and a resource fork fails with automatic sizing and passes
+with explicit sizing, including byte-for-byte reads from the mounted image.
+
+Unsigned CI retains Cargo outputs for the post-job Rust cache, removing only
+linked Rust archives and Xcode intermediates before creating its development
+DMG. CI and signed publishing use GitHub's standard Apple silicon `macos-26`
+runner. Both architectures are built and checked in the universal app; an Intel
+host is not required for publishing. The deployment target remains macOS 15.
+Native tests also passed on Intel during
+0.8.5 validation. See GitHub's
+[hosted runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+for the available standard labels.
+
+The native test suite runs serially for clear per-test CI diagnostics. A failed
+native run prints its xcresult summary, with a legacy JSON fallback. Tour tests
+select fixture catalogues through the session input path rather than creating
+persistent security-scoped bookmarks, which require an app-scope key unavailable
+to the unsigned Intel test host.
