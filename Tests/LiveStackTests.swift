@@ -1661,6 +1661,21 @@ final class LiveStackCoordinatorTests: XCTestCase {
 // MARK: - Published 0.34 flat-quality bridge
 
 final class FlatQualityTests: XCTestCase {
+    func testCopiedReviewIncludesFindingsBeyondFiftyFlaggedFlats() {
+        let verdict = FlatQualityReport.Verdict(grade: "poor", findings: [
+            .init(code: "clipped", grade: "poor", value: 0.08, limit: 0.01)
+        ])
+        let paths = (1...52).map { "/flats/flat-\($0).fits" }
+        let report = FlatQualityReport(schemaVersion: 1, frames: Array(repeating: verdict, count: paths.count),
+            master: .init(grade: "ok", findings: []), steadyFeatures: 0, changingFeatures: 0, carriedFeatures: 0)
+        let review = FlatQualityReview(paths: paths, measurements: [], report: report)
+        let copied = review.notes.joined(separator: "\n\n")
+        XCTAssertTrue(copied.contains("flat-1.fits (poor): Clipped pixels: 8.00% (limit 1.00%)"))
+        XCTAssertTrue(copied.contains("flat-52.fits (poor): Clipped pixels: 8.00% (limit 1.00%)"))
+        XCTAssertEqual(review.notes.filter { $0.hasPrefix("flat-") }.count, 52)
+        XCTAssertFalse(copied.contains("additional flagged flats"))
+    }
+
     func testReviewSeparatesFrameIssuesFromDustDetails() throws {
         let json = #"{"schemaVersion":1,"frames":[{"grade":"ok","findings":[]},{"grade":"suspect","findings":[{"code":"dim","grade":"suspect","value":0.0381,"limit":0.1}]},{"grade":"poor","findings":[{"code":"clipped","grade":"poor","value":0.2,"limit":0.01}]}],"master":{"grade":"suspect","findings":[]},"steadyFeatures":2,"changingFeatures":1,"carriedFeatures":1}"#
         let report = try JSONDecoder().decode(FlatQualityReport.self, from: Data(json.utf8))
@@ -1840,12 +1855,20 @@ final class LiveStackFilterSessionTests: XCTestCase {
     }
 
     func testCalibrationFailureIsIsolatedToItsFilter() async throws {
-        let (root, watch, config) = try setup()
+        actor Attempts {
+            var count = 0
+            func record() { count += 1 }
+        }
+        let (root, watch, originalConfig) = try setup()
+        var config = originalConfig
+        config.choosesReferenceAutomatically = true
+        let attempts = Attempts()
         defer { try? FileManager.default.removeItem(at: root) }
         _ = try light("a.fits", filter: "Ha", in: watch)
         _ = try light("b.fits", filter: "OIII", in: watch)
         let session = try LiveStackFilterSession(configuration: config) { probe in
             if LiveStackFilterIdentity.fromProbe(probe).key == "oxygen-iii" {
+                await attempts.record()
                 throw LiveStackRunError.invalidConfiguration("Test calibration failure for oxygen")
             }
             return ImageStackCalibration()
@@ -1860,8 +1883,55 @@ final class LiveStackFilterSessionTests: XCTestCase {
         XCTAssertTrue(state.groups.first { $0.id == "oxygen-iii" }?.snapshot.attention.contains {
             $0.message.contains("Test calibration failure")
         } ?? false)
+        let count = await attempts.count
+        XCTAssertEqual(count, 1, "Automatic reference selection must not retry a calibration failure through first-light fallback")
         try await session.pauseAndSave()
         await session.dispose()
+    }
+
+    @MainActor
+    func testPauseAndCloseSuppressQueuedCalibrationReviews() async throws {
+        for close in [false, true] {
+            let (root, watch, _) = try setup()
+            defer { try? FileManager.default.removeItem(at: root) }
+            _ = try light("ha.fits", filter: "Ha", in: watch)
+            _ = try light("oxygen.fits", filter: "OIII", in: watch)
+            let library = root.appendingPathComponent("empty-library")
+            try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+            let model = LiveStackWindowModel(initialFolder: watch)
+            model.separatesFilters = true
+            model.calibrationMode = .automatic
+            model.calibrationLibrary = library
+            var closed = false
+            model.requestClose = { closed = true }
+            model.start()
+            let reviewDeadline = Date().addingTimeInterval(15)
+            while model.pendingWarnings == nil, Date() < reviewDeadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertNotNil(model.pendingWarnings, "The first filter should request calibration review")
+            if close { XCTAssertFalse(model.canCloseImmediately()) }
+            else { model.pauseOrResume() }
+            let stopDeadline = Date().addingTimeInterval(5)
+            while !(close ? closed : model.allFiltersPaused && !model.isBusy), Date() < stopDeadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertNil(model.pendingWarnings, "A queued filter must not open another review while stopping")
+            if close { XCTAssertTrue(closed) }
+            else {
+                XCTAssertTrue(model.allFiltersPaused)
+                XCTAssertFalse(model.isBusy)
+                _ = model.canCloseImmediately()
+            }
+            // Drain a review if the assertion failed, so regression failures
+            // cannot leave a native operation/lease waiting in the test app.
+            model.resolveWarnings(proceed: false)
+            let closeDeadline = Date().addingTimeInterval(5)
+            while !closed, Date() < closeDeadline {
+                model.resolveWarnings(proceed: false)
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
     }
 
     func testCancelledCalibrationPausesOnlyThatFilterWithoutRetryingReview() async throws {

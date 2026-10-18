@@ -94,6 +94,7 @@ final class LiveStackWindowModel: ObservableObject {
     private var warningContinuation: CheckedContinuation<Bool, Never>?
     private var closing = false
     private var closeInProgress = false
+    private var calibrationSuspended = false
 
     init(initialFolder: URL?) {
         watchFolder = initialFolder
@@ -283,6 +284,7 @@ final class LiveStackWindowModel: ObservableObject {
     }
 
     private func prepareAutomaticCalibration(referenceOverride: CalibrationFrameProbe? = nil) async throws -> ImageStackCalibration {
+        try checkCalibrationCanContinue()
         guard let watchFolder, let calibrationLibrary else {
             throw LiveStackRunError.invalidConfiguration(
                 "Choose a calibration library folder.")
@@ -325,6 +327,7 @@ final class LiveStackWindowModel: ObservableObject {
                     : nil
             }
         }
+        try checkCalibrationCanContinue()
         if filterSession != nil {
             let key = LiveStackFilterIdentity.fromProbe(reference).key
             retainedFilterCalibrations[key]?.release()
@@ -347,6 +350,11 @@ final class LiveStackWindowModel: ObservableObject {
             }
         }
         return prepared.calibration
+    }
+
+    private func checkCalibrationCanContinue() throws {
+        try Task.checkCancellation()
+        if calibrationSuspended || closeInProgress || closing { throw CancellationError() }
     }
 
     nonisolated static func findReferenceLight(
@@ -415,7 +423,8 @@ final class LiveStackWindowModel: ObservableObject {
     }
 
     private func confirmWarnings(_ warnings: [String], reviews: [FlatQualityReview]) async -> Bool {
-        await withCheckedContinuation { continuation in
+        guard !calibrationSuspended, !closeInProgress, !closing, !Task.isCancelled else { return false }
+        return await withCheckedContinuation { continuation in
             warningContinuation = continuation
             pendingFlatReviews = reviews
             pendingWarnings = warnings
@@ -491,6 +500,10 @@ final class LiveStackWindowModel: ObservableObject {
 
     func pauseOrResume() {
         guard coordinator != nil || filterSession != nil else { return }
+        if filterSession != nil {
+            calibrationSuspended = !allFiltersPaused
+            if calibrationSuspended { resolveWarnings(proceed: false) }
+        }
         isBusy = true
         runError = nil
         Task {
@@ -613,6 +626,10 @@ final class LiveStackWindowModel: ObservableObject {
     }
 
     func discardAndClose() {
+        closeInProgress = true
+        calibrationSuspended = true
+        preparationTask?.cancel()
+        resolveWarnings(proceed: false)
         Task {
             await teardown()
             closing = true

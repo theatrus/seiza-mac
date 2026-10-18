@@ -134,5 +134,7 @@ Native regressions cover recursive discovery, filter isolation, late groups
 inheriting the chosen display stretch, independent finish, continued ingestion,
 source-less resume, exclusive ownership, per-filter calibration failure/cancellation and
 cross-group output protection. Cancelling a calibration review pauses only that
-filter and does not retry the review or count the light as unreadable. The UI was exercised with H-alpha, OIII and
+filter and does not retry the review or count the light as unreadable. Pause/close
+suppresses pending and queued calibration reviews before waiting for workers;
+calibration failures never enter the automatic-reference fallback path. The UI was exercised with H-alpha, OIII and
 Unfiltered lights, including finish, pause and resume.

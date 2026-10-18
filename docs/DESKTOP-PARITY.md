@@ -12,8 +12,9 @@ proposal; the Mac implementations are native and independently validated.
 | Concurrent filter sessions | This branch: recursive discovery, independent calibration/checkpoints/previews, pause all and selected finish |
 | Windows #64 long folder labels | Already present in Mac: one-line middle truncation, separate count and full-path help |
 
-Merge order is #76, then #83, then the multi-filter follow-up. #82 is independent
-and targets main. Layered defaults to linked color on Mac so mono data is valid;
+#76 and #82 have reached main. #83 was merged into the former dependency
+branch; #84 targets current main and carries those stretch changes together with
+the independent filter sessions and overview. Layered defaults to linked color on Mac so mono data is valid;
 RGB users can explicitly choose luminance-preserving color. Live preview changes
 never alter accumulated linear FITS samples.
 
@@ -22,3 +23,18 @@ comparison and change maps. Those workflows still need dedicated Mac interaction
 design and evidence handling; see [CALIBRATION-QUALITY.md](CALIBRATION-QUALITY.md).
 This work does not silently select replacement flats or treat inconclusive dust
 measurements as a passing result.
+
+
+## Release review
+
+Reviewed main from the published v0.8.6 tag through `28c843d`, plus the complete
+#84 integration against that main revision. The review covered native header and
+registry dependencies, flat measurement/review and master reuse, RC-Astro setting
+lifetimes, image recipe round trips, live preview isolation, filter discovery,
+checkpoint ownership/recovery, output protection and shutdown.
+
+Fixes include suppressing active/queued calibration reviews during pause/close,
+keeping calibration errors out of automatic-reference fallback, and preserving
+all per-frame findings in Copy Report for flat sets larger than 50 flagged frames.
+The stop/retry regressions were run against the original code and failed in the
+expected ways, then passed with the fixes. See #84 for final validation.

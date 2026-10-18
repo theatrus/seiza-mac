@@ -594,11 +594,10 @@ struct FlatQualityReport: Decodable, Sendable {
         var notes = ["Flat quality: \(frames.count) frames reviewed; \(suspect) suspect, \(poor) poor. "
             + "The selection is unchanged. These measurements describe the flats, not which set matches a light."]
         let flagged = Array(zip(paths, frames).filter { $0.1.grade != "ok" })
-        for (path, verdict) in flagged.prefix(50) {
+        for (path, verdict) in flagged {
             notes.append("\(URL(fileURLWithPath: path).lastPathComponent) (\(verdict.grade)): "
                 + verdict.findings.map(\.description).joined(separator: "; "))
         }
-        if flagged.count > 50 { notes.append("\(flagged.count - 50) additional flagged flats.") }
         if master.grade != "ok" {
             notes.append("Combined master (\(master.grade)): " + master.findings.map(\.description).joined(separator: "; "))
         }

@@ -219,12 +219,14 @@ enum LiveStackRunError: LocalizedError {
     case invalidOperation(String)
     case unsafeOutputPath(String)
     case checkpointFailed(String)
+    case calibrationPreparationFailed(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidConfiguration(let message),
             .invalidOperation(let message),
-            .unsafeOutputPath(let message):
+            .unsafeOutputPath(let message),
+            .calibrationPreparationFailed(let message):
             return message
         case .checkpointFailed(let message):
             return "The checkpoint could not be saved: \(message)"
@@ -897,6 +899,9 @@ actor LiveStackCoordinator {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
+            // A calibration failure is not an alignment-ranking failure.
+            // Retrying through first-light ingestion would repeat preparation.
+            if case LiveStackRunError.calibrationPreparationFailed = error { throw error }
             guard session == nil, configuration.referenceImagePath == nil else { throw error }
             addAttention("Could not choose a reference; waiting for the first stable light. "
                 + error.localizedDescription)
@@ -1118,7 +1123,13 @@ actor LiveStackCoordinator {
         }
         if !calibrationPrepared, let prepareCalibration {
             setState(.processing, "Preparing calibration for \(configuration.targetFilter?.displayName ?? "this filter")…")
-            calibration = try await prepareCalibration(probe)
+            do {
+                calibration = try await prepareCalibration(probe)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw LiveStackRunError.calibrationPreparationFailed(error.localizedDescription)
+            }
             calibrationPrepared = true
             seedCalibrationPaths()
         }
