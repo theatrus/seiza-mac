@@ -276,7 +276,9 @@ struct ParallaxWorkspace: View {
         Section("Star separation") {
             Toggle("Use StarXTerminator", isOn: $session.automaticSeparation)
             if session.automaticSeparation {
-                inputPicker(.separator)
+                Text(session.inputNames[.separator] ?? "No RC-Astro executable selected")
+                    .font(.caption).foregroundStyle(.secondary)
+                SettingsLink { Text("RC-Astro Settings…") }
                 Text("Requires your installed, licensed rc-astro CLI.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
