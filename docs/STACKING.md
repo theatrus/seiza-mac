@@ -79,3 +79,19 @@ masters from calibration frames. It measures the selected raw flats and shows
 native frame/master verdicts before any light is processed. See
 [Calibration quality](CALIBRATION-QUALITY.md) for saturation units, optical
 geometry, the review's limits and the API coverage audit.
+
+## Median Anchor and Layered display stretches
+
+The image stretch panel includes Median Anchor and Layered under Automatic.
+Median Anchor exposes target median, optional robust black-point clipping (or
+the image minimum), quarter-tone curves boost, highlight compression/knee and
+normalization. Layered exposes target background, aggressiveness, star-core
+compression, large/detail scale separation, contrast recovery, saturation lift
+and protection for dark noise. Every parameter survives recipe/clipboard JSON,
+ordered stages, undo/redo and full-resolution 16-bit export.
+
+Layered defaults to linked colour handling so it works with mono and RGB data.
+Per-channel mode is rejected; RGB users can also select Preserve Luminance Color.
+Live Stack offers Auto MTF, Median Anchor and Layered before and during a run.
+Changing that choice only redraws the preview: physical sample-domain mapping,
+linear accumulation, checkpoints and saved FITS pixels remain unchanged.
