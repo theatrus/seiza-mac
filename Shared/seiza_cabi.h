@@ -72,7 +72,8 @@
  *     state and remain valid only until its next mutable call, finish, or free.
  *   - const float* / uint32_t* from seiza_stack_snapshot_* point INTO the
  *     immutable SeizaStackSnapshot and dangle when the snapshot is freed.
- *   - const char* from seiza_core_version is static and is never freed.
+ *   - const char* from seiza_core_version, seiza_stacking_output_version and
+ *     seiza_stretch_output_version is static and is never freed.
  *   - the `json` argument to a SeizaCatalogSetupProgressCallback is valid only
  *     for the duration of that one callback; copy it if you need it afterward.
  *   - the pixels a SeizaParallaxFrameCallback receives, and the JSON a
@@ -497,6 +498,21 @@ extern "C" {
 const char *seiza_core_version(void);
 
 /*
+ The Seiza release whose stacking, master building and registration
+ output this library reproduces. Key cached stacks and masters on it
+ rather than on `seiza_core_version`: it moves only when that output
+ changes. The string is static and is never freed.
+ */
+const char *seiza_stacking_output_version(void);
+
+/*
+ The Seiza release whose stretch output this library reproduces. Key
+ cached stretched images on it; it moves only when that output changes.
+ The string is static and is never freed.
+ */
+const char *seiza_stretch_output_version(void);
+
+/*
  Applies damped Richardson-Lucy deconvolution to interleaved linear `float`
  samples in place. `channels` must be one or three and `data_length` must
  equal `width * height * channels`. RGB samples are pixel-interleaved.
@@ -918,6 +934,106 @@ bool seiza_color_calibration_apply(float *data,
                                    char **error_out);
 
 /*
+ Colour calibrate an interleaved linear RGB image in place against Gaia
+ DR3 star colours: place the Gaia stars through the image's solution, fit
+ the gains, and apply them.
+
+ `wcs_json` is the image's own solution as [`seiza_solve_image_json`]
+ returns it (`crval`, `crpix`, `cd`, optional `sip` and `pixelOrigin`);
+ for an image made from a solved frame, derive it with
+ [`seiza_wcs_transform_json`]. Null means there is none. `gaia_json` is
+ an array of sources as [`seiza_gaia_photometry_cone_json`] returns, and
+ when given it is used and `catalog_path` is ignored. When it is null the
+ Gaia colours come from the offline catalog at `catalog_path` (the file
+ or the directory that holds it; null looks in the standard places).
+ `options_json` is as [`seiza_color_calibrate_json`] takes it; its
+ `observationEpoch` applies to `gaia_json` sources only, since the
+ catalog's positions are already at its own epoch.
+
+ When calibration cannot run, the image is left as it was. Either way
+ the call returns owned JSON: `{"schemaVersion": 1, "status":
+ "calibrated", "calibration": {...}}` with the calibration as
+ [`seiza_color_calibrate_json`] gives it, or `{"schemaVersion": 1,
+ "status": "skipped", "reason": ..., "detail": ...}` with `reason` one of
+ `no_solution`, `no_catalog`, `no_stars`, `too_few_stars`, `not_rgb`,
+ `invalid_options` and `fit_failed`. Errors are for malformed arguments
+ only. Free the
+ result, or an `error_out` string, with [`seiza_string_free`].
+
+ # Safety
+ `data` must point to `length` writable floats, `width * height * 3` of
+ them. The JSON and path arguments must each be null or a valid
+ NUL-terminated UTF-8 string. When non-null, `error_out` must point to
+ writable storage for one pointer.
+ */
+char *seiza_color_calibrate_image_json(float *data,
+                                       size_t length,
+                                       size_t width,
+                                       size_t height,
+                                       const char *wcs_json,
+                                       const char *gaia_json,
+                                       const char *catalog_path,
+                                       const char *options_json,
+                                       char **error_out);
+
+/*
+ Colour calibrate an interleaved linear RGB image against Gaia, as
+ [`seiza_color_calibrate_image_json`] does, then display-stretch it, and
+ write the stretched image over `data`. `stretch_json` is a stretch
+ configuration or an array of them applied in order, as
+ [`seiza_rendered_image_open_with_stretch_config`] takes its `stretch`.
+ A statistics-driven stretch such as Auto-MTF sees the calibrated colours.
+ Once calibration has run, a stage whose `color_strategy` is `unlinked`
+ is linked instead, so the balance survives; when calibration cannot run,
+ every stage runs as given and the image is still stretched. Returns
+ owned JSON `{"schemaVersion": 1, "calibration": {...}, "stretchPlans":
+ [...], "linkedStages": [...]}`: the calibration outcome as
+ [`seiza_color_calibrate_image_json`] gives it, each stage's resolved
+ stretch plan, and the stages (counted from 0) that were linked. Fails only on malformed arguments or a failed stretch, and
+ then leaves `data` as it was. Free the result, or an `error_out` string,
+ with [`seiza_string_free`].
+
+ # Safety
+ As [`seiza_color_calibrate_image_json`]; `stretch_json` must be a valid
+ NUL-terminated UTF-8 string.
+ */
+char *seiza_color_calibrate_and_stretch_json(float *data,
+                                             size_t length,
+                                             size_t width,
+                                             size_t height,
+                                             const char *wcs_json,
+                                             const char *gaia_json,
+                                             const char *catalog_path,
+                                             const char *options_json,
+                                             const char *stretch_json,
+                                             char **error_out);
+
+/*
+ The solution of an image made from a solved one by a pixel mapping, such
+ as registration, a turn, binning, drizzle or a crop. `wcs_json` is the
+ solved image's WCS as [`seiza_solve_image_json`] returns it;
+ `transform_json` is `{"matrix": [[a, b], [c, d]], "translationX": tx,
+ "translationY": ty}`, taking a solved-image pixel `(x, y)` to `(a x + b
+ y + tx, c x + d y + ty)` on the new image. The transform always counts
+ pixels from 0 with their centres on whole numbers, whatever the WCS's
+ `pixelOrigin`: a crop at `(x, y)` is the identity matrix with
+ translation `(-x, -y)`, a half turn of a `w` × `h` image is `-1` on the
+ diagonal with translation `(w - 1, h - 1)`, and drizzle or binning by a
+ scale `s` is `s` on the diagonal with translation `((s - 1) / 2, (s - 1)
+ / 2)`.
+
+ Returns the new image's WCS as owned JSON in the same form, `crpix`
+ counting from 0. Fails when the mapping cannot be inverted, or when the
+ WCS has SIP terms and the mapping is more than a translation. Free the
+ result, or an `error_out` string, with [`seiza_string_free`].
+
+ # Safety
+ Both JSON arguments must be valid NUL-terminated UTF-8 strings. When
+ non-null, `error_out` must point to writable storage for one pointer.
+ */
+char *seiza_wcs_transform_json(const char *wcs_json, const char *transform_json, char **error_out);
+
+/*
  Choose a reference from an ordered JSON array of FITS or XISF path strings.
  Uses the native stacking reference scorer: among frames with nearly the
  best star quality, choose the flattest background. This only reads inputs;
@@ -948,6 +1064,50 @@ bool seiza_color_calibration_apply(float *data,
 char *seiza_stack_choose_reference_json(const char *paths_json,
                                         size_t concurrency,
                                         char **error_out);
+
+/*
+ Learn a sensor's hot and dead pixels from its lights, as the CLI's
+ `--defects` does, for lights with no master dark to subtract them.
+
+ `paths_json` is a JSON array of FITS or XISF light paths. Up to
+ `maximum_frames` of them, evenly spaced, are read and calibrated with the
+ optional bias, dark and flat masters (`dark_exposure_seconds` as for
+ [`seiza_live_stacker_open_fits`]). A pixel is a defect when it stands out
+ from its same-colour neighbours, the same way, in most of those lights,
+ and its neighbours do not rise as a star's do; the lights must have
+ moved on the sensor, by dithering or drift, for a star to be told from a
+ defect. Pass null or empty `options_json` for the defaults; its fields
+ are `seiza_stacking::DefectDetectionOptions`'s: `"sigma"` (5),
+ `"persistence"` (0.6, the fraction of lights) and `"maximum_frames"` (16,
+ at least 3). A light that cannot be read or calibrated, or of another
+ size than the first, is passed over.
+
+ Returns owned schema-1 JSON whose `defects` holds `width`, `height`,
+ `frames` (the lights examined) and `pixels`, ascending raw-frame indices
+ `y * width + x`, and, when any pixel is a steady hot pixel, `excess`: one
+ value per pixel, its excess over its neighbours at `exposure_seconds`
+ (present when every light had an exposure), subtracted from each light
+ scaled to its own exposure, as a dark would subtract it, or zero where the
+ neighbours' median replaces the pixel. The map is empty when fewer than
+ three lights were examined.
+ Put it as it is under `"defects"` in the `options_json` of
+ [`seiza_live_stacker_open_fits`] or any other open, and every light the
+ stack calibrates has those pixels repaired from their same-colour
+ neighbours before debayering, registration and integration. Free the
+ JSON, or an `error_out` string on failure, with [`seiza_string_free`].
+
+ # Safety
+ `paths_json` must be a valid NUL-terminated string. Optional paths and
+ `options_json` may be null; when non-null they must be NUL-terminated.
+ When non-null, `error_out` must point to writable storage for one pointer.
+ */
+char *seiza_stack_detect_defects_json(const char *paths_json,
+                                      const char *bias_path,
+                                      const char *dark_path,
+                                      const char *flat_path,
+                                      double dark_exposure_seconds,
+                                      const char *options_json,
+                                      char **error_out);
 
 /*
  Opens a FITS or XISF reference and optional integrated bias, dark, and flat
@@ -3001,6 +3161,392 @@ bool seiza_live_stacker_set_light_rotation(SeizaLiveStacker *stacker,
 bool seiza_live_stacker_light_rotation(const SeizaLiveStacker *stacker,
                                        uint32_t *basis_out,
                                        double *degrees_out);
+
+/*
+ Every constellation figure and the stars its lines use, for a host that
+ draws figures its own way. Returns JSON, released with
+ `seiza_string_free`: `{"attribution", "epoch", "figures": [{"abbr",
+ "name", "segments": [[hr, hr], ...], "labels": [[ra, dec], ...]}],
+ "stars": [{"hr", "ra", "dec", "mag"}]}`, positions in ICRS degrees at
+ the Julian `epoch`. Null with `error_out` set on failure.
+
+ # Safety
+
+ When non-null, `error_out` must point to writable storage for one
+ pointer.
+ */
+char *seiza_constellation_figures_json(char **error_out);
+
+/*
+ The constellation figures of a solved `width × height` image, as pixel
+ polylines: each segment follows its great circle, the parts behind the
+ tangent plane are dropped, and lines that leave the frame run to its
+ edge. `wcs_json` is the solution as `seiza_solve_image_json` returns it
+ (`pixelOrigin` 0 or 1). Returns JSON, released with `seiza_string_free`:
+ `{"attribution", "figures": [{"abbr", "name", "polylines": [[[x, y],
+ ...]], "label": [x, y] or null}]}`, pixels counted from 0. Null with
+ `error_out` set on failure.
+
+ # Safety
+
+ `wcs_json` must be a NUL-terminated UTF-8 string. When non-null,
+ `error_out` must point to writable storage for one pointer.
+ */
+char *seiza_constellations_project_json(const char *wcs_json,
+                                        uint32_t width,
+                                        uint32_t height,
+                                        char **error_out);
+
+/*
+ The block factor that brings a `width × height` frame's long side within
+ the response size: each response pixel covers `factor × factor` sensor
+ pixels. With `cfa` true the blocks cover whole 2×2 colour cells.
+ */
+size_t seiza_flat_bin_factor(size_t width, size_t height, bool cfa);
+
+/*
+ Bin a frame for a response: block means of `factor × factor` pixels,
+ its `channels` interleaved channels averaged. Partial blocks at the right
+ and bottom edges are left out, so `out` holds `(width / factor) × (height
+ / factor)` samples. Returns false with `error_out` set on failure.
+
+ # Safety
+
+ `data` must point to `width × height × channels` readable, aligned
+ floats and `out` to `out_length` writable ones. When non-null,
+ `error_out` must point to writable storage for one pointer.
+ */
+bool seiza_flat_bin_frame(const float *data,
+                          size_t width,
+                          size_t height,
+                          size_t channels,
+                          size_t factor,
+                          float *out,
+                          size_t out_length,
+                          char **error_out);
+
+/*
+ Combine `count` binned flats of one session (each `width × height`, raw
+ ADU with their pedestals) into one response, written into `out` (`width
+ × height` samples). `bin` is the factor they were binned by. Returns JSON
+ `{"bin", "level", "noise", "frames"}`, the text `null` when the flats are
+ too few or unusable, or null with `error_out` set on failure. Release it
+ with `seiza_string_free`.
+
+ # Safety
+
+ `planes` must point to `count × width × height` readable, aligned floats
+ and `out` to `out_length` writable ones. When non-null, `error_out` must
+ point to writable storage for one pointer.
+ */
+char *seiza_flat_build_response_json(const float *planes_data,
+                                     size_t count,
+                                     size_t width,
+                                     size_t height,
+                                     size_t bin,
+                                     float *out,
+                                     size_t out_length,
+                                     char **error_out);
+
+/*
+ Compare two responses of one light path (`width × height`, pedestals
+ removed) binned by `bin`: the broad change, the dust, and the spots that
+ came, went or moved. `options_json` is `DustOptions` JSON, or null for
+ the defaults. Returns the comparison's JSON, the text `null` when the
+ responses hold too little to compare, or null with `error_out` set.
+ Release it with `seiza_string_free`.
+
+ # Safety
+
+ `earlier` and `later` must each point to `width × height` readable,
+ aligned floats. `options_json` must be null or a NUL-terminated UTF-8
+ string. When non-null, `error_out` must point to writable storage for
+ one pointer.
+ */
+char *seiza_flat_compare_json(const float *earlier,
+                              const float *later,
+                              size_t width,
+                              size_t height,
+                              size_t bin,
+                              const char *options_json,
+                              char **error_out);
+
+/*
+ The compact change between a session before an event and one after it
+ (`after / before`, each `width × height`), written into `out` (`width ×
+ height` samples). Returns 1 when written, 0 when the responses hold no
+ change map, and -1 with `error_out` set on failure.
+
+ # Safety
+
+ `before` and `after` must each point to `width × height` readable,
+ aligned floats and `out` to `out_length` writable ones. When non-null,
+ `error_out` must point to writable storage for one pointer.
+ */
+int32_t seiza_flat_change_map(const float *before,
+                              const float *after,
+                              size_t width,
+                              size_t height,
+                              float *out,
+                              size_t out_length,
+                              char **error_out);
+
+/*
+ Carry a flat across a change in place: divide `data` (`width × height ×
+ channels` interleaved samples, sensor-aligned) by the change map
+ (`map_width × map_height`, binned by `bin`) for a light shot before the
+ change (`divide` true), or multiply for one shot after it. Returns false
+ with `error_out` set on failure.
+
+ # Safety
+
+ `data` must point to `width × height × channels` writable, aligned
+ floats and `map` to `map_width × map_height` readable ones. When
+ non-null, `error_out` must point to writable storage for one pointer.
+ */
+bool seiza_flat_apply_change_map(float *data,
+                                 size_t width,
+                                 size_t height,
+                                 size_t channels,
+                                 const float *map,
+                                 size_t map_width,
+                                 size_t map_height,
+                                 size_t bin,
+                                 bool divide,
+                                 char **error_out);
+
+/*
+ The sky background of a few lights, for weighing them against a change:
+ `count` binned lights (each `width × height`), each less `pedestal` and
+ divided by its own median, combined, and written into `out` (`width ×
+ height` samples). Returns 1 when written, 0 when the lights hold too
+ little, and -1 with `error_out` set on failure.
+
+ # Safety
+
+ `planes` must point to `count × width × height` readable, aligned floats
+ and `out` to `out_length` writable ones. When non-null, `error_out` must
+ point to writable storage for one pointer.
+ */
+int32_t seiza_flat_lights_background(const float *planes_data,
+                                     size_t count,
+                                     size_t width,
+                                     size_t height,
+                                     float pedestal,
+                                     size_t bin,
+                                     float *out,
+                                     size_t out_length,
+                                     char **error_out);
+
+/*
+ Which side of a change a few lights were shot on: their `background`
+ weighed against the `reference` response, which lies on side
+ `reference_side` (`"before"` or `"after"`) of the change `map`, all
+ `width × height`. Returns the outcome's JSON (`{"outcome": "fit",
+ "carried", "spread", "verdict"}`, `{"outcome": "no_shadows"}` or
+ `{"outcome": "unfitted"}`), or null with `error_out` set. Release it with
+ `seiza_string_free`.
+
+ # Safety
+
+ `background`, `reference` and `map` must each point to `width × height`
+ readable, aligned floats. `reference_side` must be a NUL-terminated
+ UTF-8 string. When non-null, `error_out` must point to writable storage
+ for one pointer.
+ */
+char *seiza_flat_fit_change_json(const float *background,
+                                 const float *reference,
+                                 const float *map,
+                                 size_t width,
+                                 size_t height,
+                                 const char *reference_side,
+                                 char **error_out);
+
+/*
+ One verdict for an imaging session from its filters' verdicts: a side
+ some fit decides and none contradicts. `verdicts_json` is a JSON array
+ of `"before"`, `"after"` and `"undecided"`. Returns the verdict as JSON
+ text (such as `"before"`), or null with `error_out` set. Release it with
+ `seiza_string_free`.
+
+ # Safety
+
+ `verdicts_json` must be a NUL-terminated UTF-8 string. When non-null,
+ `error_out` must point to writable storage for one pointer.
+ */
+char *seiza_flat_combine_verdicts_json(const char *verdicts_json, char **error_out);
+
+/*
+ Which of `count` candidate responses (each `width × height`, such as one
+ rig's flats at several rotator angles) the lights' `background` follows.
+ `alike_json` is null, or a JSON array of `[first, second]` index pairs
+ the host already knows to be alike, which are not weighed. Returns
+ `{"winners": [...], "pairs": [...]}`, or null with `error_out` set.
+ Release it with `seiza_string_free`.
+
+ # Safety
+
+ `background` must point to `width × height` readable, aligned floats and
+ `candidates` to `count × width × height`. `alike_json` must be null or a
+ NUL-terminated UTF-8 string. When non-null, `error_out` must point to
+ writable storage for one pointer.
+ */
+char *seiza_flat_choose_response_json(const float *background,
+                                      const float *candidates,
+                                      size_t count,
+                                      size_t width,
+                                      size_t height,
+                                      const char *alike_json,
+                                      char **error_out);
+
+/*
+ Encode a plane (`width × height`) for a host's cache: an 8-byte size,
+ then 16-bit fixed point covering 0 to 2. Returns the bytes needed; when
+ `out` is non-null and holds that many, they are written. Returns 0 for a
+ null `plane` or an empty size.
+
+ # Safety
+
+ `plane` must be null or point to `width × height` readable, aligned
+ floats, and `out` null or point to `out_length` writable bytes.
+ */
+size_t seiza_flat_encode_plane(const float *plane_data,
+                               size_t width,
+                               size_t height,
+                               uint8_t *out,
+                               size_t out_length);
+
+/*
+ Read a plane [`seiza_flat_encode_plane`] wrote. Its size goes to
+ `width_out` and `height_out`; when `out` is non-null, its samples go
+ there, and `out_length` must equal `width × height`. Pass a null `out`
+ first to learn the size. Returns 1 when read, 0 when the bytes are not a
+ plane, and -1 with `error_out` set on failure.
+
+ # Safety
+
+ `bytes` must point to `length` readable bytes; `width_out` and
+ `height_out` to writable `size_t`s; `out` must be null or point to
+ `out_length` writable floats. When non-null, `error_out` must point to
+ writable storage for one pointer.
+ */
+int32_t seiza_flat_decode_plane(const uint8_t *bytes,
+                                size_t length,
+                                float *out,
+                                size_t out_length,
+                                size_t *width_out,
+                                size_t *height_out,
+                                char **error_out);
+
+/*
+ Find the dust in one plane (`width × height`, binned by `bin`): a flat
+ session's response or one binned flat. `options_json` is `DustOptions`
+ JSON, or null for the defaults. Returns the dust map's JSON, the text
+ `null` when the plane holds too little, or null with `error_out` set.
+ Release it with `seiza_string_free`.
+
+ # Safety
+
+ `plane` must point to `width × height` readable, aligned floats.
+ `options_json` must be null or a NUL-terminated UTF-8 string. When
+ non-null, `error_out` must point to writable storage for one pointer.
+ */
+char *seiza_dust_find_json(const float *plane_data,
+                           size_t width,
+                           size_t height,
+                           size_t bin,
+                           const char *options_json,
+                           char **error_out);
+
+/*
+ Find a whole flat session's dust: `count` binned flats (each `width ×
+ height`, raw ADU, binned by `bin`) stacked, so faint disks and donuts
+ clear the noise, and each feature counted across the flats that show it.
+ `pedestal` is the flats' pedestal. Returns the session's dust map JSON,
+ the text `null` with fewer than two usable flats, or null with
+ `error_out` set. Release it with `seiza_string_free`.
+
+ # Safety
+
+ `planes` must point to `count × width × height` readable, aligned
+ floats. `options_json` must be null or a NUL-terminated UTF-8 string.
+ When non-null, `error_out` must point to writable storage for one
+ pointer.
+ */
+char *seiza_dust_find_session_json(const float *planes_data,
+                                   size_t count,
+                                   size_t width,
+                                   size_t height,
+                                   size_t bin,
+                                   float pedestal,
+                                   const char *options_json,
+                                   char **error_out);
+
+/*
+ One flat of a session against the session's dust: which of the
+ session's features it shows, and what it holds that the session does
+ not. `frame` is binned like the session's flats (`width × height`, raw
+ ADU); `session_json` is the dust map [`seiza_dust_find_session_json`]
+ returned. Returns `{"seen": [...], "transients": [...]}`, the text
+ `null` when the frame holds too little, or null with `error_out` set.
+ Release it with `seiza_string_free`.
+
+ # Safety
+
+ `frame` must point to `width × height` readable, aligned floats.
+ `session_json` must be a NUL-terminated UTF-8 string and `options_json`
+ null or one. When non-null, `error_out` must point to writable storage
+ for one pointer.
+ */
+char *seiza_dust_frame_json(const float *frame,
+                            size_t width,
+                            size_t height,
+                            float pedestal,
+                            const char *session_json,
+                            const char *options_json,
+                            char **error_out);
+
+/*
+ How the dust of two sessions of one light path differs: `earlier` and
+ `later` are responses on one grid (`width × height`, binned by `bin`,
+ pedestals removed). Returns the changes' JSON (what came, went or moved,
+ with both sessions' dust maps), the text `null` when the planes hold too
+ little, or null with `error_out` set. Release it with
+ `seiza_string_free`.
+
+ # Safety
+
+ `earlier` and `later` must each point to `width × height` readable,
+ aligned floats. `options_json` must be null or a NUL-terminated UTF-8
+ string. When non-null, `error_out` must point to writable storage for
+ one pointer.
+ */
+char *seiza_dust_find_changes_json(const float *earlier,
+                                   const float *later,
+                                   size_t width,
+                                   size_t height,
+                                   size_t bin,
+                                   const char *options_json,
+                                   char **error_out);
+
+/*
+ Match two lists of dust features, as two dust maps' `features` hold
+ them: each pair whose centres lie within the options' tolerance for
+ their radius. `earlier_json` and `later_json` are JSON arrays of
+ features. Returns a JSON array of `{"earlier", "later", "offset",
+ "within_tolerance"}`, or null with `error_out` set. Release it with
+ `seiza_string_free`.
+
+ # Safety
+
+ `earlier_json` and `later_json` must be NUL-terminated UTF-8 strings and
+ `options_json` null or one. When non-null, `error_out` must point to
+ writable storage for one pointer.
+ */
+char *seiza_dust_match_features_json(const char *earlier_json,
+                                     const char *later_json,
+                                     const char *options_json,
+                                     char **error_out);
 
 /*
  Prepare a parallax video from a JSON request (see the fields below) and

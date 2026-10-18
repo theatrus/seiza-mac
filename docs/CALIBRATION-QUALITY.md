@@ -1,8 +1,8 @@
-# Calibration quality and the 0.34 API
+# Calibration quality and the published 0.39 API
 
-The Mac app uses published core/C ABI 0.34.0, calibration 0.7.0, stacking
-0.37.0 and parallax 0.11.0, with registry checksums and the complete published
-header. Release source: `0525901ba406f8944b9d6ae65be09780808676e7`.
+The Mac app uses published core/C ABI 0.39.0, calibration 0.8.0, stacking
+0.42.0, stretch 0.3.1 and parallax 0.16.0, with registry checksums and the
+complete published header. The generated header matches the tagged package.
 
 ## Review selected flats
 
@@ -54,8 +54,8 @@ safe bias/dark pedestal before a flat can be used.
 | --- | --- | --- |
 | 0.34 flat measurement shapes, radii, holes, distances and vignetting | Carried through the Swift bridge and used by the optional review | Structured frame issues and expandable dust details are available; an image overlay remains a possible addition |
 | Native flat-set screening | Used on the selected raw set; frame/master findings shown before stacking | Consider explicit user-driven exclusion/re-screening rather than automatic removal |
-| Session-stack dust and cross-session dust matching (`dust::find_session_dust`, `find_changes`, `match_features`) | Rust core only; no C ABI exports in 0.34 | Add matching thin C ABI/Python entry points before a Mac session-comparison workflow |
-| Flat-response construction/comparison and measured selection (`flat_response::metric`) | Rust core only; no C ABI response-building/comparison exports in 0.34 | Bind the response and comparison APIs before replacing metadata selection with measured evidence |
+| Session-stack dust and cross-session dust matching (`dust::find_session_dust`, `find_changes`, `match_features`) | Available through the published C ABI; no Mac session-comparison UI yet | Build a session-comparison workflow with explicit insufficient-evidence states |
+| Flat-response construction/comparison and measured selection (`flat_response::metric`) | Available through the published C ABI; no Mac response-selection UI yet | Bind the response and comparison APIs before replacing metadata selection with measured evidence |
 | Bias/dark quality measurement and screening | C ABI available; Mac automatic preparation still uses metadata and build validation | Extend the optional review with native bias/dark verdicts |
 | Residual flat response construction/validation/application | C ABI available, no Mac editing/application workflow | Design explicit preview and application to avoid double correction |
 | RGB/LRGB/narrowband composition and photometric color calibration | C ABI available, no Mac composition controls | A separate channel-composition workflow can reuse the existing per-filter stacks |
@@ -72,7 +72,7 @@ the source-space coordinate contract adopted in 0.33.
 
 ## Validation
 
-Native tests exercise a real FITS dust disk, 0.34 algorithm-version reporting,
+Native tests exercise a real FITS dust disk, native algorithm-version reporting,
 physical geometry, lossless measurement re-encoding, screening, invalid options
 and mismatched frame sizes. Automatic preparation tests repeat review against
 cached masters and assert unchanged output/cache identity and a compact live
@@ -86,14 +86,20 @@ reported two disks at about 1.30 mm, and returned to configuration on Cancel.
 
 ![Expanded dust details](images/calibration-quality/flat-review-details.jpg)
 
-## Upcoming 0.35 bindings
+## Published session and processing APIs
 
-Core master `bed921f` (#291) supplies the thin C ABI/Python bindings missing in
-0.34: flat-response construction and comparison, change maps, light-background
-estimation, fitted-change verdicts and candidate selection; session dust
-extraction/change detection/matching; and constellation figure projection.
-These are the next building blocks for comparing flat sessions against lights,
-showing dust changes, and selecting a response with measured evidence. A fit can
-return `no_shadows` or `unfitted`; those need explicit inconclusive states in the
-UI rather than a success/failure alert. This PR remains on published 0.34.0 until
-0.35 is published and its complete API and data contracts can be validated.
+The 0.35 session/response bindings are included in 0.39: flat-response
+construction/comparison, change maps, light-background fitting, candidate
+selection, session dust extraction and matching, and constellation projection.
+A fit can return `no_shadows` or `unfitted`; these are inconclusive evidence,
+not a passing review. This update does not silently start using these APIs to
+replace flats. The existing frame review retains original selection and units.
+
+Compared with Windows #66, further desktop work includes Median Anchor and
+Layered controls, persistent RC-Astro settings, and multi-filter live sessions.
+Core 0.39 also exports stacking/stretch output versions, automatic sensor-defect
+learning, and one-step Gaia colour calibration plus stretch. Existing Mac
+master/thumbnail cache identities include the full core release, conservatively
+invalidating them when any native processing changes. Native checkpoint readers
+remain responsible for context compatibility; old contexts must never be
+silently treated as compatible.
