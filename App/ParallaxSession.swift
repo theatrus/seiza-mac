@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -44,7 +45,9 @@ final class ParallaxSession: ObservableObject {
     @Published var playhead = 0.0
     @Published private(set) var sourceImage: CGImage?
     @Published private(set) var previewImage: CGImage?
-    @Published private(set) var isBusy = false
+    @Published private(set) var isBusy = false {
+        didSet { if !isBusy { refreshRcAstroExecutable() } }
+    }
     @Published private(set) var isPlaying = false
     @Published private(set) var sourceReady = false
     @Published private(set) var status = "Preparing source snapshot…"
@@ -58,6 +61,8 @@ final class ParallaxSession: ObservableObject {
     @Published var layersAligned = true { didSet { invalidate(scene: true) } }
     @Published var automaticSeparation = false { didSet { invalidate(scene: true) } }
     private let rcAstroHost = "seiza-mac"
+    private let rcAstroSettings: RcAstroSettings
+    private var settingsSubscription: AnyCancellable?
     @Published var automaticPreview = true {
         didSet {
             if automaticPreview { scheduleRefit() }
@@ -121,12 +126,17 @@ final class ParallaxSession: ObservableObject {
         document = model
     }
 
-    init(sourceURL: URL, processing: FITSImageProcessingConfiguration, wcs: WCSResult?, preview: CGImage? = nil) {
+    init(sourceURL: URL, processing: FITSImageProcessingConfiguration, wcs: WCSResult?, preview: CGImage? = nil,
+         rcAstroSettings: RcAstroSettings? = nil) {
+        self.rcAstroSettings = rcAstroSettings ?? .shared
         sourceName = sourceURL.lastPathComponent
         sourceImage = preview; self.wcs = wcs
         let source = ParallaxScopedURL(sourceURL)
         originalSource = source
         isBusy = true
+        settingsSubscription = self.rcAstroSettings.$revision.sink { [weak self] _ in
+            self?.refreshRcAstroExecutable()
+        }
         task = Task {
             do {
                 let files = try ParallaxFiles()
@@ -152,6 +162,15 @@ final class ParallaxSession: ObservableObject {
         }
     }
 
+    private func refreshRcAstroExecutable() {
+        guard !closed, !isBusy else { return }
+        let url = rcAstroSettings.resolve()
+        guard url != selectedInputs[.separator]?.url else { return }
+        selectedInputs[.separator] = url.map(ParallaxScopedURL.init)
+        inputNames[.separator] = url?.lastPathComponent
+        if automaticSeparation { invalidate(scene: true) }
+    }
+
     var hasWCS: Bool {
         if let document, case .solved = document.solveState { return true }
         return wcs != nil
@@ -170,7 +189,7 @@ final class ParallaxSession: ObservableObject {
         guard sourceReady else { return "Wait for the source snapshot to finish loading." }
         guard !CatalogSetupController.shared.isRunning else { return "Wait for catalogue setup to finish." }
         if automaticSeparation {
-            guard selectedInputs[.separator] != nil else { return "Choose the StarXTerminator executable in Source." }
+            guard selectedInputs[.separator] != nil else { return "Choose the RC-Astro executable in Settings." }
         } else {
             guard starless != nil, stars != nil else { return "Choose both Starless and Stars images in Source." }
             guard layersAligned else { return "Enable Layers match source alignment and stretch in Source to prepare the selected pair." }
@@ -266,14 +285,16 @@ final class ParallaxSession: ObservableObject {
     /// The picker and programmatic selections share validation and scope ownership.
     func selectInput(_ kind: InputFile, url: URL) {
         guard !isBusy, !closed else { return }
-        if kind == .dustMap { chooseDustMap(ParallaxScopedURL(url)); return }
-        if kind == .separator && !FileManager.default.isExecutableFile(atPath: url.path) {
-            error = "Choose an executable rc-astro command."; return
+        if kind == .separator {
+            do { try rcAstroSettings.save(url) } catch { self.error = error.localizedDescription }
+            return
         }
+        if kind == .dustMap { chooseDustMap(ParallaxScopedURL(url)); return }
         selectedInputs[kind] = ParallaxScopedURL(url); inputNames[kind] = url.lastPathComponent
         invalidate(scene: true)
     }
     func clearInput(_ kind: InputFile) {
+        if kind == .separator { rcAstroSettings.clear(); return }
         if kind == .dustMap { clearDustMap(); return }
         selectedInputs[kind] = nil; inputNames[kind] = nil; invalidate(scene: true)
     }
@@ -929,6 +950,7 @@ final class ParallaxSession: ObservableObject {
         status = isBusy ? "Stopping after the current native step…" : "Preview update cancelled."
     }
     func close() {
+        settingsSubscription = nil
         closed = true; cancellation?.cancel(); refitSignal?.cancel(); refitRequested = false
         discardCandidate()
         stopPlayback(); frameRevision += 1; framePending = nil

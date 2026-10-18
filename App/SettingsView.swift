@@ -145,10 +145,38 @@ struct SettingsView: View {
     @StateObject private var setup = CatalogSetupController.shared
     @State private var preset = CatalogSetupPreset.standardBlind
     @State private var selectionError: String?
+    @StateObject private var rcAstro = RcAstroSettings.shared
+    @State private var rcAstroError: String?
 
     var body: some View {
         Form {
             UpdateSettingsSection(controller: updateController)
+
+            Section("Star separation") {
+                LabeledContent("RC-Astro executable") {
+                    Text(rcAstro.displayPath.isEmpty ? "Not selected" : rcAstro.displayPath)
+                        .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                    Button("Choose…") {
+                        let panel = NSOpenPanel()
+                        panel.canChooseDirectories = false
+                        panel.allowsMultipleSelection = false
+                        panel.message = "Choose your installed, licensed rc-astro command."
+                        guard panel.runModal() == .OK, let url = panel.url else { return }
+                        do { try rcAstro.save(url); rcAstroError = nil }
+                        catch { rcAstroError = error.localizedDescription }
+                    }
+                    if !rcAstro.displayPath.isEmpty {
+                        Button("Clear") { rcAstro.clear(); rcAstroError = nil }
+                    }
+                }
+                Text("Used by StarXTerminator in every Parallax window and remembered across app launches. Requires your own RC-Astro installation and licence.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if let rcAstroError { Text(rcAstroError).foregroundStyle(.red) }
+                if !rcAstro.displayPath.isEmpty && rcAstro.resolve() == nil {
+                    Text("The executable is unavailable or permission has expired. Choose it again.")
+                        .foregroundStyle(.orange)
+                }
+            }
 
             Section("Catalog location") {
                 LabeledContent("Directory") {

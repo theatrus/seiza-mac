@@ -652,3 +652,13 @@ image-shaped and cropped frames against the supplied reference video dimensions.
 They write first/last PNG frames to the temporary `Seiza-Parallax-Validation`
 directory for visual comparison, plus cropped H.264 and HEVC MP4s from the real
 images. The offline catalogues must already be installed.
+
+## Shared RC-Astro settings
+
+Choose the licensed `rc-astro` executable once in Settings → Star separation.
+The security-scoped selection survives app restarts and is shared by Parallax
+windows. Existing windows apply changed settings after any current native step
+finishes; the active operation retains its original input scope. Clear removes
+the preference for every open window. Missing, non-executable or inaccessible
+commands require choosing the executable again. Imported layer pairs continue
+to work independently of the optional separator.
