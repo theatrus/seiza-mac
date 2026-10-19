@@ -2019,7 +2019,7 @@ dependencies = [
 
 [[package]]
 name = "seiza-mac-core"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "seiza",
  "seiza-cabi",

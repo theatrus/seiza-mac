@@ -8,11 +8,27 @@ objects in it. Turn a finished image into a camera tour with depth, motion, and
 titles. Image processing and video encoding run locally; optional online
 stellar-distance lookup sends sky coordinates to astronomical catalogues.
 
-[**Download Seiza for Mac 0.8.6**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.6-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
+[**Download Seiza for Mac 0.8.7**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.7-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
 **Also from Seiza:** [Core, CLI, and libraries](https://github.com/theatrus/seiza) ·
 [Seiza for Windows](https://github.com/theatrus/seiza-win) ·
 [FITS and XISF for Photoshop](https://github.com/theatrus/xisf-photoshop)
+
+## New in 0.8.7
+
+- Watch every in-progress filter together in **All Filters**, or inspect one
+  filter's full preview, depth chart and export controls.
+- Discover filters in nested capture folders, with independent calibration,
+  resumable stacks and completion records. Pause all or finish one filter.
+- Use **Median Anchor** and **Layered** stretches in image recipes and live
+  previews; display changes preserve the linear stack.
+- Review flat quality before stacking, with compact findings, expandable dust
+  details and a complete copied report.
+- Remember the RC-Astro executable across Parallax windows and app launches.
+
+![All in-progress filters in Live Stack](docs/images/multi-filter-live/all-filters.png)
+
+![Flat calibration review](docs/images/calibration-quality/flat-review.jpg)
 
 ## Features
 
@@ -284,7 +300,7 @@ and refits the whole frame as its window changes size.
 
 ## Download
 
-[**Download Seiza for Mac 0.8.6**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.6-universal.dmg), open it, and drag Seiza to Applications.
+[**Download Seiza for Mac 0.8.7**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.7-universal.dmg), open it, and drag Seiza to Applications.
 
 Or install with [Homebrew](https://brew.sh) from the
 [theatrus/homebrew-seiza tap](https://github.com/theatrus/homebrew-seiza):

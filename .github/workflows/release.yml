@@ -236,13 +236,13 @@ jobs:
             '' \
             "### New in ${version}" \
             '' \
-            '- Generate tours from starless sources using their aligned stars layer for plate solving; matching alignment is enabled by default.' \
-            '- Prepare previews reliably with explicit solving status and source/output crop controls.' \
-            '- Pull targets and custom points back toward whole-image framing without changing the opening shot or neighboring tour stops.' \
-            '- Adjust per-stop Zoom and Dolly with sliders and see temporary transition zoom feedback; endpoint spin fitting keeps the image in frame.' \
-            '- Import, paint, export, and reload parallax dust maps in original source coordinates, with unfilmed pixels clear.' \
-            '- Check signed updates through updates.seiza.fyi with a GitHub fallback, using Sparkle 2.9.6.' \
-            '- Uses published Seiza/C ABI 0.33.0, parallax 0.10.0, stacking 0.36.0 and image I/O 0.8.0.' \
+            '- See all in-progress filter stacks together in a live preview overview, with counts, state and attention messages; inspect any filter for full details.' \
+            '- Discover filters recursively, including Unfiltered, with independent calibration, references, previews and resumable checkpoints. Pause all or finish one filter while others continue.' \
+            '- Add Median Anchor and Layered stretches to image recipes and live previews, with full parameter controls and unchanged linear FITS output.' \
+            '- Review selected flat frames before stacking with clear counts and findings, expandable dust/vignetting details and complete Copy Report output.' \
+            '- Remember the licensed RC-Astro executable in Settings and share it safely across Parallax windows and app launches.' \
+            '- Fix calibration review shutdown, avoid repeated preparation after calibration failure, and preserve every finding in large flat reports.' \
+            '- Uses published Seiza/C ABI 0.39.0, parallax 0.16.0, stacking 0.42.0, stretch 0.3.1 and image I/O 0.9.0.' \
             '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
             "- [Download the zipped application](${release_base}/Seiza-${version}-universal.zip)" \
@@ -262,6 +262,12 @@ jobs:
             '- Finder content thumbnails and Quick Look previews for FITS and XISF' \
             '- Recursive mixed-format folder browsing with collapsible groups and cached thumbnails' \
             '- Signed in-app updates with user-controlled checks and installs' \
+            '' \
+            "![All active filter stacks](${screenshot_base}/multi-filter-live/all-filters.png)" \
+            '' \
+            "![Flat calibration review](${screenshot_base}/calibration-quality/flat-review.jpg)" \
+            '' \
+            "![Layered image stretch controls](${screenshot_base}/new-stretches/layered.png)" \
             '' \
             "![Seiza folder browser and live stretch editor](${screenshot_base}/seiza-directory-stretch.png)" \
             '' \
