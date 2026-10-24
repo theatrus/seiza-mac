@@ -454,6 +454,12 @@ typedef struct {
    Per-channel noise.
    */
   double channel_noise[SEIZA_SNR_MAX_CHANNELS];
+  /*
+   The factor the stack's lights were binned by, which lowers each
+   pixel's noise about as much: compare noise and SNR only between
+   readings of one bin factor.
+   */
+  uint32_t bin_factor;
 } SeizaSnrSample;
 
 /*
@@ -498,16 +504,17 @@ extern "C" {
 const char *seiza_core_version(void);
 
 /*
- The Seiza release whose stacking, master building and registration
- output this library reproduces. Key cached stacks and masters on it
- rather than on `seiza_core_version`: it moves only when that output
- changes. The string is static and is never freed.
+ The `seiza-stacking` crate version, not the Seiza release, whose
+ stacking, master building and registration output this library
+ reproduces. Key cached stacks and masters on it rather than on
+ `seiza_core_version`: it moves only when that output changes. The string is static and is never freed.
  */
 const char *seiza_stacking_output_version(void);
 
 /*
- The Seiza release whose stretch output this library reproduces. Key
- cached stretched images on it; it moves only when that output changes.
+ The `seiza-stretch` crate version, not the Seiza release, whose stretch
+ output this library reproduces. Key cached stretched images on it; it
+ moves only when that output changes.
  The string is static and is never freed.
  */
 const char *seiza_stretch_output_version(void);
@@ -934,6 +941,31 @@ bool seiza_color_calibration_apply(float *data,
                                    char **error_out);
 
 /*
+ Render neutral, in place, the pixels of an interleaved linear RGB image
+ a stack's clipped raw samples reached: each pixel's channels rise toward
+ its brightest channel by a smooth step of its clipped fraction, the map
+ feathered over a few pixels so a neutral core fades into its halo. Run it
+ after colour calibration, on the calibrated image. `clipped` is the mono
+ map [`seiza_live_stacker_clipped_fraction`] gives, `clipped_width` by
+ `clipped_height` floats, on the image's grid or one it is a whole
+ multiple of, such as a drizzled stack's.
+
+ # Safety
+ `data` must point to `length` writable floats, `width * height * 3` of
+ them, and `clipped` to `clipped_width * clipped_height` readable floats.
+ When non-null, `error_out` must point to writable storage for one
+ pointer.
+ */
+bool seiza_color_neutralize_clipped(float *data,
+                                    size_t length,
+                                    size_t width,
+                                    size_t height,
+                                    const float *clipped,
+                                    size_t clipped_width,
+                                    size_t clipped_height,
+                                    char **error_out);
+
+/*
  Colour calibrate an interleaved linear RGB image in place against Gaia
  DR3 star colours: place the Gaia stars through the image's solution, fit
  the gains, and apply them.
@@ -1009,6 +1041,32 @@ char *seiza_color_calibrate_and_stretch_json(float *data,
                                              char **error_out);
 
 /*
+ [`seiza_color_calibrate_and_stretch_json`], rendering neutral before the
+ stretch the pixels a stack's clipped raw samples reached, as
+ [`seiza_color_neutralize_clipped`] does. `clipped` is the mono map
+ [`seiza_live_stacker_clipped_fraction`] gives, `clipped_width` by
+ `clipped_height` floats, on the image's grid or one it is a whole
+ multiple of; null for none.
+
+ # Safety
+ As [`seiza_color_calibrate_and_stretch_json`]; a non-null `clipped` must
+ point to `clipped_width * clipped_height` readable floats.
+ */
+char *seiza_color_calibrate_and_stretch_clipped_json(float *data,
+                                                     size_t length,
+                                                     size_t width,
+                                                     size_t height,
+                                                     const char *wcs_json,
+                                                     const char *gaia_json,
+                                                     const char *catalog_path,
+                                                     const char *options_json,
+                                                     const char *stretch_json,
+                                                     const float *clipped,
+                                                     size_t clipped_width,
+                                                     size_t clipped_height,
+                                                     char **error_out);
+
+/*
  The solution of an image made from a solved one by a pixel mapping, such
  as registration, a turn, binning, drizzle or a crop. `wcs_json` is the
  solved image's WCS as [`seiza_solve_image_json`] returns it;
@@ -1078,8 +1136,9 @@ char *seiza_stack_choose_reference_json(const char *paths_json,
  moved on the sensor, by dithering or drift, for a star to be told from a
  defect. Pass null or empty `options_json` for the defaults; its fields
  are `seiza_stacking::DefectDetectionOptions`'s: `"sigma"` (5),
- `"persistence"` (0.6, the fraction of lights) and `"maximum_frames"` (16,
- at least 3). A light that cannot be read or calibrated, or of another
+ `"persistence"` (0.6, the fraction of lights), `"maximum_frames"` (16,
+ at least 3) and `"gpu"`, as for [`seiza_live_stacker_open_fits`], whose
+ `"defects"` screens each light on the GPU. A light that cannot be read or calibrated, or of another
  size than the first, is passed over.
 
  Returns owned schema-1 JSON whose `defects` holds `width`, `height`,
@@ -1114,15 +1173,27 @@ char *seiza_stack_detect_defects_json(const char *paths_json,
  masters. A positive `dark_exposure_seconds` overrides the dark metadata; zero
  uses the metadata. Pass null or empty `options_json` for defaults; its
  fields are `seiza_stacking::StackOptions`'s, so a host can choose, for
- example, `"demosaic": "vng" | "mhc" | "bilinear"`,
+ example, `"demosaic": "vng" | "mhc" | "bilinear" | "superpixel"` (which
+ needs `"bin_factor": 2` or `4`),
  `"interpolation": "bilinear" | "lanczos3"`,
  `"normalization": {"mode": "local-background", "options": {"tile_size": 256}}`,
  `"weighting": {"mode": "inverse-noise-variance"}`,
- `"registration": {"model": "quadratic"}`, or
+ `"registration": {"model": "quadratic"}`,
  `"match_tolerances": {"rotation_deg": 5.0}`, the gate the reference and
  every pushed light are judged under against the masters (tolerances left
- out keep their defaults). All files
+ out keep their defaults), or `"gpu": {"enabled": false}`, which keeps
+ every pass of the stack and its reintegration on the CPU. `"gpu"` names
+ the passes that may run on the GPU, each `true` by default: `"defects"`,
+ `"debayer"`, `"detection"`, `"resampling"`, `"accumulator"` and
+ `"integration"`; with `"concurrency"`, the frame calls the GPU takes at
+ once (3), and `"trace"`, which prints each GPU call's timings to stderr.
+ All files
  are fully read during this call and are not kept open afterward.
+ Local-background offsets use median paired residuals after applying the
+ gain, preserving shared nebular structure. Mosaic reintegration uses up
+ to twenty of the best exposures covering each background sample.
+ It retains their recorded spatial corrections and fits additive residuals,
+ preserving their gains and shared sky structure.
 
  # Safety
  `reference_path` must be a valid NUL-terminated string. Optional paths and
@@ -1220,8 +1291,12 @@ SeizaLiveStacker *seiza_live_stacker_open_fits_with_reference_image_candidates(c
  uses 256). A run peaks at about 40 bytes per sample. With
  `"registration": {"model": "quadratic"}` in `options_json`, a light lying
  mostly within one panel is warped onto it, which follows lens distortion
- across a meridian flip. For panels, set
- `"acceptance": {"minimum_overlap_fraction": 0.1}` or near it.
+ across a meridian flip. Unless `options_json` sets
+ `"acceptance": {"minimum_overlap_fraction": ...}`, a light joins sharing
+ 0.05 of its footprint with the canvas, as with the CLI's
+ `--reference expand`, rather than the 0.60 a fixed reference needs:
+ panels planned for 10% overlap land nearer 9%. Lights left off the
+ canvas are counted in [`seiza_live_stacker_expansion_planning_notes_json`].
  Bayer drizzle and drizzled reintegration are not supported on the canvas.
 
  The masters, `dark_exposure_seconds` and `options_json` are those of
@@ -1276,7 +1351,9 @@ char *seiza_live_stacker_expanded_lens_json(const SeizaLiveStacker *stacker, cha
 
 /*
  What planning a canvas from [`seiza_live_stacker_open_fits_expanding`]
- noted, as an owned JSON array of strings: why it skipped fitting one lens
+ noted, as an owned JSON array of strings: first, when lights did not join
+ the canvas, how many, and the most that those matching a panel overlapped
+ it against `minimum_overlap_fraction`; then why it skipped fitting one lens
  to every panel (their camera or optics differ, or their headers do not
  say), or why it kept its first plan when the lens-corrected one failed.
  The array is empty for an ordinary stack and for a reopened context,
@@ -1450,7 +1527,9 @@ char *seiza_live_stacker_reference_noise_json(const SeizaLiveStacker *stacker, c
 /*
  Returns the reference frame's mapping onto the stack grid, the identity,
  as owned JSON in the same versioned form as each pushed frame's
- `diagnostics.mapping`, so a host can keep one record per frame, the
+ `diagnostics.mapping`, including optional `channel_sites` for superpixel
+ sources (three `[x, y]` offsets in source pixels, in RGB order), so a host
+ can keep one record per frame, the
  reference included. Free it, or an `error_out` string, with
  [`seiza_string_free`].
 
@@ -1676,6 +1755,24 @@ const float *seiza_live_stacker_mean(const SeizaLiveStacker *stacker);
 const uint32_t *seiza_live_stacker_coverage(const SeizaLiveStacker *stacker);
 
 /*
+ Copy how much of each pixel's integrated observations came from clipped
+ raw pixels, from 0 to 1, into `out`: one float per pixel of the stack's
+ grid, row by row, for [`seiza_color_neutralize_clipped`]. Returns true
+ when it copied the map, and false with no error when no integrated frame
+ clipped, or their saturation level was unknown. Fails, setting
+ `error_out`, when `out` holds fewer than `width * height` floats.
+
+ # Safety
+ `stacker` must be null or a live `SeizaLiveStacker` pointer, `out` must
+ point to `length` writable floats, and a non-null `error_out` to
+ writable storage for one pointer.
+ */
+bool seiza_live_stacker_clipped_fraction(const SeizaLiveStacker *stacker,
+                                         float *out,
+                                         size_t length,
+                                         char **error_out);
+
+/*
  Borrows the rejected-observation count for each image sample. The pointer
  has the same lifetime as [`seiza_live_stacker_mean`].
 
@@ -1763,6 +1860,11 @@ bool seiza_live_stacker_retain_frames_for_reintegration(SeizaLiveStacker *stacke
  sample plus the bands of frames being read, at most 256 MiB, independent
  of the frame count; up to four frames are held whole at once while their
  normalization is fitted.
+ These bounds require a working scratch cache. If the system temporary
+ directory cannot hold it, replay may fall back to whole-frame processing
+ with substantially greater memory use. To choose another disk for ordinary
+ reintegration, retain frames in an existing writable directory before
+ stacking with [`seiza_live_stacker_retain_frames_for_reintegration`].
 
  # Safety
  `stacker` must be a live `SeizaLiveStacker` pointer, externally
@@ -1783,6 +1885,10 @@ SeizaStackSnapshot *seiza_live_stacker_reintegrate(const SeizaLiveStacker *stack
  [`seiza_live_stacker_reintegrate`], also drizzling every admitted frame
  onto a grid `scale` (1 to 4) times finer than the reference, as
  PixInsight's DrizzleIntegration follows ImageIntegration.
+
+ A binned stack (see [`seiza_live_stacker_bin_factor`]) drops each
+ frame's sensor pixels, so a `scale` of its bin factor gives the sensor's
+ resolution, with rejection decided on the binned grid.
 
  During the final pass each frame is read once more from its source file
  and calibrated, but not debayered or resampled. Every source pixel,
@@ -1816,6 +1922,64 @@ SeizaDrizzleResult *seiza_live_stacker_reintegrate_drizzled(const SeizaLiveStack
                                                             void *context,
                                                             SeizaStackSnapshot **snapshot_out,
                                                             char **error_out);
+
+/*
+ The factor every light of this stack is binned by after calibration and
+ before registration (the `"bin_factor"` of its stack options JSON), 1 to
+ 4: the live view, snapshots and each frame's mapping are on the binned
+ grid. 0 for a null stacker.
+
+ # Safety
+ `stacker` must be null or a live `SeizaLiveStacker` pointer.
+ */
+uint32_t seiza_live_stacker_bin_factor(const SeizaLiveStacker *stacker);
+
+/*
+ [`seiza_live_stacker_reintegrate`] at the sensor's full resolution: every
+ admitted frame of a binned stack read again unbinned and integrated onto
+ a grid [`seiza_live_stacker_bin_factor`] times as fine. At a bin factor
+ of 1 it is [`seiza_live_stacker_reintegrate`].
+
+ No transform is searched for again: each frame's is carried exactly from
+ the binned grid. With `refine`, a single field detects every frame's
+ stars at full resolution, as it does the reference frame's, and refits
+ each transform from that seed; a frame whose stars do not pair keeps the
+ carried one. An expanded canvas refits each frame against the canvas the
+ other frames build at full resolution; a frame warped onto its panel keeps
+ its carried warp. The snapshot's reference headers carry the reference's
+ WCS to the finer grid, with its binning and pixel-size cards the sensor's
+ again.
+
+ When non-null, `refined_frames_out` receives how many frames were
+ refined, and `registration_rms_out` the median registration RMS of the
+ admitted frames in the sensor's pixels: each refined frame's refit, and
+ for every other frame the RMS the binned pass measured, which its carried
+ transform is expected to keep (a host may warn on a canvas). It is NaN
+ when no frame's is known, as for a stack reopened from a context and not
+ refined. The refit reads each frame once. On a canvas it reads every
+ contributor once, then unwarped frames again; when every frame already
+ has a warp, it skips the refit and its reads entirely. The
+ `progress` hears each read as pass 0 for each frame in turn before the
+ reintegration's own progress.
+ `low_sigma`, `high_sigma`, `cancel`, `progress` and `context` work as in
+ [`seiza_live_stacker_reintegrate`], and memory is reintegration's on the
+ finer grid.
+
+ # Safety
+ As for [`seiza_live_stacker_reintegrate`]. When non-null,
+ `refined_frames_out` and `registration_rms_out` must each point to
+ writable storage for one value.
+ */
+SeizaStackSnapshot *seiza_live_stacker_reintegrate_full_resolution(const SeizaLiveStacker *stacker,
+                                                                   bool refine,
+                                                                   float low_sigma,
+                                                                   float high_sigma,
+                                                                   const SeizaCancelSignal *cancel,
+                                                                   SeizaStackReintegrateProgressCallback progress,
+                                                                   void *context,
+                                                                   size_t *refined_frames_out,
+                                                                   double *registration_rms_out,
+                                                                   char **error_out);
 
 /*
  # Safety
@@ -3056,18 +3220,28 @@ bool seiza_calibration_apply_residual_flat_response(const float *response,
  `minimumSigma` (a noise floor in the frames' units, 1e-6 by default) and
  `frameWeights` (one list per input with one positive weight per channel,
  as a live stack's diagnostics give them; left out, every frame weighs
- the same). Each input is read through seiza-image-io once per pass, and
- must read the same each time. Nothing is registered or normalized again,
- and every input takes part. Pixels with fewer than three samples are
- averaged without rejection. Memory is about 40 bytes per output sample
- plus one frame.
+ the same), `scratchDirectory` and `gpu`, as for
+ [`seiza_live_stacker_open_fits`], whose `"integration"` runs the
+ rejection passes on the GPU. Each input is read through
+ seiza-image-io once and kept in a scratch file, four bytes per sample,
+ in a new directory inside `scratchDirectory`, an existing writable
+ directory, or the system temporary directory; the three passes then read
+ the files back in bands of rows, and the directory is removed before
+ this returns. Nothing is registered or normalized again, and every input
+ takes part. Pixels with fewer than three samples are averaged without
+ rejection. Memory is about 20 bytes per output sample plus the bands
+ being read, at most 256 MiB, and the input being read. When the system
+ temporary directory cannot take every input, each is instead read once
+ per pass, in about 40 bytes per output sample plus one input; a chosen
+ `scratchDirectory` that cannot fails the call.
 
  When `report_out` is non-null it receives owned JSON holding `frames`,
  one per input in request order, with its `path`, `finiteSamples` (the
  samples it covers) and `integratedSamples` (those rejection kept); free
  it with [`seiza_string_free`]. `cancel` and `progress` work as for
  [`seiza_live_stacker_reintegrate`], with the input's index and the input
- count. The snapshot writes with the first input's WCS, and
+ count: pass 0 before each input is read, then pass 2 for the input
+ indices in turn, spread over the bands. The snapshot writes with the first input's WCS, and
  refuses to write over an input. Release it with
  [`seiza_stack_snapshot_free`]. On failure the snapshot and report are
  null and `error_out` says why.

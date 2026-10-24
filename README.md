@@ -173,6 +173,18 @@ channel’s own normalization. Calibrate with existing masters or build and
 cache matched masters from raw calibration frames. Track progress and SNR,
 cancel a run, and open the saved results.
 
+### Select and stack mosaic panels
+
+Turn on **Group mosaic panels by solved coordinates** in the Stack dialog,
+solve selected lights, then select whole panels or individual exposures.
+Disconnected fields and filters produce separate outputs. Choose **Expanded
+mosaic** to retain panel edges, with a memory ceiling and native planning/lens
+notes. See the [mosaic and GPU guide](docs/MOSAIC-STACKING.md).
+
+In **Settings → Stacking performance**, **Use GPU for stacking** defaults to
+automatic GPU use with CPU fallback. Turning it off keeps new stacks on the CPU;
+active and resumed live stacks retain their saved mode.
+
 ### Stack as exposures arrive
 
 Watch a capture folder during an imaging session. Seiza waits until each FITS
@@ -352,7 +364,7 @@ encoding run natively on the Mac.
 
 ### Build
 
-Requirements: macOS 15 or newer, Xcode 26, Rust 1.89 or newer, and the Rust
+Requirements: macOS 15 or newer, Xcode 26 or newer, Rust 1.99.1, and the Rust
 target matching the Mac being built.
 
 ```sh
@@ -374,8 +386,8 @@ DerivedData/Build/Products/Debug/Seiza.app
 
 Open `Seiza.xcodeproj` to run and sign it with a local development team.
 
-The app uses published `seiza-cabi` 0.39.0, `seiza` 0.39.0,
-`seiza-parallax` 0.16.0, `seiza-stacking` 0.42.0 and `seiza-download` 0.9.0, with dust maps, depth planes and
+The app uses published `seiza-cabi` 0.42.0, `seiza` 0.42.0,
+`seiza-parallax` 0.19.0, `seiza-stacking` 0.45.0 and `seiza-download` 0.9.0, with dust maps, depth planes and
 image reading and writing through `seiza-image-io`. Library and bridge header
 must be updated together. About reports the linked release version and source
 commit. Optional [flat-quality review](docs/CALIBRATION-QUALITY.md) uses the native

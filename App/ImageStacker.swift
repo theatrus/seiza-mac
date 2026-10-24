@@ -93,7 +93,23 @@ enum StackCalibrationSource: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+enum StackCanvasMode: String, CaseIterable, Identifiable, Sendable {
+    case fixed, expanded
+    var id: String { rawValue }
+    var title: String { self == .fixed ? "Fixed reference" : "Expanded mosaic" }
+}
+
+enum StackingPreferences {
+    static func usesGPU(in defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: "useGpuForStacking") as? Bool ?? true
+    }
+}
+
 struct ImageStackOptions: Equatable, Sendable {
+    var useGPU = true
+    var canvasMode = StackCanvasMode.fixed
+    var maximumCanvasMegasamples = 256
+
     var normalization = StackNormalizationMode.global
     var localTileSize = 256
     var rejection = StackRejectionMode.deltaSigma
@@ -128,6 +144,12 @@ struct ImageStackOptions: Equatable, Sendable {
     }
 
     var validationMessage: String? {
+        if !(1...4096).contains(maximumCanvasMegasamples) {
+            return "Canvas limit must be between 1 and 4096 million samples."
+        }
+        if canvasMode == .expanded, cfaIntegration == .bayerDrizzle {
+            return "Bayer drizzle is unavailable on expanded canvases."
+        }
         if usesLocalTiles, localTileSize < 16 {
             return "Local normalization tiles must be at least 16 pixels wide."
         }
@@ -164,6 +186,33 @@ struct ImageStackOptions: Equatable, Sendable {
         return nil
     }
 
+    /// GPU policy changes execution, not checkpoint processing compatibility.
+    static func savedUsesGPU(_ json: String) throws -> Bool {
+        _ = try processingIdentity(json)
+        let value = try JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any]
+        return (value["gpu"] as? [String: Any])?["enabled"] as? Bool ?? true
+    }
+
+    private static func processingIdentity(_ json: String) throws -> Data {
+        guard var value = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else {
+            throw ImageStackError.invalidRequest("Invalid saved stack options.")
+        }
+        if let gpuValue = value["gpu"] {
+            guard let gpu = gpuValue as? [String: Any],
+                gpu.keys.allSatisfy({ ["enabled", "trace"].contains($0) }),
+                gpu.values.allSatisfy({ CFGetTypeID($0 as CFTypeRef) == CFBooleanGetTypeID() }) else {
+                throw ImageStackError.invalidRequest("Invalid saved GPU policy.")
+            }
+        }
+        value.removeValue(forKey: "gpu")
+        return try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+    }
+
+    static func sameProcessingOptions(_ lhs: String, _ rhs: String) -> Bool {
+        guard let a = try? processingIdentity(lhs), let b = try? processingIdentity(rhs) else { return false }
+        return a == b
+    }
+
     private static func isPositiveNativeFloat(_ value: Double) -> Bool {
         value.isFinite && Float(value).isFinite && Float(value) > 0
     }
@@ -180,6 +229,8 @@ struct ImageStackOptions: Equatable, Sendable {
 }
 
 private struct StackOptionsPayload: Encodable {
+    let gpu: GPUPayload?
+    struct GPUPayload: Encodable { let enabled: Bool }
     let registration: RegistrationPayload
     let normalization: NormalizationPayload
     let rejection: RejectionPayload
@@ -191,12 +242,13 @@ private struct StackOptionsPayload: Encodable {
     let cfaIntegration: String?
 
     enum CodingKeys: String, CodingKey {
-        case registration, normalization, rejection, acceptance, cosmetic, weighting
+        case gpu, registration, normalization, rejection, acceptance, cosmetic, weighting
         case interpolation, demosaic
         case cfaIntegration = "cfa_integration"
     }
 
     init(options: ImageStackOptions) {
+        gpu = options.useGPU ? nil : GPUPayload(enabled: false)
         registration = RegistrationPayload(
             maximumDriftPixels: options.maximumDriftPixels,
             maximumDriftFraction: options.maximumDriftFraction,
@@ -425,6 +477,67 @@ struct StackChannelReferenceSelection: Decodable, Sendable {
 /// The caller owns the returned handle. An external alignment image opens an
 /// empty accumulator; its selected channel light must be pushed first.
 enum StackNativeOpener {
+    static func openExpanded(
+        paths: [String], optionsJSON: String, calibration: ImageStackCalibration,
+        maximumMegasamples: Int, cancellation: ImageStackCancellation
+    ) throws -> (handle: OpaquePointer, note: String) {
+        guard paths.count >= 2, (1...4096).contains(maximumMegasamples) else {
+            throw ImageStackError.invalidRequest("Choose at least two lights and a valid canvas sample limit.")
+        }
+        guard Set(paths).count == paths.count else {
+            throw ImageStackError.invalidRequest("Mosaic lights must be distinct.")
+        }
+        let pathsJSON = String(decoding: try JSONEncoder().encode(paths), as: UTF8.self)
+        var error: UnsafeMutablePointer<CChar>?
+        defer { if let error { seiza_string_free(error) } }
+        let handle = withOptionalCString(calibration.bias?.path) { bias in
+            withOptionalCString(calibration.dark?.path) { dark in
+                withOptionalCString(calibration.flat?.path) { flat in
+                    pathsJSON.withCString { paths in
+                        optionsJSON.withCString { options in
+                            seiza_live_stacker_open_fits_expanding(paths, bias, dark, flat,
+                                calibration.overridesDarkExposure ? calibration.darkExposureSeconds : 0,
+                                options, maximumMegasamples, cancellation.nativeSignal?.pointer, &error)
+                        }
+                    }
+                }
+            }
+        }
+        // Take ownership before observing cancellation: even cancelled opens may return a handle.
+        guard let handle else {
+            if cancellation.isCancelled { throw CancellationError() }
+            throw ImageStackError.core(CalibrationService.takeOwnedError(&error, fallback: "Could not plan the mosaic canvas."))
+        }
+        do {
+            if cancellation.isCancelled { throw CancellationError() }
+            guard seiza_live_stacker_accepted_frames(handle) == 0,
+                seiza_live_stacker_rejected_frames(handle) == 0 else {
+                throw ImageStackError.core("The mosaic plan was not empty.")
+            }
+            func readJSON(_ call: (OpaquePointer, UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) -> UnsafeMutablePointer<CChar>?) throws -> Data {
+                var localError: UnsafeMutablePointer<CChar>?
+                defer { if let localError { seiza_string_free(localError) } }
+                guard let value = call(handle, &localError) else {
+                    throw ImageStackError.core(CalibrationService.takeOwnedError(&localError, fallback: "Could not read mosaic planning notes."))
+                }
+                defer { seiza_string_free(value) }
+                return Data(bytes: value, count: strlen(value))
+            }
+            let notes = try JSONDecoder().decode([String].self,
+                from: readJSON(seiza_live_stacker_expansion_planning_notes_json))
+            let lens = try JSONSerialization.jsonObject(with: readJSON(seiza_live_stacker_expanded_lens_json), options: [.fragmentsAllowed])
+            var note = "Expanded mosaic canvas: \(seiza_live_stacker_width(handle)) × \(seiza_live_stacker_height(handle)), \(seiza_live_stacker_channels(handle)) channel(s)."
+            if let lens = lens as? [String: Any], let shift = lens["largestShiftPixels"] as? Double {
+                note += String(format: " Lens correction: %.2f sensor pixels maximum shift.", shift)
+            }
+            if !notes.isEmpty { note += " " + notes.joined(separator: " ") }
+            return (handle, note)
+        } catch {
+            seiza_live_stacker_free(handle)
+            throw error
+        }
+    }
+
     static func open(
         candidates: [String], referenceImagePath: String?,
         optionsJSON: String, calibration: ImageStackCalibration
@@ -573,9 +686,10 @@ struct ImageStackRequest: Sendable {
     let calibration: ImageStackCalibration
     let referenceImage: URL?
     let choosesReferenceAutomatically: Bool
+    let additionalProtectedSources: [URL]
 
     var protectedSources: [URL] {
-        inputs + [calibration.bias, calibration.dark, calibration.flat, referenceImage].compactMap { $0 }
+        inputs + additionalProtectedSources + [calibration.bias, calibration.dark, calibration.flat, referenceImage].compactMap { $0 }
     }
 
     init(
@@ -585,7 +699,8 @@ struct ImageStackRequest: Sendable {
         options: ImageStackOptions,
         calibration: ImageStackCalibration,
         referenceImage: URL? = nil,
-        choosesReferenceAutomatically: Bool = false
+        choosesReferenceAutomatically: Bool = false,
+        additionalProtectedSources: [URL] = []
     ) {
         self.inputs = inputs
         self.output = output
@@ -594,6 +709,7 @@ struct ImageStackRequest: Sendable {
         self.calibration = calibration
         self.referenceImage = referenceImage
         self.choosesReferenceAutomatically = choosesReferenceAutomatically
+        self.additionalProtectedSources = additionalProtectedSources
     }
 }
 
@@ -602,12 +718,16 @@ struct ImageStackGroup: Identifiable, Sendable {
     let filter: ImageFilenameFilter?
     let inputs: [URL]
 
+    var fieldTitle: String? = nil
+    var outputSuffix: String? = nil
+
     var title: String {
-        filter?.title ?? (id == "all" ? "All frames" : "Other")
+        if let fieldTitle { return fieldTitle + (filter.map { " · " + $0.title } ?? "") }
+        return filter?.title ?? (id == "all" ? "All frames" : "Other")
     }
 
     var filenameSuffix: String {
-        filter?.filenameSuffix ?? "Other"
+        outputSuffix ?? filter?.filenameSuffix ?? "Other"
     }
 }
 
@@ -770,6 +890,9 @@ enum ImageStackEngine {
         guard request.inputs.count >= 2 else {
             throw ImageStackError.invalidRequest("Choose at least two images to stack.")
         }
+        if request.options.canvasMode == .expanded, request.referenceImage != nil {
+            throw ImageStackError.invalidRequest("Expanded mosaics cannot use a shared fixed alignment image.")
+        }
         if let message = request.options.validationMessage
             ?? request.calibration.validationMessage(for: request.inputs) {
             throw ImageStackError.invalidRequest(message)
@@ -814,9 +937,22 @@ enum ImageStackEngine {
             message: request.referenceImage == nil ? "Opening channel reference…"
                 : "Aligning channel reference to shared image (up to \(candidates.count) candidates)…",
             completedFrames: 0, totalFrames: request.inputs.count, acceptedFrames: 0, rejectedFrames: 0))
-        let opened = try StackNativeOpener.open(candidates: candidates.map(\.path),
-            referenceImagePath: request.referenceImage?.path, optionsJSON: optionsJSON,
-            calibration: request.calibration)
+        let expanded = request.options.canvasMode == .expanded
+        var canvasNote: String?
+        let opened: (handle: OpaquePointer, selection: StackChannelReferenceSelection?)
+        if expanded {
+            let anchor = candidates[0]
+            let paths = ([anchor] + request.inputs.filter { $0 != anchor }).map(\.path)
+            let plan = try StackNativeOpener.openExpanded(paths: paths, optionsJSON: optionsJSON,
+                calibration: request.calibration, maximumMegasamples: request.options.maximumCanvasMegasamples,
+                cancellation: cancellation)
+            opened = (plan.handle, nil)
+            canvasNote = plan.note
+        } else {
+            opened = try StackNativeOpener.open(candidates: candidates.map(\.path),
+                referenceImagePath: request.referenceImage?.path, optionsJSON: optionsJSON,
+                calibration: request.calibration)
+        }
         var liveStacker: OpaquePointer? = opened.handle
         defer {
             if let liveStacker {
@@ -827,8 +963,8 @@ enum ImageStackEngine {
         if cancellation.isCancelled { throw CancellationError() }
         let chosen = URL(fileURLWithPath: opened.selection?.channelReferencePath ?? candidates[0].path)
         let orderedInputs = [chosen] + request.inputs.filter { $0.path != chosen.path }
-        let initialCount = request.referenceImage == nil ? 1 : 0
-        let referenceNote = opened.selection.map { selection in
+        let initialCount = !expanded && request.referenceImage == nil ? 1 : 0
+        let referenceNote = canvasNote ?? opened.selection.map { selection in
             "Alignment image: \(request.referenceImage!.lastPathComponent). " + selection.summary
         }
         var dispositions: [ImageStackDisposition] = []
@@ -1238,6 +1374,9 @@ struct ImageStackWorkflowView: View {
     @State private var flatQualityOptions = FlatQualityOptions()
     @State private var splitByFilenameFilter = true
     @State private var outputBaseName = "stacked"
+    @State private var groupsPanelsAutomatically = false
+    @State private var panelAnalysis: SkyPanelAnalysis?
+    @State private var overlapWasEdited = false
     @State private var showsAdvancedOptions = false
     @State private var showsCalibration = false
     @State private var isChoosingFile = false
@@ -1296,6 +1435,79 @@ struct ImageStackWorkflowView: View {
         }
     }
 
+    private func panelSelection(_ analysis: SkyPanelAnalysis) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Select panels to include").font(.headline)
+            ForEach(Array(analysis.fields.enumerated()), id: \.element.id) { index, field in
+                Text("Sky field \(index + 1)").font(.subheadline.weight(.semibold))
+                ForEach(field.panels) { panel in
+                    HStack(alignment: .top, spacing: 8) {
+                        Toggle("Include \(panel.title)", isOn: Binding(
+                            get: { panel.frames.allSatisfy { selectedURLs.contains($0.url) } },
+                            set: { checked in
+                                for frame in panel.frames {
+                                    if checked { selectedURLs.insert(frame.url) }
+                                    else { selectedURLs.remove(frame.url) }
+                                }
+                            }))
+                            .toggleStyle(.checkbox)
+                            .labelsHidden()
+                            .accessibilityLabel("Include \(panel.title)")
+                        DisclosureGroup {
+                            ForEach(panel.frames, id: \.url) { frame in
+                                Toggle(frame.url.lastPathComponent, isOn: selectedBinding(for: frame.url))
+                                    .toggleStyle(.checkbox)
+                                    .help(frame.url.path)
+                            }
+                        } label: {
+                            Text("\(panel.title) · \(panel.frames.count) exposures · \(panel.position)")
+                                .font(.caption)
+                        }
+                    }
+                }
+            }
+            if !analysis.failures.isEmpty {
+                DisclosureGroup("Excluded (\(analysis.failures.count))") {
+                    ForEach(analysis.failures) { failure in
+                        Text("\(failure.url.lastPathComponent): \(failure.reason)")
+                            .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    }
+                }
+            }
+        }
+    }
+
+    private func analyzePanels() {
+        let inputs = selectedFrames
+        let catalog = CatalogAccess.resolve()
+        isPreparingCalibration = true
+        preparationMessage = "Solving selected lights…"
+        preparationNotice = nil
+        preparationTask = Task { @MainActor in
+            let worker = Task.detached(priority: .userInitiated) {
+                try SkyPanelService.analyze(inputs, catalog: catalog) { message in
+                    Task { @MainActor in preparationMessage = message }
+                }
+            }
+            do {
+                let analysis = try await withTaskCancellationHandler {
+                    try await worker.value
+                } onCancel: { worker.cancel() }
+                try Task.checkCancellation()
+                // Commit analysis and selection together; cancellation leaves the prior analysis intact.
+                panelAnalysis = analysis
+                selectedURLs = Set(analysis.fields.first?.panels.flatMap(\.frames).map(\.url) ?? [])
+                if options.canvasMode != .expanded {
+                    options.canvasMode = .expanded
+                    if !overlapWasEdited { options.minimumOverlap = 0.05 }
+                }
+                preparationNotice = "Found \(analysis.fields.count) sky fields; \(analysis.failures.count) excluded. Review the selected panels before stacking."
+            } catch is CancellationError { preparationNotice = "Panel analysis was cancelled." }
+            catch { preparationNotice = error.localizedDescription }
+            isPreparingCalibration = false
+        }
+    }
+
     private var warningSheetBinding: Binding<Bool> {
         Binding(
             get: { pendingWarnings != nil },
@@ -1330,37 +1542,53 @@ struct ImageStackWorkflowView: View {
             Divider()
 
             Form {
+                Section("Mosaic panels") {
+                    Toggle("Group mosaic panels by solved coordinates", isOn: $groupsPanelsAutomatically)
+                    Text("Solve 2–512 selected lights, review panels and exposures, then stack. Unrelated fields and filters produce separate outputs. Installed solving catalogs are required.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if groupsPanelsAutomatically {
+                        Button("Solve and group selected lights", action: analyzePanels)
+                            .disabled(selectedFrames.count < 2 || selectedFrames.count > 512)
+                        if let analysis = panelAnalysis {
+                            panelSelection(analysis)
+                        }
+                    }
+                }
                 Section("Frames") {
                     HStack {
                         Text("\(selectedURLs.count) of \(urls.count) selected")
                             .foregroundStyle(.secondary)
                         Spacer()
                         Button("All") {
-                            selectedURLs = Set(urls)
+                            selectedURLs = Set(groupsPanelsAutomatically ? (panelAnalysis?.solved.map(\.url) ?? urls) : urls)
                         }
                         Button("None") {
                             selectedURLs.removeAll()
                         }
                     }
 
-                    List(urls, id: \.self) { url in
-                        Toggle(isOn: selectedBinding(for: url)) {
-                            Text(url.lastPathComponent)
-                                .lineLimit(1)
+                    if !groupsPanelsAutomatically || panelAnalysis == nil {
+                        List(urls, id: \.self) { url in
+                            Toggle(isOn: selectedBinding(for: url)) {
+                                Text(url.lastPathComponent).lineLimit(1)
+                            }
                         }
+                        .frame(height: 150)
                     }
-                    .frame(height: 150)
 
                     if hasMultipleDetectedFilters {
                         Toggle("Split by filename filter", isOn: $splitByFilenameFilter)
                         Text("Recognizes L, R, G, B, Ha, OIII, S/SII, and H-beta; other filter names stay unchanged.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        if splitsSelectedFramesByFilter {
+                        if stackGroups.count > 1 {
                             TextField("Output base name", text: $outputBaseName)
                         }
                     }
 
+                    if !hasMultipleDetectedFilters && stackGroups.count > 1 {
+                        TextField("Output base name", text: $outputBaseName)
+                    }
                     ForEach(stackGroups) { group in
                         Picker(
                             stackGroups.count == 1 ? "Channel reference" : "\(group.title) channel reference",
@@ -1411,6 +1639,17 @@ struct ImageStackWorkflowView: View {
                 }
 
                 Section("Stack") {
+                    Picker("Canvas", selection: $options.canvasMode) {
+                        ForEach(StackCanvasMode.allCases) { mode in Text(mode.title).tag(mode) }
+                    }
+                    .onChange(of: options.canvasMode) { _, mode in
+                        if !overlapWasEdited { options.minimumOverlap = mode == .expanded ? 0.05 : 0.60 }
+                    }
+                    if options.canvasMode == .expanded {
+                        TextField("Maximum canvas (million samples)", value: $options.maximumCanvasMegasamples, format: .number)
+                        Text("Samples are pixels × channels. Peak working memory is approximately 40 bytes per sample (256 million ≈ 10 GB). Panels may connect through other panels; native registration decides which lights join. Shared fixed alignment and Bayer drizzle are unavailable.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     StackProcessingOptionsView(options: $options)
                     Picker("Normalization", selection: $options.normalization) {
                         ForEach(StackNormalizationMode.allCases) { mode in
@@ -1527,7 +1766,7 @@ struct ImageStackWorkflowView: View {
                     )
                     TextField(
                         "Minimum overlap",
-                        value: $options.minimumOverlap,
+                        value: Binding(get: { options.minimumOverlap }, set: { options.minimumOverlap = $0; overlapWasEdited = true }),
                         format: .number
                     )
                 }
@@ -1633,7 +1872,10 @@ struct ImageStackWorkflowView: View {
     }
 
     private var stackGroups: [ImageStackGroup] {
-        ImageStackGrouping.groups(
+        if groupsPanelsAutomatically {
+            return panelAnalysis?.selectedGroups(selectedFrames, splitByFilter: splitByFilenameFilter) ?? []
+        }
+        return ImageStackGrouping.groups(
             for: selectedFrames,
             splitByFilter: splitsSelectedFramesByFilter
         )
@@ -1649,11 +1891,18 @@ struct ImageStackWorkflowView: View {
     }
 
     private var setupValidationMessage: String? {
+        if groupsPanelsAutomatically {
+            guard panelAnalysis != nil else { return "Solve and group selected lights before stacking." }
+            guard !stackGroups.isEmpty else { return "Choose lights from a solved panel." }
+        }
+        if options.canvasMode == .expanded, referenceImage != nil {
+            return "Clear the shared alignment image before using an expanded canvas."
+        }
         guard selectedURLs.count >= 2 else { return "Choose at least two frames." }
         if let group = stackGroups.first(where: { $0.inputs.count < 2 }) {
             return "\(group.title) needs at least two selected frames."
         }
-        if splitsSelectedFramesByFilter {
+        if stackGroups.count > 1 {
             let baseName = outputBaseName.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !baseName.isEmpty, !baseName.contains("/"), !baseName.contains(":") else {
                 return "Enter a valid output base name."
@@ -1759,10 +2008,19 @@ struct ImageStackWorkflowView: View {
         guard setupValidationMessage == nil else { return }
         isChoosingFile = true
         Task { @MainActor in
+            if groupsPanelsAutomatically, let analysis = panelAnalysis {
+                let inputs = selectedFrames
+                let unchanged = await Task.detached { analysis.sourcesUnchanged(inputs) }.value
+                guard unchanged else {
+                    isChoosingFile = false
+                    preparationNotice = "A selected source changed. Solve and group it again."
+                    return
+                }
+            }
             let groups = stackGroups
             let outputSelection = await StackFilePanels.chooseOutputs(
                 for: groups,
-                splitByFilter: splitsSelectedFramesByFilter,
+                splitByFilter: groups.count > 1,
                 baseName: outputBaseName.trimmingCharacters(in: .whitespacesAndNewlines),
                 directory: urls.first?.deletingLastPathComponent()
             )
@@ -1810,6 +2068,12 @@ struct ImageStackWorkflowView: View {
         }
     }
 
+    private var stackOptions: ImageStackOptions {
+        var snapshot = options
+        snapshot.useGPU = StackingPreferences.usesGPU()
+        return snapshot
+    }
+
     private func makeJobs(
         groups: [ImageStackGroup],
         outputSelection: StackFilePanels.OutputSelection,
@@ -1822,19 +2086,26 @@ struct ImageStackWorkflowView: View {
                     inputs: orderedInputs(for: group),
                     output: output,
                     outputAccessURL: outputSelection.accessURL,
-                    options: options,
+                    options: stackOptions,
                     calibration: calibrationsByGroup[group.id]
                         ?? (calibrationSource == .automatic
                             ? ImageStackCalibration()
                             : calibration),
                     referenceImage: referenceImage,
-                    choosesReferenceAutomatically: automaticReferenceGroups.contains(group.id)
+                    choosesReferenceAutomatically: automaticReferenceGroups.contains(group.id),
+                    additionalProtectedSources: urls
                 )
             )
         }
     }
 
     private func startBatch(_ jobs: [ImageStackJob]) {
+        if groupsPanelsAutomatically,
+            panelAnalysis?.sourcesUnchanged(jobs.flatMap { $0.request.inputs }) != true {
+            preparationNotice = "A selected source changed. Solve and group it again."
+            releasePreparedResults()
+            return
+        }
         coordinator.start(
             request: ImageStackBatchRequest(jobs: jobs),
             onSuccess: { result in
