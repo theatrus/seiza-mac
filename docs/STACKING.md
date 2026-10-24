@@ -138,3 +138,10 @@ filter and does not retry the review or count the light as unreadable. Pause/clo
 suppresses pending and queued calibration reviews before waiting for workers;
 calibration failures never enter the automatic-reference fallback path. The UI was exercised with H-alpha, OIII and
 Unfiltered lights, including finish, pause and resume.
+
+## Mosaic panels and GPU settings
+
+See [Mosaic stacking and GPU performance](MOSAIC-STACKING.md) for automatic
+coordinate-based panel/exposure selection, expanded canvases, memory limits and
+the persistent Settings GPU preference. Live acquisition retains its fixed
+canvas; resumed accumulators retain their saved GPU policy.

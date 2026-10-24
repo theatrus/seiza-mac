@@ -142,6 +142,7 @@ struct CatalogComponentDisplay: Identifiable, Equatable {
 struct SettingsView: View {
     let updateController: UpdateController
     @AppStorage("catalogDirectory") private var catalogDirectory = ""
+    @AppStorage("useGpuForStacking") private var useGpuForStacking = true
     @StateObject private var setup = CatalogSetupController.shared
     @State private var preset = CatalogSetupPreset.standardBlind
     @State private var selectionError: String?
@@ -176,6 +177,12 @@ struct SettingsView: View {
                     Text("The executable is unavailable or permission has expired. Choose it again.")
                         .foregroundStyle(.orange)
                 }
+            }
+
+            Section("Stacking performance") {
+                Toggle("Use GPU for stacking", isOn: $useGpuForStacking)
+                Text("Automatically uses available GPU operations for new directory and live stacks, with CPU fallback. Turning this off keeps new stacks on the CPU. Active and resumed stacks keep their saved setting. Results can differ slightly between modes.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Section("Catalog location") {

@@ -58,6 +58,7 @@ struct LiveStackRunConfiguration: Sendable {
             || groupTitle.trimmingCharacters(in: .whitespaces).isEmpty {
             return "The live-stack group is not configured."
         }
+        if options.canvasMode != .fixed { return "Live acquisition requires a fixed canvas." }
         if let message = options.validationMessage { return message }
         if let message = calibration.validationMessage(for: []) { return message }
         if previewProcessingJSON.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -299,6 +300,7 @@ actor LiveStackCoordinator {
     private let referenceSelector: @Sendable ([URL]) throws -> StackReferenceSelection
     private let store: LiveStackSessionStore
     private let monitor: StackFolderMonitor
+    private var savedOptionsJSON: String?
     private var session: LiveStackNativeSession?
     private var sessionId = UUID().uuidString
         .replacingOccurrences(of: "-", with: "").lowercased()
@@ -624,6 +626,7 @@ actor LiveStackCoordinator {
                     "Saved generation \(candidate.generation) did not match this run.")
                 continue
             }
+            let savedGPU = try ImageStackOptions.savedUsesGPU(candidate.manifest.state.stackOptionsJSON)
             let restoredSession: LiveStackNativeSession
             let nativeState: LiveStackNativeState
             do {
@@ -645,6 +648,10 @@ actor LiveStackCoordinator {
                     "Saved generation \(candidate.generation) did not describe its "
                         + "own checkpoint.")
                 continue
+            }
+            savedOptionsJSON = candidate.manifest.state.stackOptionsJSON
+            if savedGPU != configuration.options.useGPU {
+                addAttention("This live stack retains its saved GPU setting (" + (savedGPU ? "automatic" : "CPU only") + "), which differs from Settings.")
             }
             session = restoredSession
             do {
@@ -686,13 +693,14 @@ actor LiveStackCoordinator {
             && LiveStackPath.equals(state.watchFolder, configuration.watchFolder)
             && (configuration.targetFilter.map { $0.matches(.fromStoredName(state.filterName)) } ?? true)
             && state.includesSubdirectories == configuration.includeSubdirectories
-            && state.stackOptionsJSON == (try? optionsJSON()) ?? ""
+            && ImageStackOptions.sameProcessingOptions(state.stackOptionsJSON, (try? optionsJSON()) ?? "")
             && (configuration.referenceImagePath == nil
                 || StackInputProtection.referenceIdentity(state.referenceImagePath) == configuration.referenceImagePath)
     }
 
     private func optionsJSON() throws -> String {
-        String(decoding: try configuration.options.jsonData, as: UTF8.self)
+        if let savedOptionsJSON { return savedOptionsJSON }
+        return String(decoding: try configuration.options.jsonData, as: UTF8.self)
     }
 
     private func restoreState(

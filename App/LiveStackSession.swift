@@ -53,9 +53,9 @@ struct LiveStackNativeState: Codable, Equatable, Sendable {
             && width > 0 && height > 0
             && (channels == 1 || channels == 3)
             && (acceptedFrames > 0 || (acceptedFrames == 0
-                && referenceIntegrated == false && referenceImagePath?.isEmpty == false))
+                && referenceIntegrated == false))
             && (referenceImagePath.map { !$0.trimmingCharacters(in: .whitespaces).isEmpty
-                && referenceIntegrated == false } ?? (referenceIntegrated != false))
+                && referenceIntegrated == false } ?? true)
             && rejectedFrames >= 0
             && configurationFingerprint.count == 64
             && configurationFingerprint.allSatisfy { character in

@@ -1325,7 +1325,7 @@ struct SolveObjectContour: Decodable {
     let points: [[Double]]
 }
 
-struct WCSResult: Codable, Equatable {
+struct WCSResult: Codable, Equatable, Sendable {
     let crval: [Double]
     let crpix: [Double]
     let cd: [[Double]]
@@ -1333,7 +1333,7 @@ struct WCSResult: Codable, Equatable {
     var pixelOrigin: Int?
 }
 
-struct SIPResult: Codable, Equatable {
+struct SIPResult: Codable, Equatable, Sendable {
     let order: Int
     let a: [Double]
     let b: [Double]

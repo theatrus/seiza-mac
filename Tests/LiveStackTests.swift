@@ -1209,13 +1209,16 @@ final class LiveStackNativeStateDecodingTests: XCTestCase {
         XCTAssertTrue(current.describesSameCheckpoint(old))
     }
 
-    func testEmptyStateRequiresAnExternalReferenceAndReferenceRolesMatchOnRestore() throws {
+    func testEmptyStateRequiresAnUnintegratedReferenceAndReferenceRolesMatchOnRestore() throws {
         let old = try JSONDecoder().decode(LiveStackNativeState.self, from: stateJSON())
         var shared = old
         shared.acceptedFrames = 0
         XCTAssertFalse(shared.isValidFromCore)
         shared.referenceIntegrated = false
+        XCTAssertTrue(shared.isValidFromCore) // Expanded planners start empty without an external image.
+        shared.referenceIntegrated = true
         XCTAssertFalse(shared.isValidFromCore)
+        shared.referenceIntegrated = false
         shared.referenceImagePath = "/shared.fits"
         XCTAssertTrue(shared.isValidFromCore)
         var other = shared
@@ -1854,6 +1857,41 @@ final class LiveStackFilterSessionTests: XCTestCase {
         await resumed.dispose()
     }
 
+    func testEveryFilterRetainsItsSavedGPUPolicyWhenResumedWithoutSources() async throws {
+        for originalGPU in [false, true] {
+            let (root, watch, originalConfig) = try setup()
+            defer { try? FileManager.default.removeItem(at: root) }
+            var config = originalConfig
+            config.options.useGPU = originalGPU
+            _ = try light("ha.fits", filter: "Ha", in: watch)
+            let first = try LiveStackFilterSession(configuration: config)
+            try await first.start()
+            _ = try await waitFor(first) { $0.groups.count == 1 && $0.groups[0].snapshot.acceptedFrames == 1 }
+            // A filter discovered later inherits the captured run policy too.
+            _ = try light("oxygen.fits", filter: "OIII", in: watch)
+            _ = try await waitFor(first) { $0.groups.count == 2 && $0.groups.allSatisfy { $0.snapshot.acceptedFrames == 1 } }
+            try await first.pauseAndSave()
+            await first.dispose()
+            try FileManager.default.removeItem(at: watch)
+            try FileManager.default.createDirectory(at: watch, withIntermediateDirectories: true)
+            config.options.useGPU = !originalGPU
+            let restored = try LiveStackFilterSession(configuration: config)
+            try await restored.start()
+            let state = try await waitFor(restored) { $0.groups.count == 2 && $0.groups.allSatisfy { $0.snapshot.acceptedFrames == 1 } }
+            for group in state.groups {
+                XCTAssertTrue(group.snapshot.attention.contains { $0.message.contains("saved GPU setting") })
+            }
+            try await restored.pauseAndSave()
+            await restored.dispose()
+            for key in ["hydrogen-alpha", "oxygen-iii"] {
+                let store = try LiveStackSessionStore(sessionRootDirectory: config.sessionRootDirectory, groupId: "filter-" + key)
+                let candidates = await store.restoreCandidates()
+                let candidate = try XCTUnwrap(candidates.first)
+                XCTAssertEqual(try ImageStackOptions.savedUsesGPU(candidate.manifest.state.stackOptionsJSON), originalGPU)
+            }
+        }
+    }
+
     func testCalibrationFailureIsIsolatedToItsFilter() async throws {
         actor Attempts {
             var count = 0
@@ -1979,5 +2017,114 @@ final class LiveStackFilterSessionTests: XCTestCase {
         let session = try LiveStackFilterSession(configuration: config)
         do { try await session.start(); XCTFail("An inconsistent filter identity must fail") } catch {}
         await session.dispose()
+    }
+}
+
+final class MosaicStackingBoundaryTests: XCTestCase {
+    func testExpandedPlannerStartsEmptyIntegratesAnchorOnceAndPreservesSources() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let global = SyntheticFrame.noisyStarField(width: 200, height: 128)
+        func crop(_ offset: Int) -> [Int16] {
+            (0..<128).flatMap { y in Array(global[(y * 200 + offset)..<(y * 200 + offset + 160)]) }
+        }
+        let first = try SyntheticFrame.write(width: 160, height: 128, values: crop(0),
+            cards: SyntheticFrame.lightCards(), directory: root, name: "a.fits")
+        let second = try SyntheticFrame.write(width: 160, height: 128, values: crop(20),
+            cards: SyntheticFrame.lightCards(), directory: root, name: "b.fits")
+        let before = try [Data(contentsOf: first), Data(contentsOf: second)]
+        for gpu in [false, true] {
+            var options = ImageStackOptions()
+            options.useGPU = gpu
+            options.canvasMode = .expanded
+            options.minimumOverlap = 0.05
+            options.normalization = .none
+            options.rejection = .none
+            options.maximumCanvasMegasamples = 1
+            let output = root.appendingPathComponent("out-\(gpu).fits")
+            let result = try ImageStackEngine.stack(request: ImageStackRequest(inputs: [first, second], output: output,
+                options: options, calibration: ImageStackCalibration()), cancellation: ImageStackCancellation(), progress: { _ in })
+            XCTAssertEqual(result.acceptedFrames, 2)
+            XCTAssertEqual(result.rejectedFrames, 0)
+            XCTAssertEqual(result.dispositions.count, 2)
+            XCTAssertTrue(result.referenceNote?.contains("Expanded mosaic canvas") == true)
+            XCTAssertNil(result.transientNote, result.transientNote ?? "")
+            let rendered = try SeizaCore.render(url: output, maxDimension: 1024)
+            XCTAssertGreaterThan(rendered.image.width, 160)
+            XCTAssertEqual(try Data(contentsOf: first), before[0])
+            XCTAssertEqual(try Data(contentsOf: second), before[1])
+            let cancellation = ImageStackCancellation()
+            cancellation.cancel()
+            XCTAssertThrowsError(try StackNativeOpener.openExpanded(paths: [first.path, second.path],
+                optionsJSON: String(decoding: options.jsonData, as: UTF8.self), calibration: ImageStackCalibration(),
+                maximumMegasamples: 1, cancellation: cancellation)) { XCTAssertTrue($0 is CancellationError) }
+            XCTAssertThrowsError(try ImageStackEngine.stack(request: ImageStackRequest(inputs: [first, second], output: first,
+                options: options, calibration: ImageStackCalibration()), cancellation: ImageStackCancellation(), progress: { _ in }))
+        }
+    }
+
+    func testPublishedPlannerEnforcesCanvasSampleCeiling() throws {
+        let values = SyntheticFrame.starField(width: 1024, height: 1024)
+        let first = try SyntheticFrame.write(width: 1024, height: 1024, values: values)
+        let second = try SyntheticFrame.write(width: 1024, height: 1024, values: values)
+        defer { for url in [first, second] { try? FileManager.default.removeItem(at: url) } }
+        var options = ImageStackOptions()
+        options.normalization = .none
+        options.useGPU = false
+        XCTAssertThrowsError(try StackNativeOpener.openExpanded(paths: [first.path, second.path],
+            optionsJSON: String(decoding: options.jsonData, as: UTF8.self), calibration: ImageStackCalibration(),
+            maximumMegasamples: 1, cancellation: ImageStackCancellation())) {
+                XCTAssertTrue($0.localizedDescription.lowercased().contains("sample"), $0.localizedDescription)
+            }
+    }
+
+    func testUnsupportedCanvasCombinationsAndLiveAcquisitionFailBeforeNativeOpen() throws {
+        var options = ImageStackOptions()
+        options.canvasMode = .expanded
+        options.cfaIntegration = .bayerDrizzle
+        XCTAssertNotNil(options.validationMessage)
+        options.cfaIntegration = .demosaic
+        var config = LiveStackRunConfiguration(watchFolder: "/tmp", sessionRootDirectory: URL(fileURLWithPath: "/tmp"))
+        config.options = options
+        XCTAssertEqual(config.validationMessage(), "Live acquisition requires a fixed canvas.")
+        options.maximumCanvasMegasamples = 0
+        XCTAssertNotNil(options.validationMessage)
+    }
+
+    func testLiveResumeAfterPreferenceChangeKeepsSavedPolicyAndAccumulator() async throws {
+        for originalGPU in [false, true] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let reference = try SyntheticFrame.write(width: 160, height: 128,
+                values: SyntheticFrame.noisyStarField(), cards: SyntheticFrame.lightCards(), directory: root, name: "reference.fits")
+            var config = LiveStackRunConfiguration(watchFolder: root.path, sessionRootDirectory: root.appendingPathComponent("session"))
+            config.initialReferencePath = reference.path
+            config.options.useGPU = originalGPU
+            config.options.normalization = .none
+            config.options.removesTransients = false
+            config.monitorScanInterval = 100
+            let first = try LiveStackCoordinator(configuration: config)
+            try await first.start()
+            try await first.pauseAndSave()
+            let firstState = await first.currentSnapshot()
+            XCTAssertEqual(firstState.acceptedFrames, 1)
+            await first.dispose()
+            try FileManager.default.removeItem(at: reference)
+            config.initialReferencePath = nil
+            config.options.useGPU = !originalGPU
+            let restored = try LiveStackCoordinator(configuration: config)
+            try await restored.start()
+            try await restored.pauseAndSave()
+            let state = await restored.currentSnapshot()
+            XCTAssertEqual(state.acceptedFrames, 1)
+            XCTAssertTrue(state.attention.contains { $0.message.contains("saved GPU setting") })
+            await restored.dispose()
+            let store = try LiveStackSessionStore(sessionRootDirectory: config.sessionRootDirectory, groupId: config.groupId)
+            let candidates = await store.restoreCandidates()
+            let saved = try XCTUnwrap(candidates.first)
+            XCTAssertEqual(try ImageStackOptions.savedUsesGPU(saved.manifest.state.stackOptionsJSON), originalGPU)
+        }
     }
 }

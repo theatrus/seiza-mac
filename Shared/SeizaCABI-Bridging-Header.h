@@ -9,3 +9,6 @@ const char *seiza_mac_core_package_source(void);
 char *seiza_mac_distance_catalog_status_json(const char *directory, char **error_out);
 bool seiza_mac_catalog_setup_parallax(const char *directory,
     SeizaCatalogSetupProgressCallback progress, void *context, char **error_out);
+
+// Solved footprint comparison; free response/error with seiza_string_free.
+char *seiza_mac_sky_overlaps_json(const char *request, char **error_out);

@@ -201,7 +201,8 @@ final class LiveStackWindowModel: ObservableObject {
 
     private func startLiveStack() async throws {
         guard let watchFolder else { return }
-        let options = options
+        var options = options
+        options.useGPU = StackingPreferences.usesGPU()
         let choosesReferenceAutomatically = choosesReferenceAutomatically
         let includeSubdirectories = includeSubdirectories
         let resumeExisting = resumeExisting

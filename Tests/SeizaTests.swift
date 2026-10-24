@@ -2854,3 +2854,164 @@ final class SolvePayloadTests: XCTestCase {
         XCTAssertEqual(result.overlayCounts?["deep_sky"], 1)
     }
 }
+
+final class MosaicPanelGroupingTests: XCTestCase {
+    private func frame(_ name: String, ra: Double = 0, dec: Double = 0, rotation: Double = 0) -> SkySolvedFrame {
+        let r = rotation * .pi / 180, scale = 0.001
+        return SkySolvedFrame(url: URL(fileURLWithPath: "/tmp/\(name)"),
+            wcs: WCSResult(crval: [ra, dec], crpix: [499.5, 399.5],
+                cd: [[-scale * cos(r), scale * sin(r)], [-scale * sin(r), -scale * cos(r)]], sip: nil),
+            width: 1000, height: 800)
+    }
+
+    func testUnconfirmedSolutionsAreExcluded() throws {
+        func solution(_ route: String, _ matches: Int) throws -> SolveResult {
+            let json = """
+            {"centerRaDegrees":0,"centerDecDegrees":0,"scaleArcsecPerPixel":3.6,
+             "matchedStars":\(matches),"rmsArcsec":0.5,"detectedStars":30,"elapsedMilliseconds":1,
+             "detectedStarPositions":[],"catalogStarPositions":[],"objectPositions":[],
+             "solvedFrom":"\(route)","wcs":{"crval":[0,0],"crpix":[499.5,399.5],"cd":[[-0.001,0],[0,-0.001]]}}
+            """
+            return try JSONDecoder().decode(SolveResult.self, from: Data(json.utf8))
+        }
+        XCTAssertThrowsError(try SkyPanelService.validateSolution(solution("header-unchecked", 30)))
+        XCTAssertThrowsError(try SkyPanelService.validateSolution(solution("header-checked", 0)))
+        XCTAssertThrowsError(try SkyPanelService.validateSolution(solution("blind", 0)))
+        XCTAssertNoThrow(try SkyPanelService.validateSolution(solution("blind", 30)))
+    }
+
+    func testRepeatClusteringDoesNotSwallowDitherChains() throws {
+        let fields = try SkyPanelGrouping.group([frame("a"), frame("b"), frame("c"), frame("d")],
+            overlaps: [[1,0.9,0.8,0], [0.9,1,0.9,0], [0.8,0.9,1,0], [0,0,0,1]])
+        XCTAssertEqual(fields.count, 2)
+        XCTAssertEqual(fields[0].panels.count, 2)
+        XCTAssertEqual(fields[0].panels[0].frames.count, 2)
+        XCTAssertThrowsError(try SkyPanelGrouping.group([frame("a")], overlaps: [[.nan]]))
+        XCTAssertThrowsError(try SkyPanelGrouping.group([frame("a")], overlaps: []))
+    }
+
+    func testSelectedTopologyExcludesDeselectedAndOtherFilterBridges() throws {
+        let frames = [frame("1_Ha.fits"), frame("2_OIII.fits"), frame("3_Ha.fits"), frame("4_Ha.fits")]
+        let overlaps: [[Double]] = [[1,0.2,0,0], [0.2,1,0.2,0], [0,0.2,1,0], [0,0,0,1]]
+        let analysis = SkyPanelAnalysis(fields: try SkyPanelGrouping.group(frames, overlaps: overlaps),
+            failures: [], sources: [:], solved: frames, overlaps: overlaps)
+        XCTAssertEqual(analysis.selectedGroups(frames.map(\.url), splitByFilter: true).count, 4)
+        let removedBridge = analysis.selectedGroups([frames[0].url, frames[2].url], splitByFilter: false)
+        XCTAssertEqual(removedBridge.count, 2)
+        XCTAssertEqual(Set(removedBridge.map(\.filenameSuffix)).count, 2)
+        let last = try XCTUnwrap(analysis.selectedGroups([frames[3].url], splitByFilter: false).first)
+        XCTAssertEqual(last.title, "Sky field 2")
+    }
+
+    func testPublishedFootprintsHandleRotationRaWrapPolesAndSIP() throws {
+        let frames = [frame("a", ra: 359.8), frame("b", ra: 0.2),
+            frame("c", ra: 359.8, rotation: 180), frame("d", ra: 180)]
+        let matrix = try SkyPanelService.overlapMatrix(frames)
+        XCTAssertEqual(matrix[0][1], 0.6, accuracy: 0.001)
+        XCTAssertEqual(matrix[0][2], 1, accuracy: 1e-6)
+        XCTAssertEqual(matrix[0][3], 0)
+        let polar = try SkyPanelService.overlapMatrix([frame("p", ra: 359.9, dec: 89.8),
+            frame("q", ra: 359.9, dec: 89.8, rotation: 180)])
+        XCTAssertEqual(polar[0][1], 1, accuracy: 1e-6)
+        let sip = SIPResult(order: 2, a: [0,0,0,0,0,1e-5,0,0,0], b: [0,0,0,0,0,0,0,1e-5,0], ap: [], bp: [])
+        let a = frames[0]
+        let curved = SkySolvedFrame(url: a.url, wcs: WCSResult(crval: a.wcs.crval, crpix: a.wcs.crpix, cd: a.wcs.cd, sip: sip),
+            width: a.width, height: a.height)
+        let same = try SkyPanelService.overlapMatrix([curved, curved])
+        XCTAssertEqual(same[0][1], 1, accuracy: 0.01)
+    }
+
+    func testSymlinkSelectionsTrackTargetChangesAndRetargeting() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appendingPathComponent("target.fits")
+        let other = root.appendingPathComponent("other.fits")
+        let link = root.appendingPathComponent("light.fits")
+        try Data("original".utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        let analysis = SkyPanelAnalysis(fields: [], failures: [], sources: [link: try .capture(link)], solved: [], overlaps: [])
+        XCTAssertTrue(analysis.sourcesUnchanged([link]))
+        try Data("changed target".utf8).write(to: target)
+        XCTAssertFalse(analysis.sourcesUnchanged([link]))
+        let updated = SkyPanelAnalysis(fields: [], failures: [], sources: [link: try .capture(link)], solved: [], overlaps: [])
+        try Data(contentsOf: target).write(to: other)
+        let attributes = try FileManager.default.attributesOfItem(atPath: target.path)
+        try FileManager.default.setAttributes([.modificationDate: try XCTUnwrap(attributes[.modificationDate])], ofItemAtPath: other.path)
+        try FileManager.default.removeItem(at: link)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: other)
+        XCTAssertFalse(updated.sourcesUnchanged([link]))
+    }
+
+    func testOutputsProtectExcludedInputsAndTheirHardLinks() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let excluded = root.appendingPathComponent("excluded.fits")
+        let alias = root.appendingPathComponent("alias.fits")
+        let original = Data("excluded source".utf8)
+        try original.write(to: excluded)
+        try FileManager.default.linkItem(at: excluded, to: alias)
+        for output in [excluded, alias] {
+            let request = ImageStackRequest(inputs: [root.appendingPathComponent("a.fits"), root.appendingPathComponent("b.fits")],
+                output: output, options: ImageStackOptions(), calibration: ImageStackCalibration(),
+                additionalProtectedSources: [excluded])
+            XCTAssertThrowsError(try ImageStackEngine.stack(request: request,
+                cancellation: ImageStackCancellation(), progress: { _ in })) {
+                    XCTAssertTrue($0.localizedDescription.contains("not a light"), $0.localizedDescription)
+                }
+            XCTAssertEqual(try Data(contentsOf: excluded), original)
+        }
+    }
+
+    func testChangedMissingOrReplacedSourcesInvalidateSelections() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data("original".utf8).write(to: url)
+        let analysis = SkyPanelAnalysis(fields: [], failures: [], sources: [url: try .capture(url)], solved: [], overlaps: [])
+        XCTAssertTrue(analysis.sourcesUnchanged([url]))
+        try Data("changed source".utf8).write(to: url)
+        XCTAssertFalse(analysis.sourcesUnchanged([url]))
+        try FileManager.default.removeItem(at: url)
+        XCTAssertFalse(analysis.sourcesUnchanged([url]))
+    }
+}
+
+final class StackingGPUOptionsTests: XCTestCase {
+    func testPersistentPreferenceDefaultsToAutomaticAndPreservesOtherSettings() throws {
+        let name = "Seiza-GPU-Test-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set("catalogs", forKey: "catalogDirectory")
+        XCTAssertTrue(StackingPreferences.usesGPU(in: defaults))
+        defaults.set(false, forKey: "useGpuForStacking")
+        XCTAssertFalse(StackingPreferences.usesGPU(in: try XCTUnwrap(UserDefaults(suiteName: name))))
+        XCTAssertEqual(defaults.string(forKey: "catalogDirectory"), "catalogs")
+    }
+
+    func testSnapshotsPayloadAndProcessingCompatibility() throws {
+        var options = ImageStackOptions()
+        let automatic = String(decoding: try options.jsonData, as: UTF8.self)
+        XCTAssertNil((try JSONSerialization.jsonObject(with: options.jsonData) as? [String: Any])?["gpu"])
+        let snapshot = options
+        options.useGPU = false
+        let cpu = String(decoding: try options.jsonData, as: UTF8.self)
+        XCTAssertTrue(snapshot.useGPU)
+        XCTAssertFalse(try ImageStackOptions.savedUsesGPU(cpu))
+        XCTAssertTrue(try ImageStackOptions.savedUsesGPU(automatic))
+        XCTAssertTrue(ImageStackOptions.sameProcessingOptions(cpu, automatic))
+        options.sigmaLow = 4
+        XCTAssertFalse(ImageStackOptions.sameProcessingOptions(cpu, String(decoding: try options.jsonData, as: UTF8.self)))
+        for bad in ["null", "[]", "bad", "{\"gpu\":{\"enabled\":\"bad\"}}", "{\"gpu\":{\"enabled\":1}}"] {
+            XCTAssertThrowsError(try ImageStackOptions.savedUsesGPU(bad))
+            XCTAssertFalse(ImageStackOptions.sameProcessingOptions(bad, automatic))
+        }
+    }
+
+    func testAppendedSNRFieldUsesThePublishedABI() {
+        XCTAssertEqual(MemoryLayout<SeizaSnrSample>.size, 80)
+        var value = SeizaSnrSample()
+        value.bin_factor = 2
+        XCTAssertEqual(value.bin_factor, 2)
+    }
+}

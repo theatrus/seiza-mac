@@ -177,7 +177,7 @@ fn install(directory: &Path, callback: Progress, context: usize) -> Result<(), S
     Ok(())
 }
 
-fn boundary<T>(
+pub(crate) fn boundary<T>(
     error_out: *mut *mut c_char,
     operation: impl FnOnce() -> Result<T, String>,
 ) -> Option<T> {
