@@ -386,12 +386,16 @@ DerivedData/Build/Products/Debug/Seiza.app
 
 Open `Seiza.xcodeproj` to run and sign it with a local development team.
 
-The app uses published `seiza-cabi` 0.42.0, `seiza` 0.42.0,
-`seiza-parallax` 0.19.0, `seiza-stacking` 0.45.0 and `seiza-download` 0.9.0, with dust maps, depth planes and
+The app uses published `seiza-cabi` 0.44.2, `seiza` 0.44.2,
+`seiza-parallax` 0.19.2, `seiza-stacking` 0.51.2 and `seiza-download` 0.9.0, with dust maps, depth planes and
 image reading and writing through `seiza-image-io`. Library and bridge header
 must be updated together. About reports the linked release version and source
 commit. Optional [flat-quality review](docs/CALIBRATION-QUALITY.md) uses the native
-native dust diagnostics during automatic calibration.
+dust diagnostics during automatic calibration.
+
+**File → Color Tools…** opens preview-first narrowband, continuum subtraction,
+and RGB star extraction/restoration workflows. See [Color Tools](docs/COLOR-TOOLS.md)
+for linear/display declarations, stellar fit review, and exact-source plans.
 
 ### App icons
 

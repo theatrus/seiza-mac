@@ -1,4 +1,5 @@
 mod catalogs;
+mod color_tools;
 mod sky_overlap;
 
 use std::ffi::c_char;

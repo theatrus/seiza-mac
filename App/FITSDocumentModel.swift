@@ -145,15 +145,16 @@ final class ImageDocumentModel: ObservableObject {
 
     init(
         url: URL,
-        processingConfiguration: FITSImageProcessingConfiguration = .default,
+        processingConfiguration: FITSImageProcessingConfiguration? = nil,
         stretchHistory carriedStretchHistory: FITSStretchHistory? = nil,
         linearProcessingHistory carriedLinearProcessingHistory: FITSLinearProcessingHistory? = nil
     ) {
         self.url = url
+        let requested = processingConfiguration ?? SeizaCore.initialProcessing(for: url)
         let processingConfiguration = FITSImageProcessingConfiguration(
-            stretchStack: processingConfiguration.stretchStack,
-            backgroundConfiguration: processingConfiguration.backgroundConfiguration,
-            deconvolution: processingConfiguration.deconvolution
+            stretchStack: requested.stretchStack,
+            backgroundConfiguration: requested.backgroundConfiguration,
+            deconvolution: requested.deconvolution
         )
         if let carriedStretchHistory {
             precondition(

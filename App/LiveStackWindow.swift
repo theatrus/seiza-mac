@@ -203,6 +203,7 @@ final class LiveStackWindowModel: ObservableObject {
         guard let watchFolder else { return }
         var options = options
         options.useGPU = StackingPreferences.usesGPU()
+        options.gpuBudgetMiB = StackingPreferences.gpuBudgetMiB()
         let choosesReferenceAutomatically = choosesReferenceAutomatically
         let includeSubdirectories = includeSubdirectories
         let resumeExisting = resumeExisting

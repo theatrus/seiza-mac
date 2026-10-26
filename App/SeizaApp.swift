@@ -49,6 +49,8 @@ struct SeizaApp: App {
 
                 Divider()
 
+                Button("Color Tools…") { ColorToolsWindowController.present() }
+
                 Button("Live Stack…") {
                     appDelegate.openLiveStack(nil)
                 }

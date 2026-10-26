@@ -1,7 +1,7 @@
 # Mosaic stacking and GPU performance
 
 The Mac workflow ports [seiza-win PR #70](https://github.com/theatrus/seiza-win/pull/70)
-using published Seiza/C ABI 0.42.0 and stacking 0.45.0. It does not change the app
+and PR #73 using published Seiza/C ABI 0.44.2 and stacking 0.51.2. It does not change the app
 version or publish a release.
 
 ## Select panels by sky coordinates
@@ -59,7 +59,8 @@ Exceeding it fails planning before output is written.
 
 The initial minimum overlap is 60% for fixed grids and 5% for expanded canvases.
 Editing the overlap explicitly preserves that value across canvas switches.
-Expanded canvases cannot use Bayer drizzle or a shared fixed alignment image.
+Expanded canvases cannot use local normalization, Bayer drizzle or a shared fixed alignment image.
+Choose local-background, global, or no normalization for expanded mosaics.
 Live acquisition uses a fixed canvas. Separately stacked filter mosaics do not
 promise a shared RGB grid. No new binned or drizzle reintegration controls are
 introduced.
@@ -75,30 +76,29 @@ CPU results can differ slightly; automatic mode does not promise a speedup for
 every image or device.
 
 Each run captures its policy when it starts. Changing Settings does not alter an
-active accumulator. A compatible resumed live stack retains its original saved
-policy and options JSON and shows a notice when that policy differs from
-Settings. GPU policy alone does not invalidate a checkpoint; other processing
+active accumulator. A compatible resumed live stack applies the current GPU mode
+and planning budget through the native resume API, retaining frame history,
+registration and rejection state. The next checkpoint records the updated
+policy. GPU policy alone does not invalidate a checkpoint; other processing
 options still must match. A checkpoint does not require its original reference
 file merely to restore the accumulator.
 
+The **GPU planning budget (MiB)** is persistent. `0` selects automatic planning;
+positive values through 1048576 are a soft device-memory planning budget. This
+can keep work on the CPU when GPU memory is insufficient; it is not a process
+memory limit. Every filter, including filters discovered later, inherits its
+run's captured mode and budget.
+
+The Mac viewer renders through CPU-backed CGImages, so the Windows-specific
+Win2D virtual-bitmap implementation is unnecessary. Full-resolution 8/16-bit
+renders wider than 20000 pixels are covered by integration tests, and the
+viewer can fit images at zoom levels below 1%.
+
 ## Port validation
 
-Local validation after review and rebasing onto current main on 2026-10-23
-passed 287 Mac tests (5 optional local-fixture skips), 5 Rust tests, Rustfmt,
-Clippy with warnings denied, the universal arm64/x86_64 Release build and
-unsigned-app validation. The bundled header matches the published 0.42.0
-header, including the 80-byte SNR structure.
-
-Before rebasing, the running native Mac app solved six catalog-based synthetic exposures into
-two overlapping panels plus a separate sky field. Panel checkboxes and
-individual exposure selection updated the selected-light/output summary. The
-selected four-exposure mosaic exported at **1211 × 609**, with **4 accepted / 0
-rejected**, and SHA-256 checks confirmed all six source files were unchanged.
-These were procedural catalog-star fixtures, not telescope exposures or a GPU
-speed benchmark. Both CPU-only and automatic policies also passed native
-expanded-stack/reintegration tests; this validation does not claim device
-compute for the small fixtures. Live checkpoint tests covered preference
-changes in both directions and restoration after removing the source reference,
-including multi-filter sessions and filters discovered later. Review also added
-regressions for changed/retargeted symlinks and excluded-input hard-link output
-protection.
+The original PR #70 port was validated with catalog-star procedural mosaics
+(1211 × 609, four accepted frames, source hashes unchanged). Current automated
+coverage also exercises published expanded planning, sample ceilings,
+checkpoint resume with changed GPU mode and budget, and multi-filter resume
+after removing the source images. Small procedural fixtures do not demonstrate
+device GPU execution or performance.

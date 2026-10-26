@@ -310,15 +310,11 @@ struct ViewerView: View {
 
     private func select(_ index: Int) {
         guard urls.indices.contains(index), index != selectedIndex else { return }
-        let processing = showsImageBrowser
-            ? model.processingConfiguration
-            : .default
-        let stretchHistory = showsImageBrowser
-            ? model.stretchHistory
-            : nil
-        let linearProcessingHistory = showsImageBrowser
-            ? model.linearProcessingHistory
-            : nil
+        let carriesProcessing = showsImageBrowser
+            && SeizaCore.isDisplayProduct(urls[index]) == SeizaCore.isDisplayProduct(model.url)
+        let processing = carriesProcessing ? model.processingConfiguration : nil
+        let stretchHistory = carriesProcessing ? model.stretchHistory : nil
+        let linearProcessingHistory = carriesProcessing ? model.linearProcessingHistory : nil
         selectedIndex = index
         model = ImageDocumentModel(
             url: urls[index],
@@ -687,7 +683,7 @@ private final class StretchPanelPresenter: NSObject, ObservableObject, NSWindowD
 }
 
 private struct ImagePageView: View {
-    private static let zoomRange = 0.01...8.0
+    private static let zoomRange = 0.00001...8.0
     private static let zoomStep = 1.25
 
     private enum StretchEditorPresentation {

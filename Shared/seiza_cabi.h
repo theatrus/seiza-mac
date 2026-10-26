@@ -679,6 +679,98 @@ char *seiza_color_combine_narrowband_matrix_json(const char *request_json,
                                                  char **error_out);
 
 /*
+ Balance three display planes ordered H-alpha/OIII/SII. For HOO, pass
+ OIII twice and set hasSii=false; the third plane is then ignored.
+ `options_json` is nullable or a JSON object with shadowProtection (0..1),
+ oiiiBoost/siiBoost (positive) and maxSamples (4..1000000). Missing options
+ use the core defaults. Returns a JSON report with channels, each containing
+ channel, status, reason, samples, median, background, positiveDeviation and
+ midtone. Free with seiza_string_free. Samples must be in [0,1] or nonfinite;
+ the resulting image is display-referred. Errors leave the image untouched.
+
+ # Safety
+ `data` points to width*height*channels writable floats (channels must be 3).
+ options_json, when non-null, is a NUL-terminated UTF-8 string. error_out,
+ when non-null, points to writable pointer storage.
+ */
+char *seiza_color_balance_narrowband_json(float *data,
+                                          size_t width,
+                                          size_t height,
+                                          size_t channels,
+                                          const char *options_json,
+                                          char **error_out);
+
+/*
+ Screen display RGB stars from `original` and `starless` onto `nebula`,
+ in place. All three images share dimensions and RGB display scaling in
+ [0,1]. Original and starless must use the same display transfer. Negative
+ extraction noise is suppressed only for display; nonfinite coverage masks
+ the whole output pixel. This does not extract stars or run an external tool.
+
+ # Safety
+ Each buffer points to width*height*3 floats. `nebula` is writable; the
+ others are readable. error_out, when non-null, is writable pointer storage.
+ */
+bool seiza_color_screen_rgb_stars(float *nebula,
+                                  const float *original,
+                                  const float *starless,
+                                  size_t width,
+                                  size_t height,
+                                  char **error_out);
+
+/*
+ Screen display RGB stars after linked one-pixel cross erosion. Reduction
+ in [0,1] blends toward the eroded star intensity while preserving RGB ratios.
+ Zero preserves ordinary screen output; all buffers share RGB display [0,1].
+ Errors leave nebula unchanged. This does not change scientific linear data.
+
+ # Safety
+ Each buffer addresses width*height*3 floats; nebula/error_out are writable.
+ */
+bool seiza_color_screen_rgb_stars_reduced(float *nebula,
+                                          const float *original,
+                                          const float *starless,
+                                          size_t width,
+                                          size_t height,
+                                          double reduction,
+                                          char **error_out);
+
+/*
+ Extract stars from aligned linear RGB and apply the SetiAstro-style rational
+ tone. Amount [0,8], typically 5; lower values subdue stars. The shared source
+ range normalizes physical units; negative residuals clip only in the display
+ output. No external tool or optional PixInsight color processes are run.
+ Errors leave output unchanged. Inputs may alias output.
+
+ # Safety
+ Input and output buffers address width*height*3 floats. Inputs are readable;
+ output and non-null error_out are writable.
+ */
+bool seiza_color_stretch_rgb_stars(const float *original,
+                                   const float *starless,
+                                   float *output,
+                                   size_t width,
+                                   size_t height,
+                                   double amount,
+                                   char **error_out);
+
+/*
+ Screen a prepared display RGB stars-only layer over a display nebula with
+ optional linked star reduction [0,1]. No additional stretch. Errors leave
+ nebula unchanged; missing coverage masks whole pixels.
+
+ # Safety
+ Buffers address width*height*3 floats. Stars are readable; nebula and
+ non-null error_out are writable. Buffers may alias.
+ */
+bool seiza_color_screen_rgb_star_layer(float *nebula,
+                                       const float *stars,
+                                       size_t width,
+                                       size_t height,
+                                       double reduction,
+                                       char **error_out);
+
+/*
  Fits a compact background model to interleaved linear `float` samples.
 
  `channels` must be one or three and `data_length` must equal
@@ -1186,7 +1278,10 @@ char *seiza_stack_detect_defects_json(const char *paths_json,
  the passes that may run on the GPU, each `true` by default: `"defects"`,
  `"debayer"`, `"detection"`, `"resampling"`, `"accumulator"` and
  `"integration"`; with `"concurrency"`, the frame calls the GPU takes at
- once (3), and `"trace"`, which prints each GPU call's timings to stderr.
+ once (3), `"memory_bytes"`, the device memory to plan the GPU's work in
+ (by default what the device has; with less, the live accumulator stays
+ on the CPU sooner), and `"trace"`, which prints each GPU call's timings
+ to stderr.
  All files
  are fully read during this call and are not kept open afterward.
  Local-background offsets use median paired residuals after applying the
@@ -1377,6 +1472,27 @@ char *seiza_live_stacker_expansion_planning_notes_json(const SeizaLiveStacker *s
  `error_out` must point to writable storage for one pointer.
  */
 SeizaLiveStacker *seiza_live_stacker_open_context(const char *context_path, char **error_out);
+
+/*
+ Reopens a live-stack context as [`seiza_live_stacker_open_context`] does,
+ but runs the stack under the GPU options in `gpu_json` in place of the
+ options it was saved with. `gpu_json` is a JSON object with the fields of
+ the `"gpu"` member of [`seiza_live_stacker_open_fits`]'s options, such as
+ `{"enabled": false}` to keep every pass on the CPU, or `{}` for the
+ defaults, which let every pass run on the GPU. When `gpu_json` is null or
+ empty, the stack keeps the options it was saved with, as
+ [`seiza_live_stacker_open_context`] does. The configuration
+ fingerprint leaves GPU options out, so it matches the saved stack's, and
+ a context saved from the reopened handle records the new options.
+
+ # Safety
+ `context_path` must be a valid NUL-terminated path. `gpu_json` may be
+ null; when non-null it must be NUL-terminated. When non-null,
+ `error_out` must point to writable storage for one pointer.
+ */
+SeizaLiveStacker *seiza_live_stacker_open_context_with_gpu(const char *context_path,
+                                                           const char *gpu_json,
+                                                           char **error_out);
 
 /*
  Atomically checkpoints every piece of state required to reopen this live
@@ -2272,7 +2388,11 @@ SeizaRenderedImage *seiza_rendered_image_open_with_rgb_stretch(const char *path,
  `config_json`. The value may be one serialized `seiza-stretch`
  `StretchConfig` (the original schema), a non-empty array of configs, or an
  object with `stretch`, optional `background`, optional `deconvolution`,
- optional `sample_domain`, and optional `interactive_preview` fields. Array
+ optional `sample_domain`, optional `interactive_preview` and optional
+ `gpu` fields. `gpu` takes the fields of the `"gpu"` member of
+ [`seiza_live_stacker_open_fits`]'s options, such as `{"enabled": false}`,
+ and says whether a raw Bayer frame rendered in physical units is
+ debayered on the GPU; by default it may be. Array
  stages are applied in order using `f32` intermediates and converted to RGBA
  only after the final stage. Background correction and deconvolution, when
  requested, are applied to linear samples in that order. Sample-domain
@@ -3227,8 +3347,16 @@ bool seiza_calibration_apply_residual_flat_response(const float *response,
  in a new directory inside `scratchDirectory`, an existing writable
  directory, or the system temporary directory; the three passes then read
  the files back in bands of rows, and the directory is removed before
- this returns. Nothing is registered or normalized again, and every input
- takes part. Pixels with fewer than three samples are averaged without
+ this returns. Optional `mosaicPanels` gives one unsigned panel ID per
+ input (repeated for observations of the same panel, at most 256 distinct
+ IDs). It matches additive background planes through the panel overlaps and
+ tapers remaining smooth differences at their edges, preserving missing
+ pixels and star detail. Gains must already match; it does not flatten the
+ sky. Matching uses paired positions and independent channel support,
+ including partial overlap cells. Its weighted sample arrays use at most
+ 128 MiB, plus coarse correction maps and the panel fit matrices.
+ Without it no normalization is repeated. Every input takes part.
+ Pixels with fewer than three samples are averaged without
  rejection. Memory is about 20 bytes per output sample plus the bands
  being read, at most 256 MiB, and the input being read. When the system
  temporary directory cannot take every input, each is instead read once
@@ -3335,6 +3463,158 @@ bool seiza_live_stacker_set_light_rotation(SeizaLiveStacker *stacker,
 bool seiza_live_stacker_light_rotation(const SeizaLiveStacker *stacker,
                                        uint32_t *basis_out,
                                        double *degrees_out);
+
+/*
+ Fit premeasured common stellar fluxes. Request JSON contains sources, stars
+ and optional options, as defined by the continuum core. Returns a tagged
+ fitted/skipped JSON outcome; free it with seiza_string_free. A skip is not
+ an API error and never supplies a subtraction plan.
+
+ # Safety
+ request_json is a NUL-terminated UTF-8 object; error_out, if non-null,
+ points to writable pointer storage.
+ */
+char *seiza_continuum_fit_json(const char *request_json, char **error_out);
+
+/*
+ Measure and fit aligned linear planes. Data is planar: narrowband, then
+ references in sources order. Request JSON contains sources, optional
+ positions, fitOptions and photometryOptions. Empty positions asks Seiza to
+ detect stars. Sources declare exact prepared revisions, linear transfer and
+ physical saturation in each plane's units. Returns fitted/skipped JSON;
+ free it with seiza_string_free. The input buffer is never modified.
+
+ # Safety
+ data points to width*height*planes readable floats (planes 2..4).
+ request_json is NUL-terminated UTF-8. error_out, if non-null, is writable.
+ */
+char *seiza_continuum_measure_fit_json(const float *data,
+                                       size_t width,
+                                       size_t height,
+                                       size_t planes,
+                                       const char *request_json,
+                                       char **error_out);
+
+/*
+ Measure with producer-derived clipping masks. Like seiza_continuum_measure_fit_json,
+ with one planar byte mask per input (NB then references). Zero is usable,
+ one is clipped. Each source declares clippingRevision; saturation may be omitted.
+ Returns the same fitted/skipped JSON and never changes either input buffer.
+
+ # Safety
+ data points to width*height*planes floats and clipping_masks to the same
+ number of readable bytes. request_json is NUL-terminated UTF-8. error_out,
+ if non-null, points to writable pointer storage.
+ */
+char *seiza_continuum_measure_masked_fit_json(const float *data,
+                                              size_t width,
+                                              size_t height,
+                                              size_t planes,
+                                              const uint8_t *clipping_masks,
+                                              const char *request_json,
+                                              char **error_out);
+
+/*
+ Apply a continuum plan, preserving signed linear residuals and coverage.
+ Input data is planar NB then references. Request JSON contains sources and
+ plan. Output is width*height mono floats and may alias an input plane.
+ Errors leave the output untouched. No normalization or clipping is applied.
+
+ # Safety
+ data points to width*height*planes readable floats (planes 2..4), output
+ to width*height writable floats. request_json is NUL-terminated UTF-8.
+ error_out, if non-null, points to writable pointer storage.
+ */
+bool seiza_continuum_subtract_json(const float *data,
+                                   size_t width,
+                                   size_t height,
+                                   size_t planes,
+                                   const char *request_json,
+                                   float *output,
+                                   char **error_out);
+
+/*
+ Add linear mono residuals to linear RGB using exact continuum plans and
+ empirical reference units. Request JSON contains lines and optional options.
+ Residuals are planar in lines order; broadband/output are interleaved RGB.
+ Errors leave output unchanged. Output may alias either input buffer.
+
+ # Safety
+ broadband/output each address width*height*3 floats; residuals addresses
+ width*height*line-count floats (nullable only for zero lines). request_json
+ is NUL-terminated UTF-8 and error_out, if non-null, is writable.
+ */
+bool seiza_color_blend_emission_json(const float *broadband,
+                                     const float *residuals,
+                                     size_t width,
+                                     size_t height,
+                                     const char *request_json,
+                                     float *output,
+                                     char **error_out);
+
+/*
+ Blend aligned bounded display RGB structures. Amount zero keeps narrowband,
+ one keeps broadband; intermediate amounts use common coverage. Output may
+ alias inputs and is unchanged on an error. No star extraction is performed.
+
+ # Safety
+ Each image pointer addresses width*height*3 floats (output writable).
+ error_out, if non-null, points to writable pointer storage.
+ */
+bool seiza_color_blend_display_structure(const float *narrowband,
+                                         const float *broadband,
+                                         size_t width,
+                                         size_t height,
+                                         double amount,
+                                         float *output,
+                                         char **error_out);
+
+/*
+ Add a linear RGB contribution with multiplicative calibration gains.
+ Inputs may alias output; errors leave output unchanged.
+
+ # Safety
+ Image pointers address width*height*3 floats; gains addresses three floats.
+ Output and non-null error_out must be writable.
+ */
+bool seiza_color_add_rgb_contribution(const float *base,
+                                      const float *contribution,
+                                      size_t width,
+                                      size_t height,
+                                      const float *gains,
+                                      float *output,
+                                      char **error_out);
+
+/*
+ Reduce excess display green in-place, preserving red/blue and coverage.
+ Invalid input or amount leaves all samples unchanged.
+
+ # Safety
+ data addresses width*height*3 writable floats; non-null error_out is writable.
+ */
+bool seiza_color_reduce_green_excess(float *data,
+                                     size_t width,
+                                     size_t height,
+                                     double amount,
+                                     char **error_out);
+
+/*
+ Invert calibrated line responses. Planar residuals/output are in calibration
+ line order. JSON contains plans and calibration; the returned owned JSON
+ report must be freed with seiza_string_free. Errors leave output untouched.
+
+ # Safety
+ residuals/output address width*height*lines floats (lines 1..3); output is
+ writable and may alias residuals. request_json is NUL-terminated UTF-8;
+ error_out, if non-null, is writable.
+ */
+char *seiza_emission_flux_json(const float *residuals,
+                               size_t width,
+                               size_t height,
+                               size_t lines,
+                               const char *request_json,
+                               float *output,
+                               char **error_out);
 
 /*
  Every constellation figure and the stars its lines use, for a host that

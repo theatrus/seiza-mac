@@ -387,10 +387,13 @@ actor LiveStackNativeSession {
 
     /// Reopens a saved checkpoint context. The restored stacker retains its
     /// registration reference, calibration, rejection state, and ledger.
-    static func resume(contextPath: String) throws -> LiveStackNativeSession {
+    static func resume(contextPath: String, gpuJSON: String? = nil) throws -> LiveStackNativeSession {
         var errorPointer: UnsafeMutablePointer<CChar>?
         let handle = contextPath.withCString { path in
-            seiza_live_stacker_open_context(path, &errorPointer)
+            if let gpuJSON {
+                return gpuJSON.withCString { seiza_live_stacker_open_context_with_gpu(path, $0, &errorPointer) }
+            }
+            return seiza_live_stacker_open_context(path, &errorPointer)
         }
         guard let handle else {
             throw LiveStackSessionError.core(

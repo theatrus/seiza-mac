@@ -142,6 +142,7 @@ struct CatalogComponentDisplay: Identifiable, Equatable {
 struct SettingsView: View {
     let updateController: UpdateController
     @AppStorage("catalogDirectory") private var catalogDirectory = ""
+    @AppStorage("gpuPlanningBudgetMiB") private var gpuPlanningBudgetMiB = 0
     @AppStorage("useGpuForStacking") private var useGpuForStacking = true
     @StateObject private var setup = CatalogSetupController.shared
     @State private var preset = CatalogSetupPreset.standardBlind
@@ -181,7 +182,9 @@ struct SettingsView: View {
 
             Section("Stacking performance") {
                 Toggle("Use GPU for stacking", isOn: $useGpuForStacking)
-                Text("Automatically uses available GPU operations for new directory and live stacks, with CPU fallback. Turning this off keeps new stacks on the CPU. Active and resumed stacks keep their saved setting. Results can differ slightly between modes.")
+                TextField("GPU planning budget (MiB)", value: $gpuPlanningBudgetMiB, format: .number)
+                    .onChange(of: gpuPlanningBudgetMiB) { _, value in gpuPlanningBudgetMiB = min(1_048_576, max(0, value)) }
+                Text("0 chooses automatically. This is a soft planning budget, not a hard memory limit. New and resumed stacks use these settings, with CPU fallback. Active runs keep their captured settings. Results can differ slightly between modes.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
