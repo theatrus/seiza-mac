@@ -153,6 +153,7 @@ struct ViewerView: View {
     let urls: [URL]
     let browserCollection: ImageBrowserCollection
     let scanIssues: [ImageCollection.ScanIssue]
+    let collectionName: String?
     let showsImageBrowser: Bool
     let exportCoordinator: ImageExportCoordinator
     let editCoordinator: ImageEditCommandCoordinator
@@ -173,6 +174,7 @@ struct ViewerView: View {
         urls: [URL],
         directories: [URL] = [],
         scanIssues: [ImageCollection.ScanIssue] = [],
+        collectionName: String? = nil,
         initialIndex: Int = 0,
         showsImageBrowser: Bool = false,
         exportCoordinator: ImageExportCoordinator,
@@ -184,6 +186,7 @@ struct ViewerView: View {
     ) {
         self.urls = urls
         self.scanIssues = scanIssues
+        self.collectionName = collectionName
         let collection = ImageBrowserCollection(urls: urls, directories: directories)
         browserCollection = collection
         let grouping = AppStorage(wrappedValue: ImageBrowserGrouping.path, "imageBrowserGrouping")
@@ -211,6 +214,7 @@ struct ViewerView: View {
                 ImageBrowserDrawer(
                     collection: browserCollection,
                     scanIssues: scanIssues,
+                    collectionName: collectionName,
                     grouping: $browserGrouping,
                     selectedIndex: $selectedIndex,
                     select: select
@@ -329,6 +333,7 @@ struct ViewerView: View {
 private struct ImageBrowserDrawer: View {
     let collection: ImageBrowserCollection
     let scanIssues: [ImageCollection.ScanIssue]
+    let collectionName: String?
     @Binding var grouping: ImageBrowserGrouping
     @Binding var selectedIndex: Int
     let select: (Int) -> Void
@@ -348,6 +353,16 @@ private struct ImageBrowserDrawer: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
+
+            if let collectionName {
+                Text(collectionName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+            }
 
             Picker("Group by", selection: $grouping) {
                 ForEach(ImageBrowserGrouping.allCases) { option in
@@ -374,12 +389,12 @@ private struct ImageBrowserDrawer: View {
                 .foregroundStyle(.orange)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 10)
-                .help("Some files or folders could not be read. Show details.")
+                .help("Some entries were missing, invalid, unsupported, or unreadable. Show details.")
                 .popover(isPresented: $showsScanIssues, arrowEdge: .leading) {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Skipped Files and Folders")
                             .font(.headline)
-                        Text("These items could not be read. Other images are still available.")
+                        Text("These entries were missing, invalid, unsupported, or unreadable. Other images are still available.")
                             .font(.callout)
                         ScrollView {
                             VStack(alignment: .leading, spacing: 12) {
@@ -387,6 +402,11 @@ private struct ImageBrowserDrawer: View {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(issue.url.path)
                                             .font(.caption.weight(.semibold))
+                                        if let line = issue.line {
+                                            Text("\(issue.list?.lastPathComponent ?? "List"), line \(line)")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
                                         Text(issue.message)
                                             .font(.caption)
                                             .foregroundStyle(.secondary)

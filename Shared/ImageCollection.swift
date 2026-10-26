@@ -109,14 +109,18 @@ enum ImageCollection {
     struct ScanIssue: Identifiable, Equatable, Sendable {
         let url: URL
         let message: String
+        var line: Int? = nil
+        var list: URL? = nil
+        var needsAccess = false
 
-        var id: URL { url }
+        var id: String { "\(list?.absoluteString ?? url.absoluteString):\(line.map(String.init) ?? "")" }
     }
 
     struct Scan: Sendable {
         let images: [URL]
         let directories: [URL]
         let issues: [ScanIssue]
+        var includesList = false
 
         var includesDirectory: Bool { !directories.isEmpty }
     }
@@ -150,35 +154,50 @@ enum ImageCollection {
         var directories: [URL] = []
         var issues: [ScanIssue] = []
         var seenImages = Set<URL>()
-        var seenIssues = Set<URL>()
+        var seenIssues = Set<String>()
+        var includesList = false
 
-        func recordIssue(at url: URL, message: String) {
+        func recordIssue(at url: URL, message: String, line: Int? = nil, list: URL? = nil, needsAccess: Bool = false) {
             // Canonicalize the parent while preserving the name of a broken file link.
             let url = url.deletingLastPathComponent().resolvingSymlinksInPath()
                 .appendingPathComponent(url.lastPathComponent, isDirectory: false)
-            if seenIssues.insert(url).inserted {
-                issues.append(ScanIssue(url: url, message: message))
+            let issue = ScanIssue(url: url, message: message, line: line, list: list, needsAccess: needsAccess)
+            if seenIssues.insert(issue.id).inserted {
+                issues.append(issue)
             }
         }
 
-        func appendImage(at url: URL) {
+        func appendImage(at url: URL, line: Int? = nil, list: URL? = nil) {
+            var image = url.standardizedFileURL
             do {
                 let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .isAliasFileKey])
-                var image = url.standardizedFileURL
                 if values.isAliasFile == true, values.isSymbolicLink != true {
                     image = try URL(resolvingAliasFileAt: url, options: [.withoutUI, .withoutMounting]).standardizedFileURL
                 }
-                guard isSupportedImage(image) else { return }
+                guard isSupportedImage(image) else {
+                    if let line { recordIssue(at: url, message: "Unsupported image format.", line: line, list: list) }
+                    return
+                }
                 let target = image.resolvingSymlinksInPath()
                 let targetValues = try target.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey])
-                if targetValues.isDirectory == true { return }
-                guard targetValues.isRegularFile == true else {
-                    recordIssue(at: url, message: "The linked image does not point to a regular file.")
+                if targetValues.isDirectory == true {
+                    if let line { recordIssue(at: url, message: "List entries must name image files, not folders.", line: line, list: list) }
                     return
+                }
+                guard targetValues.isRegularFile == true else {
+                    recordIssue(at: url, message: "The linked image does not point to a regular file.", line: line, list: list)
+                    return
+                }
+                if line != nil {
+                    // Metadata can be readable even when the sandbox denies the image bytes.
+                    let handle = try FileHandle(forReadingFrom: image)
+                    try handle.close()
                 }
                 if seenImages.insert(target).inserted { images.append(image) }
             } catch {
-                recordIssue(at: url, message: error.localizedDescription)
+                let needsAccess = line != nil && isSupportedImage(image) && isReadPermissionError(error)
+                recordIssue(at: needsAccess ? image : url, message: error.localizedDescription,
+                            line: line, list: list, needsAccess: needsAccess)
             }
         }
 
@@ -210,12 +229,25 @@ enum ImageCollection {
                     appendImage(at: url)
                 }
             } else {
+                if ImagePathList.isSupported(root) {
+                    includesList = true
+                    for entry in try ImagePathList.read(root) {
+                        try Task.checkCancellation()
+                        let value = entry.value.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !value.isEmpty, !value.contains("\0") else {
+                            recordIssue(at: root, message: "Missing or invalid image path.", line: entry.line, list: root)
+                            continue
+                        }
+                        appendImage(at: ImagePathList.resolve(value, relativeTo: root), line: entry.line, list: root)
+                    }
+                    continue
+                }
                 appendImage(at: root)
             }
         }
 
         try Task.checkCancellation()
-        let sortedImages = try images.sorted {
+        let sortedImages = includesList ? images : try images.sorted {
             try Task.checkCancellation()
             let nameOrder = $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent)
             return nameOrder == .orderedSame
@@ -229,8 +261,19 @@ enum ImageCollection {
             issues: try issues.sorted {
                 try Task.checkCancellation()
                 return $0.url.path.localizedStandardCompare($1.url.path) == .orderedAscending
-            }
+            },
+            includesList: includesList
         )
+    }
+
+    private static func isReadPermissionError(_ error: Error) -> Bool {
+        let error = error as NSError
+        if error.domain == NSCocoaErrorDomain, error.code == NSFileReadNoPermissionError { return true }
+        if error.domain == NSPOSIXErrorDomain, [Int(EACCES), Int(EPERM)].contains(error.code) { return true }
+        if let underlying = error.userInfo[NSUnderlyingErrorKey] as? Error {
+            return isReadPermissionError(underlying)
+        }
+        return false
     }
 
     static func isSupportedImage(_ url: URL) -> Bool {

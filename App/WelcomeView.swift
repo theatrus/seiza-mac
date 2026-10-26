@@ -3,6 +3,7 @@ import SwiftUI
 
 struct WelcomeView: View {
     let openPanel: () -> Void
+    let openImageList: () -> Void
     let openURLs: ([URL]) -> Void
 
     @State private var isDropTarget = false
@@ -30,7 +31,9 @@ struct WelcomeView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            Text("Drop FITS, XISF, JPEG, PNG, TIFF, or a folder here")
+            Button("Open Image List…", action: openImageList)
+                .help("Open images listed in a TXT or CSV file")
+            Text("Drop images, a folder, or a TXT/CSV image list here")
                 .font(.callout)
                 .foregroundStyle(.tertiary)
         }

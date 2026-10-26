@@ -155,6 +155,30 @@ Open a FITS, XISF, JPEG, PNG, or TIFF image, or a directory of mixed formats.
 Directory browsing includes nested subfolders, with collapsible groups by
 folder path, file type, or filename filter. Repeated filenames show their
 parent paths, and unreadable locations have details in the browser.
+Choose **File → Open Image List…** (⇧⌘O), use the welcome window's image-list
+button, or drop a `.txt` or `.csv` list to browse images from several folders as
+one collection. TXT accepts one path per line with optional surrounding quotes.
+CSV accepts `path`, `filepath`, `file_path`, `file`, or `filename` column headers
+(ignoring case and surrounding whitespace); headerless CSV uses the first column.
+Quoted commas, escaped quotes, and PixInsight SubframeSelector settings before
+the header are supported. Every listed image is included regardless of its
+Approved flag. Absolute paths are accepted; relative paths resolve beside the
+list file. For example:
+
+```csv
+path,rating
+/Users/me/Astro/night1/light001.fits,5
+"../night2/light,002.xisf",4
+```
+
+Duplicate images appear once. The browser reports missing, invalid, unsupported,
+or unreadable entries with their list line numbers. Malformed CSV produces an
+error without opening a partial collection. Choose **Group by → None** to review
+in list order. When macOS requires access to referenced images, choose their
+folders or a shared parent in the **Allow Access** panel; cancel to skip images
+that remain unreadable. This opens only the listed images, without scanning the
+authorized folders. Lists inside a browsed folder are not imported automatically.
+
 Drop a new file onto a viewer to replace its image. Move through hundreds of
 frames with the arrow keys and thumbnail drawer; local caching and nearby-image
 preloading keep review responsive, including on network folders.
