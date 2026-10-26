@@ -173,9 +173,11 @@ path,rating
 
 Duplicate images appear once. The browser reports missing, invalid, unsupported,
 or unreadable entries with their list line numbers. Malformed CSV produces an
-error without opening a partial collection. Choose **Group by → None** to review
-in list order. When macOS requires access to referenced images, choose their
-folders or a shared parent in the **Allow Access** panel; cancel to skip images
+error without opening a partial collection. Lists open grouped by each image's
+source folder, including folders with the same name under different parents.
+Choose **Group by → None** to review in list order. When macOS requires access to
+referenced images, choose their folders or a shared parent in the **Allow Access**
+panel; cancel to skip images
 that remain unreadable. This opens only the listed images, without scanning the
 authorized folders. Lists inside a browsed folder are not imported automatically.
 

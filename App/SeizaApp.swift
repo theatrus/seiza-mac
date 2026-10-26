@@ -574,7 +574,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         } else {
             window.contentViewController = NSHostingController(rootView: view)
         }
-        window.title = imageURLs[0].lastPathComponent
+        window.title = view.initialImageURL.lastPathComponent
     }
 
     private func installCollectionLoadingView(for roots: [URL], in window: NSWindow) {

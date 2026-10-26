@@ -164,6 +164,22 @@ final class ImagePathListTests: XCTestCase {
         XCTAssertEqual(Set(scan.issues.map(\.id)).count, 2)
     }
 
+    func testCSVGroupsByEachImageDirectoryIncludingRepeatedFolderNames() throws {
+        let first = try write("night2/lights/frame.fits")
+        let second = try write("night1/lights/frame10.fits")
+        let third = try write("night1/lights/frame2.fits")
+        let list = try write("lists/images.csv", "path\n../night2/lights/frame.fits\n../night1/lights/frame10.fits\n../night1/lights/frame2.fits\n")
+        let scan = try ImageCollection.scan(from: [list])
+        let collection = ImageBrowserCollection(urls: scan.images, directories: scan.directories)
+        let groups = collection.groups(for: .path)
+
+        XCTAssertEqual(scan.images, [first, second, third])
+        XCTAssertEqual(groups.map(\.title), ["night1/lights", "night2/lights"])
+        XCTAssertEqual(groups.map(\.imageIndices), [[2, 1], [0]])
+        XCTAssertEqual(Set(groups.map(\.id)).count, 2)
+        XCTAssertFalse(groups.contains { $0.title == "lists" || $0.title == "images.csv" })
+    }
+
     func testPermissionErrorsRequestAccessOnlyForExplicitListEntries() throws {
         let image = try write("restricted.fits")
         let list = try write("images.txt", "restricted.fits\n")
@@ -227,6 +243,44 @@ final class ImagePathListWindowTests: XCTestCase {
         XCTAssertEqual(view.collectionName, "images.csv")
         XCTAssertEqual(view.scanIssues.count, 1)
         XCTAssertNil(delegate.documentWindow(for: image))
+    }
+
+    func testCSVStartsWithDirectoryGroupsRegardlessOfRememberedGrouping() async throws {
+        let defaults = UserDefaults.standard
+        let savedGrouping = defaults.object(forKey: "imageBrowserGrouping")
+        defer {
+            if let savedGrouping { defaults.set(savedGrouping, forKey: "imageBrowserGrouping") }
+            else { defaults.removeObject(forKey: "imageBrowserGrouping") }
+        }
+        let firstFolder = root.appendingPathComponent("night1", isDirectory: true)
+        let secondFolder = root.appendingPathComponent("night2", isDirectory: true)
+        for folder in [firstFolder, secondFolder] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        let first = firstFolder.appendingPathComponent("z.fits")
+        let second = secondFolder.appendingPathComponent("a.fits")
+        try Data().write(to: first)
+        try Data().write(to: second)
+        let list = try write("images.csv", "path\nnight2/a.fits\nnight1/z.fits\n")
+
+        for preference in [ImageBrowserGrouping.none, .filter, .fileType] {
+            defaults.set(preference.rawValue, forKey: "imageBrowserGrouping")
+            let delegate = AppDelegate()
+            delegate.open(list)
+            let window = try XCTUnwrap(delegate.documentWindow(for: list))
+            let view = try await waitForViewer(window)
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while window.title != "z.fits", ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            // Path grouping starts in night1; every remembered mode would start
+            // at the first CSV row or its naturally earlier filename instead.
+            XCTAssertEqual(window.title, "z.fits", preference.rawValue)
+            XCTAssertEqual(view.browserCollection.groups(for: .path).map(\.title), ["night1", "night2"])
+            XCTAssertEqual(view.browserCollection.groups(for: .path).map { $0.imageIndices.count }, [1, 1])
+            XCTAssertEqual(defaults.string(forKey: "imageBrowserGrouping"), preference.rawValue)
+            window.close()
+        }
     }
 
     func testDroppedListReplacesExistingWindowAndRekeysSession() async throws {

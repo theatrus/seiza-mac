@@ -151,6 +151,7 @@ private extension DeepSkyCatalog {
 
 struct ViewerView: View {
     let urls: [URL]
+    let initialImageURL: URL
     let browserCollection: ImageBrowserCollection
     let scanIssues: [ImageCollection.ScanIssue]
     let collectionName: String?
@@ -168,7 +169,8 @@ struct ViewerView: View {
     @State private var showImageBrowser: Bool
     @State private var isDropTarget = false
     @State private var showStackWorkflow = false
-    @AppStorage private var browserGrouping: ImageBrowserGrouping
+    @AppStorage private var preferredBrowserGrouping: ImageBrowserGrouping
+    @State private var browserGrouping: ImageBrowserGrouping
 
     init(
         urls: [URL],
@@ -190,7 +192,11 @@ struct ViewerView: View {
         let collection = ImageBrowserCollection(urls: urls, directories: directories)
         browserCollection = collection
         let grouping = AppStorage(wrappedValue: ImageBrowserGrouping.path, "imageBrowserGrouping")
-        _browserGrouping = grouping
+        _preferredBrowserGrouping = grouping
+        // Lists can span unrelated folders. Always expose those source folders on import,
+        // even when a previous collection was grouped by filter, format, or not at all.
+        let initialGrouping: ImageBrowserGrouping = collectionName == nil ? grouping.wrappedValue : .path
+        _browserGrouping = State(initialValue: initialGrouping)
         self.showsImageBrowser = showsImageBrowser
         self.exportCoordinator = exportCoordinator
         self.editCoordinator = editCoordinator
@@ -198,11 +204,12 @@ struct ViewerView: View {
         self.onSelectionChange = onSelectionChange
         self.onDropURLs = onDropURLs
         self.onStackComplete = onStackComplete
-        let order = collection.groups(for: showsImageBrowser ? grouping.wrappedValue : .none)
+        let order = collection.groups(for: showsImageBrowser ? initialGrouping : .none)
             .flatMap(\.imageIndices)
         let selectedIndex = order[min(max(initialIndex, 0), max(order.count - 1, 0))]
+        initialImageURL = urls[selectedIndex]
         _selectedIndex = State(initialValue: selectedIndex)
-        _model = State(initialValue: ImageDocumentModel(url: urls[selectedIndex]))
+        _model = State(initialValue: ImageDocumentModel(url: initialImageURL))
         _showImageBrowser = State(initialValue: showsImageBrowser)
     }
 
@@ -251,6 +258,9 @@ struct ViewerView: View {
         } isTargeted: { isDropTarget = $0 }
         .onAppear {
             onSelectionChange(currentURL)
+        }
+        .onChange(of: browserGrouping) { _, grouping in
+            preferredBrowserGrouping = grouping
         }
         .toolbar {
             if showsImageBrowser {
