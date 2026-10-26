@@ -8,23 +8,27 @@ objects in it. Turn a finished image into a camera tour with depth, motion, and
 titles. Image processing and video encoding run locally; optional online
 stellar-distance lookup sends sky coordinates to astronomical catalogues.
 
-[**Download Seiza for Mac 0.8.7**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.7-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
+[**Download Seiza for Mac 0.8.8**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.8-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
 **Also from Seiza:** [Core, CLI, and libraries](https://github.com/theatrus/seiza) ·
 [Seiza for Windows](https://github.com/theatrus/seiza-win) ·
 [FITS and XISF for Photoshop](https://github.com/theatrus/xisf-photoshop)
 
-## New in 0.8.7
+## New in 0.8.8
 
-- Watch every in-progress filter together in **All Filters**, or inspect one
-  filter's full preview, depth chart and export controls.
-- Discover filters in nested capture folders, with independent calibration,
-  resumable stacks and completion records. Pause all or finish one filter.
-- Use **Median Anchor** and **Layered** stretches in image recipes and live
-  previews; display changes preserve the linear stack.
-- Review flat quality before stacking, with compact findings, expandable dust
-  details and a complete copied report.
-- Remember the RC-Astro executable across Parallax windows and app launches.
+This release brings the native Mac workflows to feature parity with Seiza for
+Windows 0.8.6, using published Seiza/C ABI 0.44.2.
+
+- Compose **HOO/SHO** palettes, review stellar continuum fits, and extract or
+  restore RGB stars in **File → Color Tools…**. Build a float preview before
+  saving FITS or XISF; display products reopen with **No Stretch**.
+- Choose automatic GPU or CPU-only stacking and a persistent **GPU planning
+  budget** in Settings. Compatible live checkpoints resume with the current
+  policy while retaining accumulated frames; active runs keep their settings.
+- Group selected lights by solved sky coordinates, select panels or individual
+  exposures, and plan **expanded mosaics** with overlap and memory limits.
+- Browse and deduplicate Finder image aliases, fit wide mosaics below 1% zoom,
+  and preserve full-resolution 8/16-bit exports.
 
 ![All in-progress filters in Live Stack](docs/images/multi-filter-live/all-filters.png)
 
@@ -35,11 +39,31 @@ stellar-distance lookup sends sky coordinates to astronomical catalogues.
 - **[Parallax videos and tours](#parallax-videos-and-tours)** — Turn an astrophoto into a fly-in or editable camera tour, then export H.264 or HEVC video.
 - **[Image viewing and folder review](#image-viewing-and-folder-review)** — Open FITS, XISF, and raster images; browse a whole night with cached thumbnails and fast previews.
 - **[Stretch and image processing](#stretch-and-image-processing)** — Build live stretch recipes, correct backgrounds, and apply light deconvolution.
+- **[Color Tools](#color-tools)** — Compose HOO/SHO palettes, review continuum fits, and extract or restore RGB stars with preview-first FITS/XISF saving.
 - **[Directory and live stacking](#directory-and-live-stacking)** — Align and combine selected frames or watch a capture folder, with calibration, rejection, and resumable sessions.
 - **[Plate solving and sky overlays](#plate-solving-and-sky-overlays)** — Solve locally, identify stars and deep-sky objects, and export WCS solutions.
 - **[Star and tilt measurement](#star-and-tilt-measurement)** — Measure stellar quality, sensor tilt, and field curvature directly from a linear image.
 - **[Catalogs and distance data](#catalogs-and-distance-data)** — Download and verify solver catalogs and offline parallax distances from Settings.
 - **[Image export and Finder integration](#image-export-and-finder-integration)** — Save full-size images with overlays and preview FITS/XISF files in Finder.
+
+## Color Tools
+
+Choose **File → Color Tools…** to work with aligned, prepared mono or RGB
+FITS/XISF images. Compose HOO or SHO palettes, analyze and review stellar
+continuum coefficients, build signed linear subtraction previews, or extract
+and restore RGB star layers. Prepared display stars can be restored without a
+second stretch.
+
+Build and review a float preview before saving FITS or XISF. Saving uses the
+reviewed samples and protects original inputs, masks and plans. Display
+products retain their transfer tags and reopen with **No Stretch** in the
+viewer, Finder thumbnails and Quick Look.
+
+Inputs must share a registered grid and the required linear/display scale.
+Automatic continuum fits need producer saturation ceilings or clipping masks;
+a skipped fit never falls back to manual weights. See the
+[Color Tools guide](docs/COLOR-TOOLS.md) for source requirements, optional
+processing and exact-source plan replay.
 
 ## Parallax videos and tours
 
@@ -312,7 +336,7 @@ and refits the whole frame as its window changes size.
 
 ## Download
 
-[**Download Seiza for Mac 0.8.7**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.7-universal.dmg), open it, and drag Seiza to Applications.
+[**Download Seiza for Mac 0.8.8**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.8-universal.dmg), open it, and drag Seiza to Applications.
 
 Or install with [Homebrew](https://brew.sh) from the
 [theatrus/homebrew-seiza tap](https://github.com/theatrus/homebrew-seiza):

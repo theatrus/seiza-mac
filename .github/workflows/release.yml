@@ -236,13 +236,13 @@ jobs:
             '' \
             "### New in ${version}" \
             '' \
-            '- See all in-progress filter stacks together in a live preview overview, with counts, state and attention messages; inspect any filter for full details.' \
-            '- Discover filters recursively, including Unfiltered, with independent calibration, references, previews and resumable checkpoints. Pause all or finish one filter while others continue.' \
-            '- Add Median Anchor and Layered stretches to image recipes and live previews, with full parameter controls and unchanged linear FITS output.' \
-            '- Review selected flat frames before stacking with clear counts and findings, expandable dust/vignetting details and complete Copy Report output.' \
-            '- Remember the licensed RC-Astro executable in Settings and share it safely across Parallax windows and app launches.' \
-            '- Fix calibration review shutdown, avoid repeated preparation after calibration failure, and preserve every finding in large flat reports.' \
-            '- Uses published Seiza/C ABI 0.39.0, parallax 0.16.0, stacking 0.42.0, stretch 0.3.1 and image I/O 0.9.0.' \
+            '- Bring the Mac workflow to feature parity with Seiza for Windows 0.8.6, using published Seiza/C ABI 0.44.2.' \
+            '- Compose HOO/SHO palettes, analyze and review stellar continuum subtraction, and extract or restore RGB stars in File → Color Tools. Build a float preview before saving FITS or XISF.' \
+            '- Preserve signed continuum residuals, NaN coverage, source-bound plans and transfer/provenance tags. Display products reopen with No Stretch across the viewer, thumbnails and Quick Look.' \
+            '- Choose automatic GPU or CPU-only stacking and a persistent GPU planning budget in Settings. Resuming compatible checkpoints applies the current policy while preserving accumulated frames; active runs retain their captured settings.' \
+            '- Group selected lights by solved sky coordinates, inspect whole panels or individual exposures, and plan expanded mosaics with overlap and canvas-memory limits. Expanded canvases require local-background, global or no normalization.' \
+            '- Resolve and deduplicate Finder image aliases during folder browsing, fit wide mosaics below 1% zoom, and render full-resolution 8/16-bit images through the Mac image pipeline.' \
+            '- Uses published Seiza/C ABI 0.44.2, stacking 0.51.2, parallax 0.19.2, satellites 0.22.2, stretch 0.3.2 and image I/O 0.11.0.' \
             '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
             "- [Download the zipped application](${release_base}/Seiza-${version}-universal.zip)" \
