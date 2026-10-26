@@ -1170,10 +1170,10 @@ private struct StretchModelDecodingPayload: Decodable {
 }
 
 struct ImageStatistics: Decodable {
-    let minimum: Int
-    let maximum: Int
+    let minimum: Double
+    let maximum: Double
     let mean: Double
-    let median: Int
+    let median: Double
     let mad: Double
 }
 
@@ -1476,20 +1476,41 @@ enum SeizaCore {
         return try JSONDecoder().decode(DistanceCatalogStatus.self, from: Data(String(cString: result).utf8))
     }
 
+    /// Header-only transfer lookup; display products already occupy the 0…1 domain.
+    static func isDisplayProduct(_ url: URL) -> Bool {
+        guard ["fits", "fit", "fts", "xisf"].contains(url.pathExtension.lowercased()) else { return false }
+        var error: UnsafeMutablePointer<CChar>?
+        let result = url.path.withCString { seiza_mac_color_is_display($0, &error) }
+        if let error { seiza_string_free(error) }
+        return result == 1
+    }
+
+    static func initialProcessing(for url: URL) -> FITSImageProcessingConfiguration {
+        isDisplayProduct(url) ? FITSImageProcessingConfiguration(
+            stretchStack: FITSStretchStack(stages: [.identity]), extractsBackground: false) : .default
+    }
+
+    static func renderConfigurationJSON(url: URL, processing: FITSImageProcessingConfiguration) throws -> String {
+        var value = try JSONSerialization.jsonObject(with: processing.jsonData) as! [String: Any]
+        if isDisplayProduct(url) {
+            value["sample_domain"] = ["type": "physical-linear", "normalization": [
+                "type": "explicit-range", "black": 0.0, "white": 1.0]]
+        }
+        return String(decoding: try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]), as: UTF8.self)
+    }
+
     static func render(
         url: URL,
         maxDimension: UInt32 = 0,
-        processing: FITSImageProcessingConfiguration = .default
+        processing: FITSImageProcessingConfiguration? = nil
     ) throws -> RenderedImage {
+        let processing = processing ?? initialProcessing(for: url)
         var errorPointer: UnsafeMutablePointer<CChar>?
         let extensionName = url.pathExtension.lowercased()
         let usesAstronomyPipeline = astronomyImageExtensions.contains(extensionName)
         let handle: OpaquePointer?
         if usesAstronomyPipeline {
-            let configurationJSON = String(
-                decoding: try processing.jsonData,
-                as: UTF8.self
-            )
+            let configurationJSON = try renderConfigurationJSON(url: url, processing: processing)
             handle = url.path.withCString { path in
                 configurationJSON.withCString { configuration in
                     seiza_rendered_image_open_with_stretch_config(
@@ -1569,17 +1590,15 @@ enum SeizaCore {
     static func render16(
         url: URL,
         maxDimension: UInt32 = 0,
-        processing: FITSImageProcessingConfiguration = .default
+        processing: FITSImageProcessingConfiguration? = nil
     ) throws -> RenderedImage {
+        let processing = processing ?? initialProcessing(for: url)
         var errorPointer: UnsafeMutablePointer<CChar>?
         let extensionName = url.pathExtension.lowercased()
         let usesAstronomyPipeline = astronomyImageExtensions.contains(extensionName)
         let handle: OpaquePointer?
         if usesAstronomyPipeline {
-            let configurationJSON = String(
-                decoding: try processing.jsonData,
-                as: UTF8.self
-            )
+            let configurationJSON = try renderConfigurationJSON(url: url, processing: processing)
             handle = url.path.withCString { path in
                 configurationJSON.withCString { configuration in
                     seiza_rendered_image16_open_with_stretch_config(

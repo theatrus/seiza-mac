@@ -51,9 +51,10 @@ enum ImageThumbnailCache {
 
     static func memoryImage(
         for url: URL,
-        processing: FITSImageProcessingConfiguration = .default
+        processing: FITSImageProcessingConfiguration? = nil
     ) -> CGImage? {
-        memory.object(
+        let processing = processing ?? SeizaCore.initialProcessing(for: url)
+        return memory.object(
             forKey: cacheKey(
                 for: url,
                 processing: processing
@@ -63,9 +64,10 @@ enum ImageThumbnailCache {
 
     static func load(
         for url: URL,
-        processing: FITSImageProcessingConfiguration = .default,
+        processing: FITSImageProcessingConfiguration? = nil,
         completion: @escaping (CGImage?) -> Void
     ) {
+        let processing = processing ?? SeizaCore.initialProcessing(for: url)
         let key = cacheKey(for: url, processing: processing)
         if let image = memory.object(forKey: key as NSString)?.image {
             completion(image)
@@ -100,9 +102,10 @@ enum ImageThumbnailCache {
 
     static func render(
         for url: URL,
-        processing: FITSImageProcessingConfiguration = .default,
+        processing: FITSImageProcessingConfiguration? = nil,
         completion: @escaping (CGImage?) -> Void
     ) {
+        let processing = processing ?? SeizaCore.initialProcessing(for: url)
         ImageRenderQueue.renderThumbnail(
             url: url,
             processing: processing,
@@ -112,7 +115,7 @@ enum ImageThumbnailCache {
 
     static func prefetch(
         _ urls: [URL],
-        processing: FITSImageProcessingConfiguration = .default
+        processing: FITSImageProcessingConfiguration? = nil
     ) {
         for url in urls where memoryImage(
             for: url,
@@ -129,8 +132,9 @@ enum ImageThumbnailCache {
     static func storeThumbnail(
         from image: CGImage,
         for url: URL,
-        processing: FITSImageProcessingConfiguration = .default
+        processing: FITSImageProcessingConfiguration? = nil
     ) -> CGImage {
+        let processing = processing ?? SeizaCore.initialProcessing(for: url)
         let thumbnail = resized(image, maximumDimension: maximumDimension)
         let key = cacheKey(for: url, processing: processing)
         memory.setObject(
@@ -200,7 +204,7 @@ enum ImageThumbnailCache {
         // and render lookup, and a source may sit on a slow network share.
         // A full render overwrites the path-based thumbnail with current data.
         let signature = [
-            "thumbnail-cache-v3",
+            "thumbnail-cache-v4",
             "core:\(SeizaCore.version)",
             url.standardizedFileURL.path,
             "astronomy-processing:\(processing.cacheIdentifier)",
@@ -300,9 +304,10 @@ enum ImageRenderQueue {
 
     static func renderThumbnail(
         url: URL,
-        processing: FITSImageProcessingConfiguration = .default,
+        processing: FITSImageProcessingConfiguration? = nil,
         completion: @escaping ThumbnailCompletion
     ) {
+        let processing = processing ?? SeizaCore.initialProcessing(for: url)
         let key = jobKey(for: url, processing: processing)
         let shouldSchedule = stateQueue.sync {
             if var job = jobs[key] {

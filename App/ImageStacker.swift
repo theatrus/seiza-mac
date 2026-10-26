@@ -100,6 +100,9 @@ enum StackCanvasMode: String, CaseIterable, Identifiable, Sendable {
 }
 
 enum StackingPreferences {
+    static func gpuBudgetMiB(in defaults: UserDefaults = .standard) -> Int {
+        min(1_048_576, max(0, defaults.integer(forKey: "gpuPlanningBudgetMiB")))
+    }
     static func usesGPU(in defaults: UserDefaults = .standard) -> Bool {
         defaults.object(forKey: "useGpuForStacking") as? Bool ?? true
     }
@@ -107,6 +110,7 @@ enum StackingPreferences {
 
 struct ImageStackOptions: Equatable, Sendable {
     var useGPU = true
+    var gpuBudgetMiB = 0
     var canvasMode = StackCanvasMode.fixed
     var maximumCanvasMegasamples = 256
 
@@ -144,6 +148,12 @@ struct ImageStackOptions: Equatable, Sendable {
     }
 
     var validationMessage: String? {
+        if !(0...1_048_576).contains(gpuBudgetMiB) {
+            return "GPU planning budget must be 0 (automatic) through 1048576 MiB."
+        }
+        if canvasMode == .expanded, normalization == .local {
+            return "Expanded mosaics require local-background, global, or no normalization."
+        }
         if !(1...4096).contains(maximumCanvasMegasamples) {
             return "Canvas limit must be between 1 and 4096 million samples."
         }
@@ -193,14 +203,39 @@ struct ImageStackOptions: Equatable, Sendable {
         return (value["gpu"] as? [String: Any])?["enabled"] as? Bool ?? true
     }
 
+    var gpuJSON: String {
+        get throws {
+            if let message = validationMessage { throw ImageStackError.invalidRequest(message) }
+            var gpu: [String: Any] = ["enabled": useGPU]
+            if gpuBudgetMiB > 0 { gpu["memory_bytes"] = gpuBudgetMiB * 1_048_576 }
+            return String(decoding: try JSONSerialization.data(withJSONObject: gpu, options: [.sortedKeys]), as: UTF8.self)
+        }
+    }
+
+    func applyingGPU(to saved: String) throws -> String {
+        _ = try Self.processingIdentity(saved)
+        var value = try JSONSerialization.jsonObject(with: Data(saved.utf8)) as! [String: Any]
+        value["gpu"] = try JSONSerialization.jsonObject(with: Data(gpuJSON.utf8))
+        return String(decoding: try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]), as: UTF8.self)
+    }
+
     private static func processingIdentity(_ json: String) throws -> Data {
         guard var value = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else {
             throw ImageStackError.invalidRequest("Invalid saved stack options.")
         }
         if let gpuValue = value["gpu"] {
             guard let gpu = gpuValue as? [String: Any],
-                gpu.keys.allSatisfy({ ["enabled", "trace"].contains($0) }),
-                gpu.values.allSatisfy({ CFGetTypeID($0 as CFTypeRef) == CFBooleanGetTypeID() }) else {
+                gpu.allSatisfy({ key, value in
+                    if ["enabled", "trace", "defects", "debayer", "detection", "resampling", "accumulator", "integration"].contains(key) {
+                        return CFGetTypeID(value as CFTypeRef) == CFBooleanGetTypeID()
+                    }
+                    if ["memory_bytes", "concurrency"].contains(key), let n = value as? NSNumber,
+                        CFGetTypeID(n) != CFBooleanGetTypeID() {
+                        return n.doubleValue.isFinite && n.doubleValue > 0 && n.doubleValue.rounded() == n.doubleValue
+                            && n.doubleValue < (key == "concurrency" ? 4_294_967_296 : 18_446_744_073_709_551_616)
+                    }
+                    return false
+                }) else {
                 throw ImageStackError.invalidRequest("Invalid saved GPU policy.")
             }
         }
@@ -230,7 +265,7 @@ struct ImageStackOptions: Equatable, Sendable {
 
 private struct StackOptionsPayload: Encodable {
     let gpu: GPUPayload?
-    struct GPUPayload: Encodable { let enabled: Bool }
+    struct GPUPayload: Encodable { let enabled: Bool; let memory_bytes: Int? }
     let registration: RegistrationPayload
     let normalization: NormalizationPayload
     let rejection: RejectionPayload
@@ -248,7 +283,7 @@ private struct StackOptionsPayload: Encodable {
     }
 
     init(options: ImageStackOptions) {
-        gpu = options.useGPU ? nil : GPUPayload(enabled: false)
+        gpu = options.useGPU && options.gpuBudgetMiB == 0 ? nil : GPUPayload(enabled: options.useGPU, memory_bytes: options.gpuBudgetMiB == 0 ? nil : options.gpuBudgetMiB * 1_048_576)
         registration = RegistrationPayload(
             maximumDriftPixels: options.maximumDriftPixels,
             maximumDriftFraction: options.maximumDriftFraction,
@@ -2071,6 +2106,7 @@ struct ImageStackWorkflowView: View {
     private var stackOptions: ImageStackOptions {
         var snapshot = options
         snapshot.useGPU = StackingPreferences.usesGPU()
+        snapshot.gpuBudgetMiB = StackingPreferences.gpuBudgetMiB()
         return snapshot
     }
 

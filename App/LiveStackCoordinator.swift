@@ -626,13 +626,14 @@ actor LiveStackCoordinator {
                     "Saved generation \(candidate.generation) did not match this run.")
                 continue
             }
-            let savedGPU = try ImageStackOptions.savedUsesGPU(candidate.manifest.state.stackOptionsJSON)
+            let gpuJSON = try configuration.options.gpuJSON
+            let updatedOptions = try configuration.options.applyingGPU(to: candidate.manifest.state.stackOptionsJSON)
             let restoredSession: LiveStackNativeSession
             let nativeState: LiveStackNativeState
             do {
                 let contextPath = candidate.contextURL.path
                 restoredSession = try await runBlocking {
-                    try LiveStackNativeSession.resume(contextPath: contextPath)
+                    try LiveStackNativeSession.resume(contextPath: contextPath, gpuJSON: gpuJSON)
                 }
                 nativeState = try await restoredSession.state()
             } catch {
@@ -649,9 +650,9 @@ actor LiveStackCoordinator {
                         + "own checkpoint.")
                 continue
             }
-            savedOptionsJSON = candidate.manifest.state.stackOptionsJSON
-            if savedGPU != configuration.options.useGPU {
-                addAttention("This live stack retains its saved GPU setting (" + (savedGPU ? "automatic" : "CPU only") + "), which differs from Settings.")
+            savedOptionsJSON = updatedOptions
+            if updatedOptions != candidate.manifest.state.stackOptionsJSON {
+                addAttention("Resumed with the current GPU mode and planning budget from Settings; saved frame history is retained.")
             }
             session = restoredSession
             do {

@@ -330,6 +330,22 @@ final class ImageCollectionTests: XCTestCase {
         XCTAssertEqual(try ImageCollection.scan(from: [linkedImage]).images, scan.images)
     }
 
+    func testFinderAliasesResolveTargetsAndDeduplicateWithoutTraversingFolders() throws {
+        let root = try makeScanDirectory()
+        let external = try makeScanDirectory()
+        defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: external) }
+        let image = external.appendingPathComponent("original.fits")
+        try Data().write(to: image)
+        let alias = root.appendingPathComponent("Image alias")
+        try URL.writeBookmarkData(image.bookmarkData(options: [.suitableForBookmarkFile], includingResourceValuesForKeys: nil, relativeTo: nil), to: alias)
+        let folderAlias = root.appendingPathComponent("Folder alias")
+        try URL.writeBookmarkData(external.bookmarkData(options: [.suitableForBookmarkFile], includingResourceValuesForKeys: nil, relativeTo: nil), to: folderAlias)
+        let scan = try ImageCollection.scan(from: [root, image])
+        XCTAssertEqual(scan.images, [image.standardizedFileURL])
+        XCTAssertTrue(scan.issues.isEmpty)
+        XCTAssertEqual(try ImageCollection.scan(from: [alias]).images, [image.standardizedFileURL])
+    }
+
     func testDirectoryScanReportsBrokenImageLinksWithoutLosingReadableImages() throws {
         let root = try makeScanDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -3008,10 +3024,132 @@ final class StackingGPUOptionsTests: XCTestCase {
         }
     }
 
+    func testGPUPlanningBudgetAndResumeCompatibility() throws {
+        var options = ImageStackOptions()
+        let original = String(decoding: try options.jsonData, as: UTF8.self)
+        options.gpuBudgetMiB = 2048
+        options.useGPU = false
+        let updated = try options.applyingGPU(to: original)
+        let gpu = try JSONSerialization.jsonObject(with: Data(options.gpuJSON.utf8)) as! [String: Any]
+        XCTAssertEqual(gpu["memory_bytes"] as? Int, 2_147_483_648)
+        XCTAssertEqual(gpu["enabled"] as? Bool, false)
+        XCTAssertTrue(ImageStackOptions.sameProcessingOptions(original, updated))
+        for invalid in ["{\"gpu\":{\"memory_bytes\":0}}", "{\"gpu\":{\"memory_bytes\":-1}}", "{\"gpu\":{\"memory_bytes\":true}}", "{\"gpu\":{\"concurrency\":1.5}}"] {
+            XCTAssertFalse(ImageStackOptions.sameProcessingOptions(original, invalid))
+        }
+        options.canvasMode = .expanded; options.normalization = .local
+        XCTAssertNotNil(options.validationMessage)
+        options.normalization = .localBackground
+        XCTAssertNil(options.validationMessage)
+    }
+
     func testAppendedSNRFieldUsesThePublishedABI() {
         XCTAssertEqual(MemoryLayout<SeizaSnrSample>.size, 80)
         var value = SeizaSnrSample()
         value.bin_factor = 2
         XCTAssertEqual(value.bin_factor, 2)
+    }
+}
+
+final class ColorToolsIntegrationTests: XCTestCase {
+    private func fixture(_ directory: URL, name: String, width: Int = 16, channels: Int = 1, values: [Float], display: Bool = false) throws -> URL {
+        var cards = ["SIMPLE  =                    T", "BITPIX  =                  -32", "NAXIS   =                    \(channels == 1 ? 2 : 3)", "NAXIS1  =                    \(width)", "NAXIS2  =                    4"]
+        if channels > 1 { cards.append("NAXIS3  =                    \(channels)") }
+        if display { cards.append("SEIZATRF= 'DISPLAY'") }
+        cards.append("END")
+        var data = Data(cards.map { $0.padding(toLength: 80, withPad: " ", startingAt: 0) }.joined().utf8)
+        data.append(Data(repeating: 32, count: (2880 - data.count % 2880) % 2880))
+        for i in 0..<(width * 4 * channels) {
+            var bits = values[i % values.count].bitPattern.bigEndian
+            withUnsafeBytes(of: &bits) { data.append(contentsOf: $0) }
+        }
+        data.append(Data(repeating: 0, count: (2880 - data.count % 2880) % 2880))
+        let url = directory.appendingPathComponent(name); try data.write(to: url); return url
+    }
+    private func directory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+    func testPreviewSaveUsesBuiltSamplesAndPreservesDisplayTransferAcrossXISF() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let ha = try fixture(root, name: "ha.fits", values: [0.2, 0.3])
+        let oxygen = try fixture(root, name: "oxygen.fits", values: [0.4, 0.5])
+        var recipe = ColorToolsRecipe(); recipe.paths[0] = ha.path; recipe.paths[1] = oxygen.path
+        recipe.aligned = true; recipe.inputDisplay = true; recipe.balance = false
+        let built = try await ColorToolsService.shared.run(recipe: recipe, analyze: false, plan: nil, directory: root)
+        XCTAssertEqual(built.status, "success")
+        let preview = try XCTUnwrap(built.imageURL)
+        XCTAssertTrue(SeizaCore.isDisplayProduct(preview))
+        XCTAssertEqual(SeizaCore.initialProcessing(for: preview).stretchStack.stages, [.identity])
+        XCTAssertEqual(SeizaCore.initialProcessing(for: ha), .default)
+        let rendered = try SeizaCore.render(url: preview)
+        let pixels = try XCTUnwrap(rendered.image.dataProvider?.data) as Data
+        XCTAssertEqual(Int(pixels[0]), 51, accuracy: 1)
+        XCTAssertEqual(Int(pixels[1]), 102, accuracy: 1)
+        let rendered16 = try SeizaCore.render16(url: preview)
+        XCTAssertEqual(rendered16.image.bitsPerComponent, 16)
+        let config = try JSONSerialization.jsonObject(with: Data(SeizaCore.renderConfigurationJSON(url: preview, processing: .default).utf8)) as! [String: Any]
+        XCTAssertNotNil(config["sample_domain"])
+        // A format save must use the preview, even after its original sources disappear.
+        try FileManager.default.removeItem(at: ha); try FileManager.default.removeItem(at: oxygen)
+        let output = root.appendingPathComponent("saved.xisf")
+        try await ColorToolsService.shared.save(preview: built, to: output, sources: recipe.protectedURLs)
+        XCTAssertTrue(SeizaCore.isDisplayProduct(output))
+        let saved = try SeizaCore.render(url: output)
+        XCTAssertEqual(saved.image.dataProvider?.data as Data?, rendered.image.dataProvider?.data as Data?)
+        let alias = root.appendingPathComponent("preview-alias.fits")
+        try FileManager.default.linkItem(at: preview, to: alias)
+        do { try await ColorToolsService.shared.save(preview: built, to: alias, sources: []); XCTFail("Preview hard links must be protected") } catch {}
+    }
+    func testCancelledPublicationPreservesExistingOutput() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("existing.fits")
+        let old = Data("existing output".utf8); try old.write(to: output)
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            try ColorToolsService.publish(to: output, sources: []) { try Data("complete but cancelled".utf8).write(to: $0) }
+        }
+        do { try await task.value; XCTFail("Cancelled publication must not commit") } catch is CancellationError {} catch { throw error }
+        XCTAssertEqual(try Data(contentsOf: output), old)
+    }
+
+    func testAtomicPublicationRetainsDestinationOnWriterFailure() throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("existing.fits"); let old = Data("original".utf8); try old.write(to: output)
+        XCTAssertThrowsError(try ColorToolsService.publish(to: output, sources: []) { staged in
+            try Data("partial".utf8).write(to: staged)
+            throw ImageStackError.core("simulated writer failure")
+        })
+        XCTAssertEqual(try Data(contentsOf: output), old)
+    }
+    func testLargeDisplayImageRendersAndExportsBeyondDeviceBitmapWidth() throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let image = try fixture(root, name: "wide.fits", width: 24_000, values: [0.2, 0.4, 0.8], display: true)
+        let full = try SeizaCore.render(url: image)
+        XCTAssertEqual(full.image.width, 24_000)
+        XCTAssertEqual(full.image.height, 4)
+        let thumbnail = try SeizaCore.render(url: image, maxDimension: 320)
+        XCTAssertLessThanOrEqual(thumbnail.image.width, 320)
+        let export = try SeizaCore.render16(url: image)
+        XCTAssertEqual(export.image.width, 24_000)
+    }
+    @MainActor
+    func testChangingRecipeInvalidatesFitAndImportResetsScientificConfirmations() throws {
+        var sho = ColorToolsRecipe(); sho.palette = "sho"
+        XCTAssertEqual(sho.inputLabels, ["Hα", "O III", "S II"])
+        let model = ColorToolsModel()
+        let plan: [String: Any] = ["coefficients": [0.5], "sources": ["narrowband": ["saturation": 1000], "references": [["saturation": 2000]]]]
+        let report: [String: Any] = ["plan": plan, "sources": [["path": "/tmp/ha.fits"], ["path": "/tmp/r.fits"]]]
+        try model.importPlan(JSONSerialization.data(withJSONObject: report), url: URL(fileURLWithPath: "/tmp/plan.json"))
+        XCTAssertFalse(model.recipe.aligned); XCTAssertFalse(model.recipe.linearConfirmed)
+        XCTAssertEqual(model.recipe.paths[0], "/tmp/ha.fits")
+        XCTAssertEqual(model.recipe.saturations[1], 2000)
+        XCTAssertNotNil(model.plan)
+        model.recipe.aligned = true; model.recipe.linearConfirmed = true
+        XCTAssertNotNil(model.plan)
+        model.recipe.saturations[0] = 900
+        XCTAssertNil(model.plan)
+        model.close()
     }
 }

@@ -162,23 +162,21 @@ enum ImageCollection {
         }
 
         func appendImage(at url: URL) {
-            guard isSupportedImage(url) else { return }
             do {
-                let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-                if values.isSymbolicLink == true {
-                    let target = url.resolvingSymlinksInPath()
-                    let targetValues = try target.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
-                    // Directory links are never image candidates or traversal roots here.
-                    if targetValues.isDirectory == true { return }
-                    guard targetValues.isRegularFile == true else {
-                        recordIssue(at: url, message: "The linked image does not point to a regular file.")
-                        return
-                    }
-                } else if values.isRegularFile != true {
+                let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .isAliasFileKey])
+                var image = url.standardizedFileURL
+                if values.isAliasFile == true, values.isSymbolicLink != true {
+                    image = try URL(resolvingAliasFileAt: url, options: [.withoutUI, .withoutMounting]).standardizedFileURL
+                }
+                guard isSupportedImage(image) else { return }
+                let target = image.resolvingSymlinksInPath()
+                let targetValues = try target.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey])
+                if targetValues.isDirectory == true { return }
+                guard targetValues.isRegularFile == true else {
+                    recordIssue(at: url, message: "The linked image does not point to a regular file.")
                     return
                 }
-                let image = url.standardizedFileURL
-                if seenImages.insert(image).inserted { images.append(image) }
+                if seenImages.insert(target).inserted { images.append(image) }
             } catch {
                 recordIssue(at: url, message: error.localizedDescription)
             }
@@ -197,7 +195,7 @@ enum ImageCollection {
                 directories.append(root.standardizedFileURL)
                 guard let contents = FileManager.default.enumerator(
                     at: root,
-                    includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+                    includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .isAliasFileKey],
                     options: [.skipsHiddenFiles, .skipsPackageDescendants],
                     errorHandler: { url, error in
                         recordIssue(at: url, message: error.localizedDescription)

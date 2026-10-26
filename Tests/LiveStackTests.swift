@@ -1857,7 +1857,7 @@ final class LiveStackFilterSessionTests: XCTestCase {
         await resumed.dispose()
     }
 
-    func testEveryFilterRetainsItsSavedGPUPolicyWhenResumedWithoutSources() async throws {
+    func testEveryFilterAppliesCurrentGPUPolicyWhenResumedWithoutSources() async throws {
         for originalGPU in [false, true] {
             let (root, watch, originalConfig) = try setup()
             defer { try? FileManager.default.removeItem(at: root) }
@@ -1875,11 +1875,12 @@ final class LiveStackFilterSessionTests: XCTestCase {
             try FileManager.default.removeItem(at: watch)
             try FileManager.default.createDirectory(at: watch, withIntermediateDirectories: true)
             config.options.useGPU = !originalGPU
+            config.options.gpuBudgetMiB = 64
             let restored = try LiveStackFilterSession(configuration: config)
             try await restored.start()
             let state = try await waitFor(restored) { $0.groups.count == 2 && $0.groups.allSatisfy { $0.snapshot.acceptedFrames == 1 } }
             for group in state.groups {
-                XCTAssertTrue(group.snapshot.attention.contains { $0.message.contains("saved GPU setting") })
+                XCTAssertTrue(group.snapshot.attention.contains { $0.message.contains("current GPU mode") })
             }
             try await restored.pauseAndSave()
             await restored.dispose()
@@ -1887,7 +1888,9 @@ final class LiveStackFilterSessionTests: XCTestCase {
                 let store = try LiveStackSessionStore(sessionRootDirectory: config.sessionRootDirectory, groupId: "filter-" + key)
                 let candidates = await store.restoreCandidates()
                 let candidate = try XCTUnwrap(candidates.first)
-                XCTAssertEqual(try ImageStackOptions.savedUsesGPU(candidate.manifest.state.stackOptionsJSON), originalGPU)
+                XCTAssertEqual(try ImageStackOptions.savedUsesGPU(candidate.manifest.state.stackOptionsJSON), !originalGPU)
+                let options = try JSONSerialization.jsonObject(with: Data(candidate.manifest.state.stackOptionsJSON.utf8)) as! [String: Any]
+                XCTAssertEqual((options["gpu"] as? [String: Any])?["memory_bytes"] as? Int, 64 * 1_048_576)
             }
         }
     }
@@ -2092,7 +2095,7 @@ final class MosaicStackingBoundaryTests: XCTestCase {
         XCTAssertNotNil(options.validationMessage)
     }
 
-    func testLiveResumeAfterPreferenceChangeKeepsSavedPolicyAndAccumulator() async throws {
+    func testLiveResumeAfterPreferenceChangeAppliesPolicyAndKeepsAccumulator() async throws {
         for originalGPU in [false, true] {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -2114,17 +2117,20 @@ final class MosaicStackingBoundaryTests: XCTestCase {
             try FileManager.default.removeItem(at: reference)
             config.initialReferencePath = nil
             config.options.useGPU = !originalGPU
+            config.options.gpuBudgetMiB = 64
             let restored = try LiveStackCoordinator(configuration: config)
             try await restored.start()
             try await restored.pauseAndSave()
             let state = await restored.currentSnapshot()
             XCTAssertEqual(state.acceptedFrames, 1)
-            XCTAssertTrue(state.attention.contains { $0.message.contains("saved GPU setting") })
+            XCTAssertTrue(state.attention.contains { $0.message.contains("current GPU mode") })
             await restored.dispose()
             let store = try LiveStackSessionStore(sessionRootDirectory: config.sessionRootDirectory, groupId: config.groupId)
             let candidates = await store.restoreCandidates()
             let saved = try XCTUnwrap(candidates.first)
-            XCTAssertEqual(try ImageStackOptions.savedUsesGPU(saved.manifest.state.stackOptionsJSON), originalGPU)
+            XCTAssertEqual(try ImageStackOptions.savedUsesGPU(saved.manifest.state.stackOptionsJSON), !originalGPU)
+            let options = try JSONSerialization.jsonObject(with: Data(saved.manifest.state.stackOptionsJSON.utf8)) as! [String: Any]
+            XCTAssertEqual((options["gpu"] as? [String: Any])?["memory_bytes"] as? Int, 64 * 1_048_576)
         }
     }
 }
