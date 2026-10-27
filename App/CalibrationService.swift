@@ -78,6 +78,40 @@ enum CalibrationService {
         return result
     }
 
+    static func measureDark(_ request: DarkQualityMeasureRequest) throws -> DarkQualityMeasurement {
+        let json = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
+        var failure: UnsafeMutablePointer<CChar>?
+        let response = json.withCString { seiza_calibration_measure_dark_json($0, &failure) }
+        let data = try takeOwnedJSON(response, &failure, whenMissing: "Could not measure the bias or dark frame.")
+        return try JSONDecoder().decode(DarkQualityMeasurement.self, from: data)
+    }
+
+    /// Call with a compatible peer set, not an entire mixed library. Grouping
+    /// and eligibility belong to the shared planner; these calls only screen.
+    static func screenBias(_ measurements: [DarkQualityMeasurement]) throws -> CalibrationQualityReport {
+        try screenDarkMeasurements(measurements, using: seiza_calibration_screen_bias_json)
+    }
+
+    static func screenDarks(_ measurements: [DarkQualityMeasurement]) throws -> CalibrationQualityReport {
+        try screenDarkMeasurements(measurements, using: seiza_calibration_screen_darks_json)
+    }
+
+    private static func screenDarkMeasurements(
+        _ measurements: [DarkQualityMeasurement],
+        using screen: (UnsafePointer<CChar>?, UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?) -> UnsafeMutablePointer<CChar>?
+    ) throws -> CalibrationQualityReport {
+        struct Request: Encodable { var measurements: [DarkQualityMeasurement] }
+        let json = String(decoding: try JSONEncoder().encode(Request(measurements: measurements)), as: UTF8.self)
+        var failure: UnsafeMutablePointer<CChar>?
+        let response = json.withCString { screen($0, &failure) }
+        let data = try takeOwnedJSON(response, &failure, whenMissing: "Could not screen the bias or dark set.")
+        let report = try JSONDecoder().decode(CalibrationQualityReport.self, from: data)
+        guard report.schemaVersion == 1, report.frames.count == measurements.count else {
+            throw CalibrationServiceError.invalidResponse("The calibration quality report does not match the selected set.")
+        }
+        return report
+    }
+
     static func measureFlat(_ request: FlatQualityMeasureRequest) throws -> FlatQualityMeasurement {
         let json = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
         var failure: UnsafeMutablePointer<CChar>?

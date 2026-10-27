@@ -1,6 +1,7 @@
 # Plan calibration in stacking setup
 
-Status: **Proposed; planning only.** Baseline: Mac main `d063c9b` (PR #91).
+Status: **Setup design proposed; native boundary foundations implemented.**
+Baseline: Mac main `d063c9b` (PR #91).
 The existing app still prepares one calibration set per output. This feature
 replaces that restriction with an explicit assignment for every selected light,
 for both Fixed reference and Expanded mosaic.
@@ -12,6 +13,12 @@ grade its frames, group compatible sets, and review which calibration each light
 will receive. Build or reuse the required masters and stack the original lights
 onto the chosen canvas. A mosaic may contain several calibration sessions without
 being split into separate output images just because its flats or darks differ.
+
+The first implementation slice adds captured PSF Guard reference fixtures,
+native bias/dark screening wrappers, and session integration/checkpoint/replay
+tests. The [native boundary audit](STACKING-CALIBRATION-BOUNDARY.md) records what
+is verified and the shared-policy/expanded-planning APIs still needed. The new
+setup workflow remains proposed; these foundations do not enable it.
 
 PSF Guard is the behavior reference. Its library grades and measured flat groups,
 per-light explanations, master selection, and session assignments should produce
