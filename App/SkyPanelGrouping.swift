@@ -30,13 +30,18 @@ struct SkySolveFailure: Identifiable, Sendable {
 /// Input selection only. Native star registration still decides integration eligibility.
 enum SkyPanelGrouping {
     static func group(_ frames: [SkySolvedFrame], overlaps: [[Double]]) throws -> [SkyField] {
+        try Task.checkCancellation()
         guard overlaps.count == frames.count,
-            overlaps.allSatisfy({ $0.count == frames.count && $0.allSatisfy { $0.isFinite && (0...1).contains($0) } }) else {
+            try overlaps.allSatisfy({ row in
+                try Task.checkCancellation()
+                return row.count == frames.count && row.allSatisfy { $0.isFinite && (0...1).contains($0) }
+            }) else {
             throw ImageStackError.invalidRequest("Invalid sky-footprint overlap matrix.")
         }
         func coverage(_ i: Int, _ j: Int) -> Double { min(overlaps[i][j], overlaps[j][i]) }
         var panels: [[Int]] = []
         for i in frames.indices.sorted(by: { frames[$0].url.path < frames[$1].url.path }) {
+            try Task.checkCancellation()
             // Complete-link clustering prevents dither chains swallowing a mosaic.
             if let panel = panels.firstIndex(where: { $0.allSatisfy { coverage(i, $0) >= 0.85 } }) {
                 panels[panel].append(i)
@@ -45,10 +50,12 @@ enum SkyPanelGrouping {
         var remaining = Set(panels.indices)
         var fields: [SkyField] = []
         while let seed = remaining.min() {
+            try Task.checkCancellation()
             remaining.remove(seed)
             var connected = [seed]
             var k = 0
             while k < connected.count {
+                try Task.checkCancellation()
                 for other in remaining.sorted() {
                     if panels[connected[k]].contains(where: { i in panels[other].contains { coverage(i, $0) >= 0.05 } }) {
                         remaining.remove(other)
@@ -128,8 +135,9 @@ enum SkyPanelService {
     }
 
     static func analyze(_ urls: [URL], catalog: URL?, progress: @Sendable (String) -> Void) throws -> SkyPanelAnalysis {
-        guard (2...512).contains(urls.count) else {
-            throw ImageStackError.invalidRequest("Select between 2 and 512 lights to solve and group.")
+        try Task.checkCancellation()
+        guard urls.count >= 2 else {
+            throw ImageStackError.invalidRequest("Select at least two lights to solve and group.")
         }
         let accessed = (urls + [catalog].compactMap { $0 }).filter { $0.startAccessingSecurityScopedResource() }
         defer { accessed.forEach { $0.stopAccessingSecurityScopedResource() } }
@@ -171,6 +179,7 @@ enum SkyPanelService {
 
     static func overlapMatrix(_ frames: [SkySolvedFrame], progress: (String) -> Void = { _ in }) throws -> [[Double]] {
         let footprints: [[String: Any]] = try frames.map { frame in
+            try Task.checkCancellation()
             let wcs = String(decoding: try JSONEncoder().encode(frame.wcs), as: UTF8.self)
             var error: UnsafeMutablePointer<CChar>?
             defer { if let error { seiza_string_free(error) } }
@@ -185,17 +194,21 @@ enum SkyPanelService {
             return ["width": frame.width, "height": frame.height, "wcsHeaders": cards]
         }
         var matrix: [[Double]] = []
-        for row in stride(from: 0, to: frames.count, by: 8) {
+        // Keep native calls short as the selection grows; each batch has at
+        // most eight rows and about 4096 pair comparisons, or one large row.
+        let rowsPerBatch = max(1, min(8, 4096 / max(1, frames.count)))
+        for row in stride(from: 0, to: frames.count, by: rowsPerBatch) {
             try Task.checkCancellation()
             progress("Comparing sky footprints: \(row)/\(frames.count)")
             let request = String(decoding: try JSONSerialization.data(withJSONObject: ["frames": footprints,
-                "startRow": row, "rowCount": min(8, frames.count - row)]), as: UTF8.self)
+                "startRow": row, "rowCount": min(rowsPerBatch, frames.count - row)]), as: UTF8.self)
             var error: UnsafeMutablePointer<CChar>?
             defer { if let error { seiza_string_free(error) } }
             guard let result = request.withCString({ seiza_mac_sky_overlaps_json($0, &error) }) else {
                 throw ImageStackError.core(CalibrationService.takeOwnedError(&error, fallback: "Could not compare sky footprints."))
             }
             defer { seiza_string_free(result) }
+            try Task.checkCancellation()
             matrix += try JSONDecoder().decode([[Double]].self, from: Data(bytes: result, count: strlen(result)))
         }
         return matrix

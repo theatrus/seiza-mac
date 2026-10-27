@@ -151,8 +151,10 @@ private extension DeepSkyCatalog {
 
 struct ViewerView: View {
     let urls: [URL]
+    let initialImageURL: URL
     let browserCollection: ImageBrowserCollection
     let scanIssues: [ImageCollection.ScanIssue]
+    let collectionName: String?
     let showsImageBrowser: Bool
     let exportCoordinator: ImageExportCoordinator
     let editCoordinator: ImageEditCommandCoordinator
@@ -167,12 +169,14 @@ struct ViewerView: View {
     @State private var showImageBrowser: Bool
     @State private var isDropTarget = false
     @State private var showStackWorkflow = false
-    @AppStorage private var browserGrouping: ImageBrowserGrouping
+    @AppStorage private var preferredBrowserGrouping: ImageBrowserGrouping
+    @State private var browserGrouping: ImageBrowserGrouping
 
     init(
         urls: [URL],
         directories: [URL] = [],
         scanIssues: [ImageCollection.ScanIssue] = [],
+        collectionName: String? = nil,
         initialIndex: Int = 0,
         showsImageBrowser: Bool = false,
         exportCoordinator: ImageExportCoordinator,
@@ -184,10 +188,15 @@ struct ViewerView: View {
     ) {
         self.urls = urls
         self.scanIssues = scanIssues
+        self.collectionName = collectionName
         let collection = ImageBrowserCollection(urls: urls, directories: directories)
         browserCollection = collection
         let grouping = AppStorage(wrappedValue: ImageBrowserGrouping.path, "imageBrowserGrouping")
-        _browserGrouping = grouping
+        _preferredBrowserGrouping = grouping
+        // Lists can span unrelated folders. Always expose those source folders on import,
+        // even when a previous collection was grouped by filter, format, or not at all.
+        let initialGrouping: ImageBrowserGrouping = collectionName == nil ? grouping.wrappedValue : .path
+        _browserGrouping = State(initialValue: initialGrouping)
         self.showsImageBrowser = showsImageBrowser
         self.exportCoordinator = exportCoordinator
         self.editCoordinator = editCoordinator
@@ -195,11 +204,12 @@ struct ViewerView: View {
         self.onSelectionChange = onSelectionChange
         self.onDropURLs = onDropURLs
         self.onStackComplete = onStackComplete
-        let order = collection.groups(for: showsImageBrowser ? grouping.wrappedValue : .none)
+        let order = collection.groups(for: showsImageBrowser ? initialGrouping : .none)
             .flatMap(\.imageIndices)
         let selectedIndex = order[min(max(initialIndex, 0), max(order.count - 1, 0))]
+        initialImageURL = urls[selectedIndex]
         _selectedIndex = State(initialValue: selectedIndex)
-        _model = State(initialValue: ImageDocumentModel(url: urls[selectedIndex]))
+        _model = State(initialValue: ImageDocumentModel(url: initialImageURL))
         _showImageBrowser = State(initialValue: showsImageBrowser)
     }
 
@@ -211,6 +221,7 @@ struct ViewerView: View {
                 ImageBrowserDrawer(
                     collection: browserCollection,
                     scanIssues: scanIssues,
+                    collectionName: collectionName,
                     grouping: $browserGrouping,
                     selectedIndex: $selectedIndex,
                     select: select
@@ -247,6 +258,9 @@ struct ViewerView: View {
         } isTargeted: { isDropTarget = $0 }
         .onAppear {
             onSelectionChange(currentURL)
+        }
+        .onChange(of: browserGrouping) { _, grouping in
+            preferredBrowserGrouping = grouping
         }
         .toolbar {
             if showsImageBrowser {
@@ -329,6 +343,7 @@ struct ViewerView: View {
 private struct ImageBrowserDrawer: View {
     let collection: ImageBrowserCollection
     let scanIssues: [ImageCollection.ScanIssue]
+    let collectionName: String?
     @Binding var grouping: ImageBrowserGrouping
     @Binding var selectedIndex: Int
     let select: (Int) -> Void
@@ -348,6 +363,16 @@ private struct ImageBrowserDrawer: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
+
+            if let collectionName {
+                Text(collectionName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+            }
 
             Picker("Group by", selection: $grouping) {
                 ForEach(ImageBrowserGrouping.allCases) { option in
@@ -374,12 +399,12 @@ private struct ImageBrowserDrawer: View {
                 .foregroundStyle(.orange)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 10)
-                .help("Some files or folders could not be read. Show details.")
+                .help("Some entries were missing, invalid, unsupported, or unreadable. Show details.")
                 .popover(isPresented: $showsScanIssues, arrowEdge: .leading) {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Skipped Files and Folders")
                             .font(.headline)
-                        Text("These items could not be read. Other images are still available.")
+                        Text("These entries were missing, invalid, unsupported, or unreadable. Other images are still available.")
                             .font(.callout)
                         ScrollView {
                             VStack(alignment: .leading, spacing: 12) {
@@ -387,6 +412,11 @@ private struct ImageBrowserDrawer: View {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(issue.url.path)
                                             .font(.caption.weight(.semibold))
+                                        if let line = issue.line {
+                                            Text("\(issue.list?.lastPathComponent ?? "List"), line \(line)")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
                                         Text(issue.message)
                                             .font(.caption)
                                             .foregroundStyle(.secondary)

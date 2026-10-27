@@ -155,6 +155,32 @@ Open a FITS, XISF, JPEG, PNG, or TIFF image, or a directory of mixed formats.
 Directory browsing includes nested subfolders, with collapsible groups by
 folder path, file type, or filename filter. Repeated filenames show their
 parent paths, and unreadable locations have details in the browser.
+Choose **File → Open Image List…** (⇧⌘O), use the welcome window's image-list
+button, or drop a `.txt` or `.csv` list to browse images from several folders as
+one collection. TXT accepts one path per line with optional surrounding quotes.
+CSV accepts `path`, `filepath`, `file_path`, `file`, or `filename` column headers
+(ignoring case and surrounding whitespace); headerless CSV uses the first column.
+Quoted commas, escaped quotes, and PixInsight SubframeSelector settings before
+the header are supported. Every listed image is included regardless of its
+Approved flag. Absolute paths are accepted; relative paths resolve beside the
+list file. For example:
+
+```csv
+path,rating
+/Users/me/Astro/night1/light001.fits,5
+"../night2/light,002.xisf",4
+```
+
+Duplicate images appear once. The browser reports missing, invalid, unsupported,
+or unreadable entries with their list line numbers. Malformed CSV produces an
+error without opening a partial collection. Lists open grouped by each image's
+source folder, including folders with the same name under different parents.
+Choose **Group by → None** to review in list order. When macOS requires access to
+referenced images, choose their folders or a shared parent in the **Allow Access**
+panel; cancel to skip images
+that remain unreadable. This opens only the listed images, without scanning the
+authorized folders. Lists inside a browsed folder are not imported automatically.
+
 Drop a new file onto a viewer to replace its image. Move through hundreds of
 frames with the arrow keys and thumbnail drawer; local caching and nearby-image
 preloading keep review responsive, including on network folders.
@@ -197,13 +223,20 @@ channel’s own normalization. Calibrate with existing masters or build and
 cache matched masters from raw calibration frames. Track progress and SNR,
 cancel a run, and open the saved results.
 
-### Select and stack mosaic panels
+### Stack a mosaic from selected lights
 
-Turn on **Group mosaic panels by solved coordinates** in the Stack dialog,
-solve selected lights, then select whole panels or individual exposures.
-Disconnected fields and filters produce separate outputs. Choose **Expanded
-mosaic** to retain panel edges, with a memory ceiling and native planning/lens
-notes. See the [mosaic and GPU guide](docs/MOSAIC-STACKING.md).
+Open images, folders, or a TXT/CSV image list, choose **Stack Images**, then select
+**Stacking mode → Expanded mosaic** at the top of the dialog. The selected lights
+are registered onto one expanding canvas per output, retaining overlapping panel
+edges. This works without sky-panel analysis or pre-solving catalogs and has no
+512-light selection cap. Set a canvas memory ceiling and review native planning
+notes in the result.
+
+**Optional sky-panel analysis → Group lights by solved sky position** lets you
+solve and review whole panels or individual exposures before stacking, and split
+disconnected fields into separate outputs. Filter splitting remains independent.
+See the [mosaic and GPU guide](docs/MOSAIC-STACKING.md) for calibration scope,
+canvas limits, and the time and memory costs of large panel analyses.
 
 In **Settings → Stacking performance**, **Use GPU for stacking** defaults to
 automatic GPU use with CPU fallback. Turning it off keeps new stacks on the CPU;

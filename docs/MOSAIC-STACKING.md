@@ -4,12 +4,30 @@ The Mac workflow ports [seiza-win PR #70](https://github.com/theatrus/seiza-win/
 and PR #73 using published Seiza/C ABI 0.44.2 and stacking 0.51.2. It does not change the app
 version or publish a release.
 
-## Select panels by sky coordinates
+## Stack selected lights on an expanding canvas
 
-1. Open a directory and choose **Stack**.
-2. Turn on **Group mosaic panels by solved coordinates**. Select 2–512 lights
-   and click **Solve and group selected lights**. Install the standard solving
-   catalogs in Settings first.
+1. Open images, a directory, or a TXT/CSV image list and choose **Stack Images**.
+2. At the top of the dialog, choose **Stacking mode → Expanded mosaic**.
+3. Select the lights to include, review filter splitting, calibration, and the
+   canvas memory ceiling, then choose **Choose Output and Stack…**.
+
+Each output registers its selected lights onto one expanding canvas. Inputs can
+come from different folders; overlapping panels can connect through other panels.
+No sky-panel analysis or pre-solving catalogs are required for this workflow.
+Native star registration decides which lights join, and disconnected images may
+be rejected. Optional filter splitting creates a separate canvas for each filter.
+There is no 512-light selection cap; canvas size and available resources still
+bound what can be processed.
+
+## Optional sky-panel analysis
+
+This is a selection aid for reviewing pointings and separating disconnected sky
+fields before stacking. It is independent of the chosen stacking mode.
+
+1. Expand **Optional sky-panel analysis** and turn on **Group lights by solved
+   sky position**.
+2. Select at least two lights and click **Solve and group selected lights**.
+   Install the standard solving catalogs in Settings first.
 3. Under **Select panels to include**, select whole panels or expand them to
    select individual exposures. The first sky field is selected initially;
    other fields are available but unchecked. Calibration frames, masters,
@@ -24,6 +42,9 @@ To analyze previously excluded or unselected files, turn automatic grouping off,
 select the files, turn it back on and solve again. A cancelled analysis keeps
 its prior result and selection. Cancellation waits for the current solve to
 return; footprint comparison checks cancellation between batches.
+Larger selections use smaller row batches to keep cancellation responsive.
+The full footprint matrix and pair comparisons grow quadratically with the number
+of successfully solved lights, so large selections need more time and memory.
 
 The app compares footprints through the published native TAN/SIP transforms,
 including rotation, RA wrap and polar fields. At least 85% mutual footprint
@@ -39,6 +60,11 @@ lights can be integrated. Sources are checked for size, modification time and
 file identity before using solved selections; solve again if a source changes.
 Outputs cannot replace any original input, including unselected or excluded
 files, calibration masters or a shared alignment image.
+
+Automatic calibration prepares one compatible set per output, checked against
+that output's eligible raw lights. It does not assign different calibration sets
+to individual panels or source folders. Lights requiring different flat sessions
+must be calibrated separately before they are combined into one mosaic output.
 
 ## Choose canvas and memory
 

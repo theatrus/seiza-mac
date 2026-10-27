@@ -12,6 +12,9 @@ struct SeizaApp: App {
                 openPanel: {
                     appDelegate.openDocument(nil)
                 },
+                openImageList: {
+                    appDelegate.openImageList(nil)
+                },
                 openURLs: { urls in
                     appDelegate.open(urls)
                 }
@@ -46,6 +49,11 @@ struct SeizaApp: App {
                     appDelegate.openDocument(nil)
                 }
                 .keyboardShortcut("o")
+
+                Button("Open Image List…") {
+                    appDelegate.openImageList(nil)
+                }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
 
                 Divider()
 
@@ -95,13 +103,21 @@ struct SeizaApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
     let updateController = UpdateController()
     private let collectionScanner: @Sendable ([URL]) async throws -> ImageCollection.Scan
+    private let collectionAccessRequester: (([URL], NSWindow) async -> [URL])?
+    private let collectionErrorPresenter: ((Error) -> Void)?
 
     override convenience init() {
         self.init(collectionScanner: { try await ImageCollection.scanInBackground(from: $0) })
     }
 
-    init(collectionScanner: @escaping @Sendable ([URL]) async throws -> ImageCollection.Scan) {
+    init(
+        collectionScanner: @escaping @Sendable ([URL]) async throws -> ImageCollection.Scan,
+        collectionAccessRequester: (([URL], NSWindow) async -> [URL])? = nil,
+        collectionErrorPresenter: ((Error) -> Void)? = nil
+    ) {
         self.collectionScanner = collectionScanner
+        self.collectionAccessRequester = collectionAccessRequester
+        self.collectionErrorPresenter = collectionErrorPresenter
         super.init()
     }
 
@@ -114,6 +130,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         private var accessedURLs: [URL] = []
 
         init(accessURLs: [URL]) {
+            access(accessURLs)
+        }
+
+        func access(_ accessURLs: [URL]) {
             for url in accessURLs where url.startAccessingSecurityScopedResource() {
                 accessedURLs.append(url)
             }
@@ -160,12 +180,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     @objc func openDocument(_ sender: Any?) {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = UTType.seizaSupportedImages + [.folder]
+        panel.allowedContentTypes = UTType.seizaSupportedImages + [.folder, .plainText, .commaSeparatedText]
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
-        panel.title = "Open Images or Folder"
-        panel.message = "Open Images or Folder"
+        panel.title = "Open Images, Folder, or Image List"
+        panel.message = "Choose images, folders, or TXT/CSV image lists."
+        guard panel.runModal() == .OK else { return }
+        open(panel.urls)
+    }
+
+    @objc func openImageList(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.plainText, .commaSeparatedText]
+        panel.title = "Open Image List"
+        panel.message = "Choose a TXT or CSV file containing image paths."
         guard panel.runModal() == .OK else { return }
         open(panel.urls)
     }
@@ -332,16 +361,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
         guard directImages == nil else { return }
         let roots = request.roots
-        let scanner = collectionScanner
         session.collectionTask = Task { [weak self, weak session, weak window] in
+            guard let self, let session, let window else { return }
             let scan: ImageCollection.Scan
             do {
-                scan = try await scanner(roots)
-            } catch { return }
+                scan = try await self.scanCollection(from: roots, accessSession: session, in: window)
+            } catch {
+                guard !Task.isCancelled, self.documentWindows[windowKey] === session else { return }
+                session.collectionTask = nil
+                window.close()
+                self.presentCollectionError(error)
+                return
+            }
             guard !Task.isCancelled,
-                  let self,
-                  let session,
-                  let window,
                   self.documentWindows[windowKey] === session else { return }
             session.collectionTask = nil
             guard !scan.images.isEmpty else {
@@ -351,9 +383,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             }
             self.installViewer(
                 imageURLs: scan.images,
-                openedDirectory: scan.includesDirectory,
+                openedDirectory: scan.includesDirectory || scan.includesList,
                 directories: scan.directories,
                 scanIssues: scan.issues,
+                collectionName: scan.includesList ? roots.first?.lastPathComponent : nil,
                 exportCoordinator: session.exportCoordinator,
                 editCoordinator: session.editCoordinator,
                 processingClipboardCoordinator: session.processingClipboardCoordinator,
@@ -407,17 +440,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         let roots = request.roots
         let currentKey = current.key
         let currentSession = current.value
-        let scanner = collectionScanner
         currentSession.collectionTask?.cancel()
         currentSession.collectionTask = Task { [weak self, weak window, weak currentSession] in
+            guard let self, let window, let currentSession else { return }
             let scan: ImageCollection.Scan
             do {
-                scan = try await scanner(roots)
-            } catch { return }
+                scan = try await self.scanCollection(from: roots, accessSession: replacement, in: window)
+            } catch {
+                guard !Task.isCancelled, self.documentWindows[currentKey] === currentSession else { return }
+                currentSession.collectionTask = nil
+                window.contentViewController = previousController
+                window.title = previousTitle
+                self.presentCollectionError(error)
+                return
+            }
             guard !Task.isCancelled,
-                  let self,
-                  let window,
-                  let currentSession,
                   self.documentWindows[currentKey] === currentSession else { return }
             currentSession.collectionTask = nil
             guard !scan.images.isEmpty else {
@@ -432,9 +469,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 session: replacement,
                 controller: controller,
                 imageURLs: scan.images,
-                openedDirectory: scan.includesDirectory,
+                openedDirectory: scan.includesDirectory || scan.includesList,
                 directories: scan.directories,
                 scanIssues: scan.issues,
+                collectionName: scan.includesList ? roots.first?.lastPathComponent : nil,
                 window: window
             )
         }
@@ -444,11 +482,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         documentWindows[root.standardizedFileURL]?.controller?.window
     }
 
+    private func scanCollection(
+        from roots: [URL], accessSession: DocumentWindowSession, in window: NSWindow
+    ) async throws -> ImageCollection.Scan {
+        let scan = try await collectionScanner(roots)
+        try Task.checkCancellation()
+        let denied = scan.issues.filter(\.needsAccess).map(\.url)
+        guard !denied.isEmpty else { return scan }
+        let folders: [URL]
+        if let collectionAccessRequester {
+            folders = await collectionAccessRequester(denied, window)
+        } else {
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = false
+            panel.canChooseDirectories = true
+            panel.allowsMultipleSelection = true
+            panel.directoryURL = denied.first?.deletingLastPathComponent()
+            panel.title = "Allow Access to Listed Images"
+            panel.message = "Choose the folders containing the listed images, or a shared parent folder. Cancel to skip images Seiza cannot read."
+            panel.prompt = "Allow Access"
+            let response = await withTaskCancellationHandler {
+                await panel.beginSheetModal(for: window)
+            } onCancel: {
+                Task { @MainActor in panel.cancel(nil) }
+            }
+            folders = response == .OK ? panel.urls : []
+        }
+        try Task.checkCancellation()
+        guard !folders.isEmpty else { return scan }
+        accessSession.access(folders)
+        return try await collectionScanner(roots)
+    }
+
+    private func presentCollectionError(_ error: Error) {
+        if let collectionErrorPresenter { collectionErrorPresenter(error); return }
+        let alert = NSAlert()
+        alert.messageText = "Could Not Open Image Collection"
+        alert.informativeText = error.localizedDescription
+        alert.alertStyle = .warning
+        alert.runModal()
+    }
+
     private func installViewer(
         imageURLs: [URL],
         openedDirectory: Bool,
         directories: [URL] = [],
         scanIssues: [ImageCollection.ScanIssue] = [],
+        collectionName: String? = nil,
         exportCoordinator: ImageExportCoordinator,
         editCoordinator: ImageEditCommandCoordinator,
         processingClipboardCoordinator: ImageProcessingClipboardCoordinator,
@@ -458,6 +538,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             urls: imageURLs,
             directories: directories,
             scanIssues: scanIssues,
+            collectionName: collectionName,
             showsImageBrowser: openedDirectory,
             exportCoordinator: exportCoordinator,
             editCoordinator: editCoordinator,
@@ -493,7 +574,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         } else {
             window.contentViewController = NSHostingController(rootView: view)
         }
-        window.title = imageURLs[0].lastPathComponent
+        window.title = view.initialImageURL.lastPathComponent
     }
 
     private func installCollectionLoadingView(for roots: [URL], in window: NSWindow) {
@@ -513,6 +594,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         openedDirectory: Bool,
         directories: [URL] = [],
         scanIssues: [ImageCollection.ScanIssue] = [],
+        collectionName: String? = nil,
         window: NSWindow
     ) {
         documentWindows[currentKey]?.collectionTask?.cancel()
@@ -524,6 +606,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             openedDirectory: openedDirectory,
             directories: directories,
             scanIssues: scanIssues,
+            collectionName: collectionName,
             exportCoordinator: session.exportCoordinator,
             editCoordinator: session.editCoordinator,
             processingClipboardCoordinator: session.processingClipboardCoordinator,
@@ -707,7 +790,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private func presentNoSupportedImagesAlert(issues: [ImageCollection.ScanIssue] = []) {
         let alert = NSAlert()
         alert.messageText = "No Supported Images Found"
-        alert.informativeText = "Choose a folder containing FITS, XISF, JPEG, PNG, or TIFF images."
+        alert.informativeText = "Choose images, a folder, or a TXT/CSV list containing existing FITS, XISF, JPEG, PNG, or TIFF images."
         if !issues.isEmpty {
             let details = issues.prefix(8).map { "\($0.url.path): \($0.message)" }.joined(separator: "\n\n")
             alert.informativeText += "\n\nSome files or folders could not be read:\n\n" + details

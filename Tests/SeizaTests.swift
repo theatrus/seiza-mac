@@ -2937,6 +2937,45 @@ final class MosaicPanelGroupingTests: XCTestCase {
         XCTAssertEqual(same[0][1], 1, accuracy: 0.01)
     }
 
+    func testPanelAnalysisAbove512LightsReachesCatalogValidation() throws {
+        let catalog = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: catalog, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: catalog) }
+        let urls = (0..<513).map { URL(fileURLWithPath: "/tmp/light\($0).fits") }
+        XCTAssertThrowsError(try SkyPanelService.analyze(urls, catalog: catalog, progress: { _ in })) {
+            XCTAssertTrue($0.localizedDescription.contains("Install solving catalogs"), $0.localizedDescription)
+        }
+    }
+
+    func testFootprintComparisonAndGroupingAbove512KeepEveryLight() throws {
+        let frames = (0..<513).map { frame("frame\($0).fits", ra: $0 < 256 ? 0 : 180) }
+        var batches = 0
+        let matrix = try SkyPanelService.overlapMatrix(frames) { _ in batches += 1 }
+        XCTAssertGreaterThan(batches, 1)
+        XCTAssertEqual(matrix.count, 513)
+        XCTAssertTrue(matrix.allSatisfy { $0.count == 513 })
+        XCTAssertEqual(matrix[0][255], 1, accuracy: 1e-6)
+        XCTAssertEqual(matrix[0][512], 0)
+        XCTAssertEqual(matrix[512][256], 1, accuracy: 1e-6)
+        let fields = try SkyPanelGrouping.group(frames, overlaps: matrix)
+        XCTAssertEqual(fields.count, 2)
+        XCTAssertEqual(fields.map { $0.panels.flatMap(\.frames).count }.sorted(), [256, 257])
+        XCTAssertEqual(Set(fields.flatMap(\.panels).flatMap(\.frames).map(\.url)), Set(frames.map(\.url)))
+    }
+
+    func testLargeFootprintComparisonHonorsCancellationBetweenBatches() async throws {
+        let frames = (0..<513).map { frame("frame\($0).fits") }
+        let task = Task {
+            try SkyPanelService.overlapMatrix(frames) { _ in
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+        }
+        do {
+            _ = try await task.value
+            XCTFail("A canceled footprint comparison must not publish a matrix")
+        } catch is CancellationError {}
+    }
+
     func testSymlinkSelectionsTrackTargetChangesAndRetargeting() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
