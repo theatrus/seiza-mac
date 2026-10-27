@@ -74,6 +74,12 @@ same pinned core. See the pull request for the completed check results.
 
 ## Flat quality review
 
+The proposed [calibration workspace in stacking setup](STACKING-CALIBRATION.md)
+extends this foundation to PSF Guard-style frame grades, measured flat groups,
+per-light matching and multiple calibration sessions on one fixed or expanded
+canvas. That feature is planned; the current output-level calibration remains
+the behavior described in the existing guides.
+
 Both directory and live stacking offer **Review flat quality** when building
 masters from calibration frames. It measures the selected raw flats and shows
 native frame/master verdicts before any light is processed. See

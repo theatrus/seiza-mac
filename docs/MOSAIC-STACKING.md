@@ -65,6 +65,9 @@ Automatic calibration prepares one compatible set per output, checked against
 that output's eligible raw lights. It does not assign different calibration sets
 to individual panels or source folders. Lights requiring different flat sessions
 must be calibrated separately before they are combined into one mosaic output.
+The proposed [stacking calibration workspace](STACKING-CALIBRATION.md) replaces
+this restriction with per-light session assignments and automatic master generation
+on one shared canvas; it is not implemented yet.
 
 ## Choose canvas and memory
 
