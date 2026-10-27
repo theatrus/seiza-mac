@@ -223,13 +223,20 @@ channel’s own normalization. Calibrate with existing masters or build and
 cache matched masters from raw calibration frames. Track progress and SNR,
 cancel a run, and open the saved results.
 
-### Select and stack mosaic panels
+### Stack a mosaic from selected lights
 
-Turn on **Group mosaic panels by solved coordinates** in the Stack dialog,
-solve selected lights, then select whole panels or individual exposures.
-Disconnected fields and filters produce separate outputs. Choose **Expanded
-mosaic** to retain panel edges, with a memory ceiling and native planning/lens
-notes. See the [mosaic and GPU guide](docs/MOSAIC-STACKING.md).
+Open images, folders, or a TXT/CSV image list, choose **Stack Images**, then select
+**Stacking mode → Expanded mosaic** at the top of the dialog. The selected lights
+are registered onto one expanding canvas per output, retaining overlapping panel
+edges. This works without sky-panel analysis or pre-solving catalogs and has no
+512-light selection cap. Set a canvas memory ceiling and review native planning
+notes in the result.
+
+**Optional sky-panel analysis → Group lights by solved sky position** lets you
+solve and review whole panels or individual exposures before stacking, and split
+disconnected fields into separate outputs. Filter splitting remains independent.
+See the [mosaic and GPU guide](docs/MOSAIC-STACKING.md) for calibration scope,
+canvas limits, and the time and memory costs of large panel analyses.
 
 In **Settings → Stacking performance**, **Use GPU for stacking** defaults to
 automatic GPU use with CPU fallback. Turning it off keeps new stacks on the CPU;

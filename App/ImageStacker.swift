@@ -1532,10 +1532,6 @@ struct ImageStackWorkflowView: View {
                 // Commit analysis and selection together; cancellation leaves the prior analysis intact.
                 panelAnalysis = analysis
                 selectedURLs = Set(analysis.fields.first?.panels.flatMap(\.frames).map(\.url) ?? [])
-                if options.canvasMode != .expanded {
-                    options.canvasMode = .expanded
-                    if !overlapWasEdited { options.minimumOverlap = 0.05 }
-                }
                 preparationNotice = "Found \(analysis.fields.count) sky fields; \(analysis.failures.count) excluded. Review the selected panels before stacking."
             } catch is CancellationError { preparationNotice = "Panel analysis was cancelled." }
             catch { preparationNotice = error.localizedDescription }
@@ -1577,16 +1573,22 @@ struct ImageStackWorkflowView: View {
             Divider()
 
             Form {
-                Section("Mosaic panels") {
-                    Toggle("Group mosaic panels by solved coordinates", isOn: $groupsPanelsAutomatically)
-                    Text("Solve 2–512 selected lights, review panels and exposures, then stack. Unrelated fields and filters produce separate outputs. Installed solving catalogs are required.")
+                Section("Stacking mode") {
+                    Picker("Mode", selection: $options.canvasMode) {
+                        ForEach(StackCanvasMode.allCases) { mode in Text(mode.title).tag(mode) }
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: options.canvasMode) { _, mode in
+                        if !overlapWasEdited { options.minimumOverlap = mode == .expanded ? 0.05 : 0.60 }
+                    }
+                    Text(options.canvasMode == .expanded
+                        ? "Register the selected lights onto one expanding canvas per output, including images from different folders. Overlapping panels can connect through other panels. Sky-panel analysis is optional."
+                        : "Align and combine the selected lights within a fixed reference frame. Choose Expanded mosaic to retain the edges of overlapping panels.")
                         .font(.caption).foregroundStyle(.secondary)
-                    if groupsPanelsAutomatically {
-                        Button("Solve and group selected lights", action: analyzePanels)
-                            .disabled(selectedFrames.count < 2 || selectedFrames.count > 512)
-                        if let analysis = panelAnalysis {
-                            panelSelection(analysis)
-                        }
+                    if options.canvasMode == .expanded {
+                        TextField("Maximum canvas (million samples)", value: $options.maximumCanvasMegasamples, format: .number)
+                        Text("Samples are pixels × channels. Peak working memory is approximately 40 bytes per sample (256 million ≈ 10 GB). Native registration decides which lights join. Shared fixed alignment and Bayer drizzle are unavailable.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 Section("Frames") {
@@ -1609,6 +1611,19 @@ struct ImageStackWorkflowView: View {
                             }
                         }
                         .frame(height: 150)
+                    }
+
+                    DisclosureGroup("Optional sky-panel analysis") {
+                        Toggle("Group lights by solved sky position", isOn: $groupsPanelsAutomatically)
+                        Text("Plate-solve selected lights to review repeated pointings and split disconnected fields into separate outputs. Expanded mosaic works without this step. Installed solving catalogs are required for this analysis.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if groupsPanelsAutomatically {
+                            Button("Solve and group selected lights", action: analyzePanels)
+                                .disabled(selectedFrames.count < 2)
+                            if let analysis = panelAnalysis {
+                                panelSelection(analysis)
+                            }
+                        }
                     }
 
                     if hasMultipleDetectedFilters {
@@ -1661,30 +1676,22 @@ struct ImageStackWorkflowView: View {
                                 }
                             }
                             .lineLimit(1)
+                            .disabled(options.canvasMode == .expanded)
                             if referenceImage != nil {
                                 Button("Clear") { referenceImage = nil }
                             }
                         }
                     }
                     Text(referenceImage == nil
-                        ? "Each channel reference sets its stack's grid and normalization. Choose a shared alignment image to put every filter on the same grid."
+                        ? (options.canvasMode == .expanded
+                            ? "Each channel reference anchors its expanding canvas and normalization."
+                            : "Each channel reference sets its stack's grid and normalization. Choose a shared alignment image to put every filter on the same grid.")
                         : "The alignment image supplies bounds and coordinates; each channel light supplies its own brightness and noise scale. The alignment image contributes no pixels unless it is also selected as a light. Use matching mono or color data at the same image scale.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
                 Section("Stack") {
-                    Picker("Canvas", selection: $options.canvasMode) {
-                        ForEach(StackCanvasMode.allCases) { mode in Text(mode.title).tag(mode) }
-                    }
-                    .onChange(of: options.canvasMode) { _, mode in
-                        if !overlapWasEdited { options.minimumOverlap = mode == .expanded ? 0.05 : 0.60 }
-                    }
-                    if options.canvasMode == .expanded {
-                        TextField("Maximum canvas (million samples)", value: $options.maximumCanvasMegasamples, format: .number)
-                        Text("Samples are pixels × channels. Peak working memory is approximately 40 bytes per sample (256 million ≈ 10 GB). Panels may connect through other panels; native registration decides which lights join. Shared fixed alignment and Bayer drizzle are unavailable.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
                     StackProcessingOptionsView(options: $options)
                     Picker("Normalization", selection: $options.normalization) {
                         ForEach(StackNormalizationMode.allCases) { mode in
@@ -1754,8 +1761,8 @@ struct ImageStackWorkflowView: View {
                             )
                         }
                     } else {
-                        Text("Seiza proves one compatible calibration set across "
-                            + "every selected light, builds bias, dark, dark-flat, "
+                        Text("Seiza prepares one compatible calibration set per output "
+                            + "across that output's selected lights, builds bias, dark, dark-flat, "
                             + "and flat masters in dependency order, and caches "
                             + "them for reuse.")
                             .font(.caption)
@@ -1775,8 +1782,9 @@ struct ImageStackWorkflowView: View {
                         FlatQualityControls(options: $flatQualityOptions)
                             .disabled(isPreparingCalibration || coordinator.isRunning)
                         if calibrationLibrary != nil {
-                            Text("Masters will be matched independently for each "
-                                + "filter stack and cached for reuse.")
+                            Text("Masters are matched independently for each output "
+                                + "and cached for reuse. Panels and folders within "
+                                + "one output share the same calibration set.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
