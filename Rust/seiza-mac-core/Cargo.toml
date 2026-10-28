@@ -10,18 +10,18 @@ publish = false
 crate-type = ["staticlib"]
 
 [dependencies]
-seiza-cabi = { git = "https://github.com/theatrus/seiza", rev = "d70c80d26442933d3bbbc30f533bdf7e18ed1673" }
-seiza = { git = "https://github.com/theatrus/seiza", rev = "d70c80d26442933d3bbbc30f533bdf7e18ed1673" }
-seiza-calibration = { git = "https://github.com/theatrus/seiza", rev = "d70c80d26442933d3bbbc30f533bdf7e18ed1673" }
+seiza-cabi = { git = "https://github.com/theatrus/seiza", rev = "366018752b2b0ab2c55c88f33bc606fb1060d4ba" }
+seiza = { git = "https://github.com/theatrus/seiza", rev = "366018752b2b0ab2c55c88f33bc606fb1060d4ba" }
+seiza-calibration = { git = "https://github.com/theatrus/seiza", rev = "366018752b2b0ab2c55c88f33bc606fb1060d4ba" }
 fs2 = "0.4"
 tempfile = "3"
-seiza-download = { git = "https://github.com/theatrus/seiza", rev = "d70c80d26442933d3bbbc30f533bdf7e18ed1673" }
-seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "d70c80d26442933d3bbbc30f533bdf7e18ed1673" }
-seiza-image-io = { git = "https://github.com/theatrus/seiza", rev = "d70c80d26442933d3bbbc30f533bdf7e18ed1673" }
+seiza-download = { git = "https://github.com/theatrus/seiza", rev = "366018752b2b0ab2c55c88f33bc606fb1060d4ba" }
+seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "366018752b2b0ab2c55c88f33bc606fb1060d4ba" }
+seiza-image-io = { git = "https://github.com/theatrus/seiza", rev = "366018752b2b0ab2c55c88f33bc606fb1060d4ba" }
 serde = { version = "1", features = ["derive"] }
-seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "d70c80d26442933d3bbbc30f533bdf7e18ed1673" }
-seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "d70c80d26442933d3bbbc30f533bdf7e18ed1673" }
-seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "d70c80d26442933d3bbbc30f533bdf7e18ed1673" }
+seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "366018752b2b0ab2c55c88f33bc606fb1060d4ba" }
+seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "366018752b2b0ab2c55c88f33bc606fb1060d4ba" }
+seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "366018752b2b0ab2c55c88f33bc606fb1060d4ba" }
 sha2 = "0.11"
 serde_json = "1"
 tokio = { version = "1", features = ["rt"] }

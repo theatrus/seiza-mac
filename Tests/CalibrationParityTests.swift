@@ -426,6 +426,93 @@ final class GradedCalibrationWorkflowTests: XCTestCase {
                 options: options, calibration: .init(), libraryPlan: plan), cancellation: .init()) { _ in })
         }
     }
+
+    func testCorrectedFlatReachesFixedAndExpandedStackingAndReplay() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let library = root.appendingPathComponent("library")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let width = 240, height = 160
+        let sky = SyntheticFrame.noisyStarField(width: width, height: height)
+        func response(_ i: Int, angle: Int, dust: Bool) -> Double {
+            let x = Double(i % width), y = Double(i / width)
+            var v = 1 - 0.3 * (pow(x - 120, 2) + pow(y - 80, 2)) / (120 * 120 + 80 * 80)
+            if angle == 90 { v *= 1 - 0.04 * min(1, max(0, (14 - hypot(x - 170, y - 40)) / 2)) }
+            if dust { v *= 1 - 0.03 * min(1, max(0, (14 - hypot(x - 60, y - 90)) / 2)) }
+            return v
+        }
+        func write(_ kind: String, filter: String, angle: Int, day: Int, dust: Bool, name: String) throws -> URL {
+            let values: [Int16] = (0..<(width * height)).map { i in
+                let value: Double
+                if kind == "BIAS" { value = 500 + Double(i % 7 - 3) }
+                else if kind == "FLAT" { value = 500 + 20000 * response(i, angle: angle, dust: dust) + Double(i % 7 - 3) }
+                else { value = 500 + Double(sky[i]) * response(i, angle: angle, dust: dust) }
+                return Int16(value.rounded() - 32768)
+            }
+            return try SyntheticFrame.write(width: width, height: height, values: values,
+                cards: SyntheticFrame.lightCards(filter: filter).filter { !$0.hasPrefix("IMAGETYP") }
+                    + ["IMAGETYP= '\(kind)'", "ROTATANG= \(angle)", "DATE-OBS= '2026-10-\(day)T20:00:00Z'", "OBJECT  = 'M42'"],
+                directory: kind == "LIGHT" ? root : library, name: name)
+        }
+        for i in 0..<3 { _ = try write("BIAS", filter: "Ha", angle: 0, day: 20, dust: false, name: "bias-\(i).fits") }
+        for (set, entry) in [("Ha", 0, 20, false), ("OIII", 0, 20, false), ("Ha", 0, 26, true), ("OIII", 0, 26, true), ("Ha", 90, 26, true)].enumerated() {
+            for i in 0..<3 { _ = try write("FLAT", filter: entry.0, angle: entry.1, day: entry.2, dust: entry.3, name: "flat-\(set)-\(i).fits") }
+        }
+        let lights = try (0..<3).map { try write("LIGHT", filter: "Ha", angle: 90, day: 19, dust: false, name: "light-\($0).fits") }
+        var request = LibraryRequest(operation: "analyze", library: library, lights: lights, preferences: .init())
+        request.cache = root.appendingPathComponent("cache").path
+        let review = try await CalibrationLibraryService.perform(request)
+        XCTAssertEqual(review.flatWork["corrections"].array.count, 1)
+        XCTAssertEqual(review.missing, [false, false, false])
+        request.operation = "execute"; request.reviewKey = review.reviewKey
+        let built = try await CalibrationLibraryService.perform(request)
+        XCTAssertTrue(try XCTUnwrap(built.fileSessions.first?.flat).contains("corrected-flat-"))
+        let plan = LibraryPreparedPlan(review: built, originalPaths: lights.map(\.path))
+        for expanded in [false, true] {
+            var options = ImageStackOptions()
+            options.useGPU = false; options.normalization = .none; options.rejection = .none
+            options.canvasMode = expanded ? .expanded : .fixed
+            options.minimumOverlap = 0.05; options.maximumCanvasMegasamples = 1
+            options.removesTransients = true
+            let output = root.appendingPathComponent("corrected-stack-\(expanded).fits")
+            let result = try ImageStackEngine.stack(request: .init(inputs: lights, output: output,
+                options: options, calibration: .init(), libraryPlan: plan), cancellation: .init()) { _ in }
+            XCTAssertEqual(result.acceptedFrames, 3)
+            XCTAssertEqual(result.rejectedFrames, 0)
+            XCTAssertNil(result.transientNote)
+            XCTAssertEqual(try CalibrationService.measureDark(.init(path: output.path)).level, 90, accuracy: 15)
+        }
+    }
+    @MainActor func testManualFlatChoicesPersistScopeAndClearThroughRequest() throws {
+        let model = CalibrationLibraryModel()
+        let saved = model.preferences
+        defer { model.preferences = saved }
+        model.preferences = .init()
+        let options: LibraryJSON = .object(["path": .string("/first/light.fits"), "fingerprint": .string("source-v1"), "guid": .string("guid"), "rig_uuid": .string("rig")])
+        let change: LibraryJSON = .object(["key": .string("change"), "start": .number(10), "end": .number(20)])
+        let group: LibraryJSON = .object(["frame": .string("flat"), "session_key": .string("session"), "label": .string("Ha group")])
+        let edge: LibraryJSON = .object(["row": .object(["anchor_frame": .string("flat"), "session_key": .string("session"), "family_key": .string("family")])])
+        model.stale = false
+        model.chooseLight(options, change: change, side: "before")
+        XCTAssertTrue(model.stale)
+        model.chooseLight(options, group: group)
+        model.chooseGroupEdge(edge, choice: "split")
+        XCTAssertEqual(model.preferences.lightChoices.count, 2)
+        let restored = try JSONDecoder().decode(LibraryPreferences.self, from: JSONEncoder().encode(model.preferences))
+        XCTAssertEqual(restored, model.preferences)
+        let request = LibraryRequest(operation: "analyze", preferences: restored)
+        let wire = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as! [String: Any]
+        let choices = try XCTUnwrap(wire["lightChoices"] as? [[String: Any]])
+        XCTAssertEqual(choices.first?["fingerprint"] as? String, "source-v1")
+        XCTAssertEqual((choices.first?["row"] as? [String: Any])?["choice"] as? String, "before")
+        XCTAssertEqual((wire["groupOverrides"] as? [[String: Any]])?.first?["choice"] as? String, "split")
+        model.chooseGroupEdge(edge, choice: nil)
+        model.chooseLight(options, change: change)
+        XCTAssertEqual(model.preferences.lightChoices.count, 1)
+        model.clearLightChoices(options)
+        XCTAssertTrue(model.preferences.lightChoices.isEmpty)
+        XCTAssertTrue(model.preferences.groupOverrides.isEmpty)
+    }
     func testLegacyPreferencesRetainSettingsAndDefaultBothAssociationModes() throws {
         let old = Data(#"{"settings":{"rotation_tolerance_deg":12},"incomplete":"keep","flatStarMasking":true}"#.utf8)
         let restored = try JSONDecoder().decode(LibraryPreferences.self, from: old)
@@ -434,6 +521,8 @@ final class GradedCalibrationWorkflowTests: XCTestCase {
         XCTAssertEqual(restored.settings["rotation_tolerance_deg"], .number(12))
         XCTAssertEqual(restored.incomplete, "keep")
         XCTAssertTrue(restored.flatStarMasking)
+        XCTAssertTrue(restored.groupOverrides.isEmpty)
+        XCTAssertTrue(restored.lightChoices.isEmpty)
         var changed = restored
         changed.flatAssociation = .oneSet
         let request = LibraryRequest(operation: "analyze", provided: [URL(fileURLWithPath: "/flat.fits")], preferences: changed)

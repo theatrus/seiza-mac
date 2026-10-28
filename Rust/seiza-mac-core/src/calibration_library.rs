@@ -30,6 +30,8 @@ struct Request {
     flat_association: policy::Association,
     dark_association: policy::Association,
     provided: Vec<PathBuf>,
+    group_overrides: Vec<seiza_calibration::flat_response::groups::GroupOverrideRow>,
+    light_choices: Vec<LightChoice>,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -45,6 +47,13 @@ struct Source {
     fingerprint: String,
 }
 #[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LightChoice {
+    path: PathBuf,
+    fingerprint: String,
+    row: seiza_calibration::flat_response::groups::LightChoiceRow,
+}
+#[derive(Clone, Deserialize, Serialize)]
 struct Cached {
     source: Source,
     frame: policy::CalibrationFrame,
@@ -52,6 +61,8 @@ struct Cached {
     quality: policy::QualityRecord,
     processed: PathBuf,
     processed_source: Source,
+    #[serde(default)]
+    target: Option<String>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,6 +85,8 @@ struct Report {
     rigs: Vec<Value>,
     snapshot: Value,
     grouping: Value,
+    flat_work: Value,
+    light_options: Vec<Value>,
     warnings: Vec<String>,
     missing: Vec<bool>,
     paths: Vec<PathBuf>,
@@ -193,6 +206,18 @@ fn named_mode(frame: &FitsFrame) -> Option<String> {
             })
         })
 }
+fn frame_target(frame: &FitsFrame) -> String {
+    frame
+        .headers
+        .iter()
+        .find_map(|(key, value)| match value {
+            seiza_fits::HeaderValue::String(value) if key.eq_ignore_ascii_case("OBJECT") => {
+                Some(value.trim().to_owned())
+            }
+            _ => None,
+        })
+        .unwrap_or_default()
+}
 fn inspect(path: &Path, cache: &Path, light: bool, cancel: &CancelSignal) -> Result<Cached> {
     check(cancel)?;
     let source = stamp(path)?;
@@ -206,10 +231,16 @@ fn inspect(path: &Path, cache: &Path, light: bool, cancel: &CancelSignal) -> Res
     ));
     let memo = cache.join(format!("{cache_key}.json"));
     if let Ok(bytes) = std::fs::read(&memo)
-        && let Ok(row) = serde_json::from_slice::<Cached>(&bytes)
+        && let Ok(mut row) = serde_json::from_slice::<Cached>(&bytes)
         && row.source.fingerprint == source.fingerprint
         && verify(std::slice::from_ref(&row.processed_source)).is_ok()
     {
+        if row.target.is_none() {
+            let input = FitsFrame::open(&row.processed).map_err(error)?;
+            row.target = Some(frame_target(&input));
+            verify(&[row.source.clone(), row.processed_source.clone()])?;
+            atomic_json(&memo, &row)?;
+        }
         return Ok(row);
     }
     let mut input = FitsFrame::open(&source.path).map_err(error)?;
@@ -344,6 +375,7 @@ fn inspect(path: &Path, cache: &Path, light: bool, cancel: &CancelSignal) -> Res
         quality,
         processed,
         processed_source,
+        target: Some(frame_target(&input)),
     };
     atomic_json(&memo, &row)?;
     Ok(row)
@@ -493,9 +525,41 @@ fn run(request: Request, cancel: CancelSignal) -> Result<Value> {
         dark_association: request.dark_association,
         ..Default::default()
     };
-    let (grouping, response_sources, grouping_snapshot) =
-        responses::prepare(&planner, &rows, &cache, &cancel, &mut warnings)?;
-    planner.grouping = grouping;
+    planner.grouping.group_overrides = request.group_overrides.clone();
+    for choice in request
+        .light_choices
+        .iter()
+        .filter(|choice| lights.iter().any(|light| light.source.path == choice.path))
+    {
+        if let Some((index, light)) = lights.iter().enumerate().find(|(_, l)| {
+            l.source.path == choice.path && l.source.fingerprint == choice.fingerprint
+        }) {
+            planner.grouping.light_choices.push(
+                seiza_calibration::flat_response::groups::LightChoiceEntry {
+                    light_id: index as i64,
+                    file_name: light.source.path.to_string_lossy().into_owned(),
+                    filter: light.light.filter.clone(),
+                    at: light.light.timestamp,
+                    row: choice.row.clone(),
+                },
+            );
+        } else {
+            warnings.push(format!(
+                "A saved flat choice no longer matches {}. Choose again for the current source.",
+                choice.path.display()
+            ));
+        }
+    }
+    let mut responses = responses::prepare(&planner, &rows, &cache, &cancel, &mut warnings)?;
+    let work = responses.connect(&mut planner, &lights, &cache, &cancel, &mut warnings)?;
+    let grouping_snapshot = serde_json::to_value(
+        seiza_calibration::flat_response::groups::evaluate(planner.grouping.clone())
+            .map_err(error)?,
+    )
+    .map_err(error)?;
+    let light_options = responses.light_options(&lights)?;
+    let mut flat_work = serde_json::to_value(work).map_err(error)?;
+    flat_work["group_edges"] = serde_json::to_value(responses.group_edges()?).map_err(error)?;
     let snapshot = policy::evaluate(planner.clone()).map_err(error)?;
     let mut sources: Vec<_> = rows
         .iter()
@@ -509,7 +573,7 @@ fn run(request: Request, cancel: CancelSignal) -> Result<Value> {
     {
         sources.push(stamp(&row.processed)?);
     }
-    sources.extend(response_sources);
+    sources.extend(responses.sources.clone());
     verify(&sources)?;
     let review_key = digest(
         serde_json::to_vec(&(
@@ -523,6 +587,9 @@ fn run(request: Request, cancel: CancelSignal) -> Result<Value> {
             request.flat_association,
             request.dark_association,
             &grouping_snapshot,
+            &flat_work,
+            &request.group_overrides,
+            &request.light_choices,
             policy::POLICY_ALGORITHM_VERSION,
             seiza_stacking::OUTPUT_VERSION,
         ))
@@ -630,6 +697,7 @@ fn run(request: Request, cancel: CancelSignal) -> Result<Value> {
                 &context,
                 &by_id,
                 &lights,
+                &responses,
                 &cache,
                 &cancel,
                 &mut warnings,
@@ -669,6 +737,8 @@ fn run(request: Request, cancel: CancelSignal) -> Result<Value> {
             .collect(),
         snapshot: serde_json::to_value(snapshot).map_err(error)?,
         grouping: grouping_snapshot,
+        flat_work,
+        light_options,
         warnings,
         missing,
         paths: lights.iter().map(|l| l.processed.clone()).collect(),
@@ -913,11 +983,13 @@ fn retry_context(
     }
     Ok((request, snapshot.sessions.into_iter().next().unwrap()))
 }
+#[allow(clippy::too_many_arguments)]
 fn execute(
     session: &policy::Session,
     context: &policy::Request,
     rows: &BTreeMap<String, &Cached>,
     lights: &[Cached],
+    responses: &responses::Prepared,
     cache: &Path,
     cancel: &CancelSignal,
     warnings: &mut Vec<String>,
@@ -1041,7 +1113,7 @@ fn execute(
             estimates,
             pinned: None,
         }];
-        effective = policy::evaluate(effective_context)
+        effective = policy::evaluate(effective_context.clone())
             .map_err(error)?
             .sessions
             .into_iter()
@@ -1095,6 +1167,11 @@ fn execute(
     if matches!(effective.application.flat_use, policy::FlatUse::Withheld) {
         outputs.remove(&Kind::Flat);
         warnings.push("Seiza withheld a flat because a consistent pedestal could not be fitted. Supply matching bias/dark calibration.".into());
+    }
+    if let Some(flat) = outputs.get(&Kind::Flat) {
+        let corrected =
+            responses.correct_master(flat, &effective_context, lights, cache, cancel, warnings)?;
+        outputs.insert(Kind::Flat, corrected);
     }
     let path = |kind| outputs.get(&kind).map(|b| b.source.path.clone());
     let dark_exposure_seconds = effective
@@ -1210,6 +1287,369 @@ mod tests {
     }
     fn call(request: Request) -> Value {
         run(request, CancelSignal::new(|| false)).unwrap()
+    }
+
+    fn response_fixture(correction: bool, families: bool) -> (tempfile::TempDir, Request) {
+        use seiza_fits::HeaderValue as H;
+        let (dir, mut request) = fixture();
+        for path in std::fs::read_dir(&request.library).unwrap() {
+            std::fs::remove_file(path.unwrap().path()).unwrap();
+        }
+        request.lights.clear();
+        let write = |path: &Path, kind: &str, filter: &str, angle: f64, day: u8, dust: usize| {
+            let data = response_pixels(dust)
+                .into_iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let noise = ((i * 17 + i / 240 * 13) % 101) as f32 / 100.0 - 0.5;
+                    let v = v * if correction && angle == 90.0 {
+                        1.0 - 0.04
+                            * ((14.0
+                                - (((i % 240) as f32 - 170.0).powi(2)
+                                    + ((i / 240) as f32 - 40.0).powi(2))
+                                .sqrt())
+                                / 2.0)
+                                .clamp(0.0, 1.0)
+                    } else {
+                        1.0
+                    };
+                    match kind {
+                        "BIAS" => 500.0 + noise * 2.0,
+                        "FLAT" => 500.0 + 20000.0 * v + noise * 3.0,
+                        _ => 500.0 + 1000.0 * v + noise * 2.0,
+                    }
+                })
+                .collect::<Vec<_>>();
+            let cards = [
+                ("IMAGETYP", H::String(kind.into())),
+                ("FILTER", H::String(filter.into())),
+                ("ROTATANG", H::Float(angle)),
+                ("INSTRUME", H::String("TestCam".into())),
+                ("GAIN", H::Integer(100)),
+                ("OFFSET", H::Integer(50)),
+                ("XBINNING", H::Integer(1)),
+                ("YBINNING", H::Integer(1)),
+                (
+                    "EXPTIME",
+                    H::Float(if kind == "BIAS" { 0.01 } else { 30.0 }),
+                ),
+                ("DATE-OBS", H::String(format!("2026-10-{day}T20:00:00Z"))),
+                ("OBJECT", H::String("M42".into())),
+            ]
+            .into_iter()
+            .map(|(k, v)| seiza_fits::WriteHeaderCard::new(k, v))
+            .collect::<Vec<_>>();
+            seiza_fits::write_f32_image(
+                path,
+                240,
+                160,
+                seiza_fits::F32ImageData::Mono(&data),
+                &cards,
+            )
+            .unwrap();
+        };
+        for i in 0..3 {
+            write(
+                &request.library.join(format!("bias-{i}.fits")),
+                "BIAS",
+                "Ha",
+                0.0,
+                20,
+                0,
+            );
+        }
+        let sets = if correction {
+            vec![
+                ("Ha", 0.0, 20, 0),
+                ("OIII", 0.0, 20, 0),
+                ("Ha", 0.0, 26, 1),
+                ("OIII", 0.0, 26, 1),
+                ("Ha", 90.0, 26, 1),
+            ]
+        } else if families {
+            vec![("Ha", 86.0, 20, 2), ("Ha", 90.0, 20, 1)]
+        } else {
+            vec![("Ha", 0.0, 20, 0), ("Ha", 0.0, 26, 1)]
+        };
+        for (set, (filter, angle, day, dust)) in sets.into_iter().enumerate() {
+            for i in 0..3 {
+                write(
+                    &request.library.join(format!("flat-{set}-{i}.fits")),
+                    "FLAT",
+                    filter,
+                    angle,
+                    day,
+                    dust,
+                );
+            }
+        }
+        for i in 0..5 {
+            let path = dir.path().join(format!("sky-{i}.fits"));
+            write(
+                &path,
+                "LIGHT",
+                "Ha",
+                if correction {
+                    90.0
+                } else if families {
+                    89.0
+                } else {
+                    0.0
+                },
+                if correction {
+                    19
+                } else if families {
+                    21
+                } else {
+                    23
+                },
+                usize::from(!correction),
+            );
+            request.lights.push(path);
+        }
+        (dir, request)
+    }
+    fn response_pixels(dust: usize) -> Vec<f32> {
+        (0..240 * 160)
+            .map(|i| {
+                let x = (i % 240) as f32;
+                let y = (i / 240) as f32;
+                let mut v = 1.0
+                    - 0.3 * ((x - 120.0).powi(2) + (y - 80.0).powi(2))
+                        / (120.0f32.powi(2) + 80.0f32.powi(2));
+                if dust != 0 {
+                    let (cx, cy) = if dust == 1 {
+                        (60.0, 90.0)
+                    } else {
+                        (170.0, 40.0)
+                    };
+                    let distance = ((x - cx).powi(2) + (y - cy).powi(2)).sqrt();
+                    v *= 1.0 - 0.03 * ((14.0 - distance) / 2.0).clamp(0.0, 1.0);
+                }
+                v
+            })
+            .collect()
+    }
+    #[test]
+    fn light_change_evidence_is_measured_cached_and_used_in_selection() {
+        let (_dir, mut request) = response_fixture(false, false);
+        let review = call(request_from(&request, "analyze", None));
+        assert_eq!(
+            review["flatWork"]["grouping"]["evidence"][0]["verdict"], "after",
+            "{review}"
+        );
+        let evidence = std::fs::read_dir(&request.cache)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name().to_string_lossy().contains("evidence-")
+                    || e.file_name().to_string_lossy().starts_with("light-bin-")
+            })
+            .map(|e| stamp(&e.path()).unwrap())
+            .collect::<Vec<_>>();
+        assert!(!evidence.is_empty());
+        request.operation = "execute".into();
+        request.review_key = review["reviewKey"].as_str().map(str::to_owned);
+        let built = call(request);
+        assert_eq!(built["reviewKey"], review["reviewKey"]);
+        assert_eq!(built["missing"], json!([false, false, false, false, false]));
+        assert_eq!(
+            built["snapshot"]["selections"][0]["flat_held_back"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_eq!(
+            built["snapshot"]["sessions"][0]["recipes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["kind"] == "flat")
+                .unwrap()["inputs"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
+        verify(&evidence).unwrap();
+    }
+    fn request_from(request: &Request, operation: &str, key: Option<String>) -> Request {
+        Request {
+            operation: operation.into(),
+            library: request.library.clone(),
+            cache: request.cache.clone(),
+            lights: request.lights.clone(),
+            settings: request.settings.clone(),
+            review_key: key,
+            incomplete: request.incomplete.clone(),
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn light_family_pixels_select_the_matching_response() {
+        let (_dir, request) = response_fixture(false, true);
+        let review = call(request);
+        assert!(
+            review["flatWork"]["grouping"]["family_evidence"][0]["chosen"].is_string(),
+            "{review}"
+        );
+        assert_eq!(
+            review["snapshot"]["selections"][0]["flat_family"]["by"], "pixels",
+            "{review}"
+        );
+    }
+
+    #[test]
+    fn manual_group_and_path_scoped_side_choices_reach_native_policy() {
+        use seiza_calibration::flat_response::groups as G;
+        let (_dir, mut request) = response_fixture(false, false);
+        // Identical basenames/timestamps are common across acquisition folders.
+        let second = request.cache.parent().unwrap().join("second");
+        std::fs::create_dir(&second).unwrap();
+        let copy = second.join(request.lights[0].file_name().unwrap());
+        std::fs::copy(&request.lights[0], &copy).unwrap();
+        request.lights.push(copy);
+        let review = call(request_from(&request, "analyze", None));
+        let option = &review["lightOptions"][0];
+        let change = &option["changes"][0];
+        let row:G::LightChoiceRow=serde_json::from_value(json!({
+            "light_guid":option["guid"],"change_key":change["key"],"rig_uuid":option["rig_uuid"],
+            "change_start":change["start"],"change_end":change["end"],"choice":"before",
+            "group_frame":null,"group_session_key":null,"label":"Before camera cleaning","chosen_at":1
+        })).unwrap();
+        request.light_choices = vec![LightChoice {
+            path: PathBuf::from(option["path"].as_str().unwrap()),
+            fingerprint: option["fingerprint"].as_str().unwrap().into(),
+            row,
+        }];
+        let picked = call(Request {
+            light_choices: request.light_choices.clone(),
+            ..request_from(&request, "analyze", None)
+        });
+        assert!(
+            !picked["snapshot"]["selections"][0]["flat_choices"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            picked["snapshot"]["selections"][5]["flat_choices"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_ne!(
+            picked["snapshot"]["assignments"][0],
+            picked["snapshot"]["assignments"][5]
+        );
+        let mut stale = request.light_choices.clone();
+        stale[0].fingerprint = "old-source".into();
+        let ignored = call(Request {
+            light_choices: stale,
+            ..request_from(&request, "analyze", None)
+        });
+        assert!(
+            ignored["snapshot"]["selections"][0]["flat_choices"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            ignored["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|w| w.as_str().unwrap().contains("saved flat choice"))
+        );
+        let mut edge: G::GroupOverrideRow =
+            serde_json::from_value(review["flatWork"]["group_edges"][0]["row"].clone()).unwrap();
+        edge.choice = Some(G::GroupChoice::Join);
+        let joined = call(Request {
+            group_overrides: vec![edge],
+            ..request_from(&request, "analyze", None)
+        });
+        assert_eq!(
+            joined["grouping"]["families"][0]["groups"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1,
+            "{}",
+            joined["flatWork"]["overrides"]
+        );
+        assert_eq!(
+            joined["flatWork"]["overrides"][0]["status"]["status"],
+            "applied"
+        );
+    }
+    #[test]
+    fn unavailable_light_background_stays_undetermined() {
+        let (_dir, request) = response_fixture(false, false);
+        for path in &request.lights {
+            let mut frame = FitsFrame::open(path).unwrap();
+            frame.image.data.fill(500.0);
+            seiza_stacking::write_processed_image_fits_f32(path, &frame.image, &frame.headers, &[])
+                .unwrap();
+        }
+        let review = call(request);
+        assert_eq!(
+            review["flatWork"]["grouping"]["evidence"][0]["verdict"],
+            "undecided"
+        );
+        assert_eq!(review["missing"], json!([true, true, true, true, true]));
+    }
+    #[test]
+    fn native_correction_is_applied_to_the_published_flat_and_reused() {
+        let (_dir, request) = response_fixture(true, false);
+        let review = call(request_from(&request, "analyze", None));
+        assert_eq!(
+            review["flatWork"]["corrections"].as_array().unwrap().len(),
+            1,
+            "{review}"
+        );
+        let built = call(request_from(
+            &request,
+            "execute",
+            review["reviewKey"].as_str().map(str::to_owned),
+        ));
+        let flat = PathBuf::from(built["fileSessions"][0]["flat"].as_str().unwrap());
+        assert!(
+            flat.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("corrected-flat-")
+        );
+        let frame = FitsFrame::open(&flat).unwrap();
+        let truth = response_pixels(0)
+            .into_iter()
+            .enumerate()
+            .map(|(i, v)| {
+                v * (1.0
+                    - 0.04
+                        * ((14.0
+                            - (((i % 240) as f32 - 170.0).powi(2)
+                                + ((i / 240) as f32 - 40.0).powi(2))
+                            .sqrt())
+                            / 2.0)
+                            .clamp(0.0, 1.0))
+            })
+            .collect::<Vec<_>>();
+        // The clean before-side response has no dust depression; compare the
+        // dust centre to its symmetric location to cancel radial vignetting.
+        assert!(
+            (frame.image.data[90 * 240 + 60] / frame.image.data[90 * 240 + 180]
+                - truth[90 * 240 + 60] / truth[90 * 240 + 180])
+                .abs()
+                < 0.005
+        );
+        let source = stamp(&flat).unwrap();
+        call(request_from(
+            &request,
+            "execute",
+            review["reviewKey"].as_str().map(str::to_owned),
+        ));
+        verify(&[source]).unwrap();
     }
     #[test]
     fn measured_response_groups_reach_association_and_reuse_cached_pixels() {

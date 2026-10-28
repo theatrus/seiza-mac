@@ -116,37 +116,48 @@ Scoped library/input URL access is retained during analysis, execution and the
 stack, including explicitly provided file grants and after the review sheet closes. Directory symlinks are not
 traversed; duplicate physical inputs are detected.
 
-## Remaining parity work
+## Light evidence, corrections and manual choices
 
-The workflow now supplies measured flat responses, comparisons, families and
-change boundaries to the shared planner. It does not yet supply light-background
-pixel evidence, change correction maps or manual family/split/join choices.
-Ambiguous change placement is flagged as incomplete; a correction is never
-claimed applied without its pixels. Seiza's metadata/time fallback remains
-available when response evidence is unavailable (for example missing capture
-times). Seiza now provides `plan_flat_work` / `finish_flat_work` for these stages,
-including cached metadata contexts, bounded evidence questions, manual choice
-resolution and correction dependencies. PSF Guard can drive them from its own
-records/pixels; this Mac adapter currently executes the raw-response grouping
-stage and flags unresolved light placement. The additional core stages are not
-yet connected to the Mac setup.
+The adapter passes cached target/sensor metadata to Seiza's `plan_flat_work`.
+It reads only the bounded light samples requested by the core, bins them with
+the shared kernels, and submits background/response-choice and change-map fits
+through `finish_flat_work`. Resolved evidence feeds the library planner before
+master recipes are chosen. Change evidence excludes broad vignetting as directed
+by the core; an inconclusive fit stays unknown and follows the incomplete-light
+policy. Responses, light bins and evidence have separate stamped caches.
+
+When the shared planner requires a correction, the executor loads its exact
+before/after response dependencies, computes the full native change map, and
+applies it to the effective flat after stability retries and pedestal handling.
+Only the atomically published corrected master reaches the fixed or expanded
+stacker, including transient-removal replay. A required correction that cannot
+be produced aborts preparation. Corrected masters retain their acquisition and
+calibration metadata and have separate cache identities.
+
+In **Flat groups**, split an edge, join it to the previous group, or restore
+measured grouping. In **Light matches**, choose a measured group or put a light
+before/after an applicable change. Seiza resolves these commands and reports
+applied/orphaned choices. Preferences retain them across runs; personal choices
+are bound to the exact source path and fingerprint, so an identical basename
+in another directory cannot inherit a choice. Changes invalidate the review.
 
 Catalog-specific night/display controls, per-frame validity editing and light
-check/report settings are also not exposed in this setup. The shared APIs support
-more policy than the Mac UI currently supplies. Live acquisition migration and
-cache eviction/management are follow-ups. Full PSF Guard parity still requires
-cross-host fixtures covering these missing inputs and choices.
+check/report settings are not exposed in this setup. Live acquisition migration
+and cache eviction/management remain follow-ups.
 
 ## Validation
 
 [CalibrationParityTests](../Tests/CalibrationParityTests.swift) covers captured
 PSF Guard screening, native session/checkpoint/replay, and the actual desktop
 planner/executor/engine. The desktop tests exercise graded A→B→A assignments on
-both canvases, transient-removal replay, per-rig gates overriding global defaults,
+both canvases, corrected flat publication and transient-removal replay, manual
+choice preference migration/round trips, per-rig gates overriding global defaults,
 master reuse, Keep/Exclude/Stop preparation policy and protected/stale sources.
 
 The [Mac Rust adapter tests](../Rust/seiza-mac-core/src/calibration_library.rs)
-cover poor-grade overrides without relaxed sensor gates, native flat stability
+cover measured family/change light evidence, unknown fits, source-scoped manual
+choices, split/join commands, correction pixels and cache reuse, plus poor-grade
+overrides without relaxed sensor gates, native flat stability
 and trimmed rebuilds, pedestal acceptance, normalized XISF staging, corrupted
 cache recovery, changed settings/sources, aliases and cancellation. The
 [native boundary audit](STACKING-CALIBRATION-BOUNDARY.md) records the original API

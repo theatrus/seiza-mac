@@ -34,6 +34,11 @@ enum LibraryJSON: Codable, Hashable, Sendable {
 }
 struct LibrarySource: Codable, Sendable { let path: String; let fingerprint: String }
 struct LibraryChoice: Codable, Equatable, Sendable { let path: String; let fingerprint: String; let choice: String }
+struct LibraryLightChoice: Codable, Equatable, Sendable {
+    let path: String
+    let fingerprint: String
+    let row: LibraryJSON
+}
 struct LibrarySetting: Codable, Sendable { let key: String; let value: LibraryJSON }
 struct LibraryRigSettings: Encodable, Sendable {
     let rig_uuid: String
@@ -48,6 +53,8 @@ struct LibraryPreferences: Codable, Equatable, Sendable {
     var settings: [String: LibraryJSON] = [:]
     var rigs: [String: [String: LibraryJSON]] = [:]
     var choices: [LibraryChoice] = []
+    var groupOverrides: [LibraryJSON] = []
+    var lightChoices: [LibraryLightChoice] = []
     var incomplete = "stop"
     var flatAssociation = LibraryAssociation.automatic
     var darkAssociation = LibraryAssociation.automatic
@@ -56,7 +63,7 @@ struct LibraryPreferences: Codable, Equatable, Sendable {
         "enabled": .bool(true), "trim_unstable": .bool(true),
         "try_next_session": .bool(true), "retain_unstable": .bool(true)])
     enum CodingKeys: String, CodingKey {
-        case settings, rigs, choices, incomplete, flatStarMasking, flatStability, flatAssociation, darkAssociation
+        case settings, rigs, choices, groupOverrides, lightChoices, incomplete, flatStarMasking, flatStability, flatAssociation, darkAssociation
     }
     init() {}
     init(from decoder: Decoder) throws {
@@ -65,6 +72,8 @@ struct LibraryPreferences: Codable, Equatable, Sendable {
         settings = try c.decodeIfPresent([String: LibraryJSON].self, forKey: .settings) ?? settings
         rigs = try c.decodeIfPresent([String: [String: LibraryJSON]].self, forKey: .rigs) ?? rigs
         choices = try c.decodeIfPresent([LibraryChoice].self, forKey: .choices) ?? choices
+        groupOverrides = try c.decodeIfPresent([LibraryJSON].self, forKey: .groupOverrides) ?? groupOverrides
+        lightChoices = try c.decodeIfPresent([LibraryLightChoice].self, forKey: .lightChoices) ?? lightChoices
         incomplete = try c.decodeIfPresent(String.self, forKey: .incomplete) ?? incomplete
         flatStarMasking = try c.decodeIfPresent(Bool.self, forKey: .flatStarMasking) ?? flatStarMasking
         flatStability = try c.decodeIfPresent(LibraryJSON.self, forKey: .flatStability) ?? flatStability
@@ -138,7 +147,7 @@ struct LibraryFileSession: Codable, Sendable {
     }
 }
 struct LibraryReview: Decodable, Sendable {
-    let reviewKey: String; let frames: [LibraryFrame]; let rigs: [LibraryRig]; let snapshot: LibraryJSON; let grouping: LibraryJSON
+    let reviewKey: String; let frames: [LibraryFrame]; let rigs: [LibraryRig]; let snapshot: LibraryJSON; let grouping: LibraryJSON; let flatWork: LibraryJSON; let lightOptions: [LibraryJSON]
     let warnings: [String]; let missing: [Bool]; let paths: [String]; let lightPaths: [String]
     let fileSessions: [LibraryFileSession]; let sources: [LibrarySource]
     var assignments: [Int] { snapshot["assignments"].array.compactMap { $0.number.map(Int.init) } }
@@ -155,12 +164,14 @@ struct LibraryRequest: Encodable, Sendable {
     var settings: [LibrarySetting] = []
     var rigs: [LibraryRigSettings] = []
     var choices: [LibraryChoice] = []
+    var groupOverrides: [LibraryJSON] = []
+    var lightChoices: [LibraryLightChoice] = []
     var reviewKey: String?
     var incomplete = "stop"
     var sources: [LibrarySource] = []
     var accessURLs: [URL] = []
     enum CodingKeys: String, CodingKey {
-        case operation, library, lights, provided, cache, settings, rigs, choices, reviewKey, incomplete, sources, flatStarMasking, flatStability, flatAssociation, darkAssociation
+        case operation, library, lights, provided, cache, settings, rigs, choices, groupOverrides, lightChoices, reviewKey, incomplete, sources, flatStarMasking, flatStability, flatAssociation, darkAssociation
     }
     var flatStarMasking = false
     var flatStability: LibraryJSON = LibraryPreferences().flatStability
@@ -173,6 +184,7 @@ struct LibraryRequest: Encodable, Sendable {
         rigs = preferences.rigs.sorted { $0.key < $1.key }.map { id, values in
             LibraryRigSettings(rig_uuid: id, settings: values.sorted { $0.key < $1.key }.map { LibrarySetting(key: $0.key, value: $0.value) })
         }
+        groupOverrides = preferences.groupOverrides; lightChoices = preferences.lightChoices
         choices = preferences.choices; self.reviewKey = reviewKey; incomplete = preferences.incomplete
         flatStarMasking = preferences.flatStarMasking; flatStability = preferences.flatStability
         flatAssociation = preferences.flatAssociation; darkAssociation = preferences.darkAssociation
@@ -203,7 +215,7 @@ enum CalibrationLibraryService {
                 defer { accessed.forEach { $0.stopAccessingSecurityScopedResource() } }
                 let data = try call(request, cancellation: cancellation)
                 let review = try JSONDecoder().decode(LibraryReview.self, from: data)
-                guard review.paths.count == request.lights.count, review.missing.count == review.paths.count, review.lightPaths.count == review.paths.count,
+                guard review.lightOptions.count == request.lights.count, review.paths.count == request.lights.count, review.missing.count == review.paths.count, review.lightPaths.count == review.paths.count,
                     review.assignments.count == review.paths.count,
                     review.snapshot["selections"].array.count == review.paths.count,
                     review.assignments.allSatisfy({ (0..<review.sessionCount).contains($0) }),
@@ -289,6 +301,35 @@ struct LibraryPreparedPlan: Sendable {
             }
             if current == generation { busy = false }
         }
+    }
+    func chooseGroupEdge(_ edge: LibraryJSON, choice: String?) {
+        let row = edge["row"]
+        preferences.groupOverrides.removeAll { $0["session_key"] == row["session_key"] && $0["family_key"] == row["family_key"] }
+        if let choice, case .object(var values) = row {
+            values["choice"] = .string(choice)
+            values["chosen_at"] = .number(Date().timeIntervalSince1970.rounded(.down))
+            preferences.groupOverrides.append(.object(values))
+        }
+    }
+    func clearGroupChoice(_ row: LibraryJSON) {
+        preferences.groupOverrides.removeAll { $0["anchor_frame"] == row["anchor_frame"] && $0["session_key"] == row["session_key"] }
+    }
+    func chooseLight(_ options: LibraryJSON, change: LibraryJSON? = nil, group: LibraryJSON? = nil, side: String? = nil) {
+        let path = options["path"].text
+        let key = change?["key"].text ?? "group"
+        preferences.lightChoices.removeAll { $0.path == path && $0.row["change_key"].text == key }
+        guard group != nil || side != nil else { return }
+        let label = group?["label"].text ?? "\(side?.capitalized ?? "") of measured change"
+        let row: LibraryJSON = .object([
+            "light_guid": options["guid"], "change_key": .string(key), "rig_uuid": options["rig_uuid"],
+            "change_start": change?["start"] ?? .null, "change_end": change?["end"] ?? .null,
+            "choice": .string(side ?? "group"), "group_frame": group?["frame"] ?? .null,
+            "group_session_key": group?["session_key"] ?? .null, "label": .string(label),
+            "chosen_at": .number(Date().timeIntervalSince1970.rounded(.down))])
+        preferences.lightChoices.append(.init(path: path, fingerprint: options["fingerprint"].text, row: row))
+    }
+    func clearLightChoices(_ options: LibraryJSON) {
+        preferences.lightChoices.removeAll { $0.path == options["path"].text }
     }
     func choose(_ frame: LibraryFrame, _ choice: String?) {
         preferences.choices.removeAll { $0.path == frame.path }
@@ -410,6 +451,13 @@ struct CalibrationLibraryReviewView: View {
                                 Text(review.missing[index] ? "Incomplete calibration" : "Matched session \(review.assignments[index] + 1)")
                                 let selection = review.snapshot["selections"].array[index]
                                 Text("Flat association: \(selection["flat_basis"]["basis"].text.replacingOccurrences(of: "_", with: " "))").font(.caption)
+                                if !selection["flat_family"]["by"].text.isEmpty {
+                                    Text("Flat family: \(selection["flat_family"]["by"].text.capitalized)").font(.caption)
+                                }
+                                lightChoices(review.lightOptions[index])
+                                ForEach(selection["flat_choices"].array, id: \.self) { choice in
+                                    Text(choice["orphaned"].text.isEmpty ? choice["label"].text : choice["orphaned"].text).font(.caption).foregroundStyle(.secondary)
+                                }
                                 ForEach(["bias", "dark", "dark_flat", "flat"], id: \.self) { kind in
                                     let names = selection[kind].array.compactMap { id in review.frames.first { $0.id == id.text } }.map { URL(fileURLWithPath: $0.path).lastPathComponent }
                                     Text("\(kind.replacingOccurrences(of: "_", with: " ").capitalized): \(names.isEmpty ? "None" : names.joined(separator: ", "))").font(.caption)
@@ -438,6 +486,34 @@ struct CalibrationLibraryReviewView: View {
                             Text("All eligible compatible flats use one set.")
                         }
                         if let grouping = model.review?.grouping {
+                            Text("\(model.review?.flatWork["corrections"].array.count ?? 0) planned flat corrections").font(.headline)
+                            ForEach(model.review?.flatWork["corrections"].array ?? [], id: \.self) { correction in
+                                Text("Carry flats to the \(correction["correction"]["light_side"].text) side of a measured change for \(correction["light_indices"].array.count) lights.").font(.caption)
+                            }
+                            ForEach(model.review?.flatWork["grouping"]["evidence"].array ?? [], id: \.self) { evidence in
+                                Text("Light evidence: \(evidence["verdict"].text.capitalized)").font(.headline)
+                                ForEach(evidence["fits"].array, id: \.self) { fit in
+                                    Text("\(fit["filter"].text): \(fit["verdict"].text), \(Int(fit["lights"].number ?? 0)) sampled lights").font(.caption)
+                                }
+                            }
+                            ForEach(model.review?.flatWork["group_edges"].array ?? [], id: \.self) { edge in
+                                HStack {
+                                    Text(edge["label"].text).font(.caption)
+                                    Menu("Group edge") {
+                                        Button("Split here") { model.chooseGroupEdge(edge, choice: "split") }
+                                        Button("Join with previous group") { model.chooseGroupEdge(edge, choice: "join") }
+                                        Button("Use measured grouping") { model.chooseGroupEdge(edge, choice: nil) }
+                                    }.disabled(model.busy || model.stale)
+                                }
+                            }
+                            ForEach(model.review?.flatWork["overrides"].array ?? [], id: \.self) { state in
+                                HStack {
+                                    Text(state["row"]["label"].text).font(.caption)
+                                    Text(state["status"]["status"].text.capitalized).font(.caption)
+                                    if !state["status"]["reason"].text.isEmpty { Text(state["status"]["reason"].text).font(.caption) }
+                                    Button("Clear") { model.clearGroupChoice(state["row"]) }.disabled(model.busy)
+                                }
+                            }
                             Text("\(grouping["sessions"].array.count) measured flat sessions · \(grouping["families"].array.count) response families · \(grouping["events"].array.count) changes").font(.headline)
                             ForEach(Array(grouping["sessions"].array.enumerated()), id: \.offset) { index, session in
                                 Text("Flat session \(index + 1): \(session["frame_uuids"].array.count) frames").font(.headline)
@@ -453,4 +529,22 @@ struct CalibrationLibraryReviewView: View {
             ScrollView { VStack(alignment: .leading) { ForEach(model.review?.warnings ?? [], id: \.self) { Text($0).font(.caption) } } }.frame(maxHeight: 85)
         }.padding().frame(minWidth: 820, idealWidth: 1000, minHeight: 540, idealHeight: 650)
     }
+    @ViewBuilder private func lightChoices(_ options: LibraryJSON) -> some View {
+        Menu("Flat choices") {
+            Button("Use automatic choices") { model.clearLightChoices(options) }
+            ForEach(options["changes"].array, id: \.self) { change in
+                Menu("Change \(change["key"].text.prefix(8))") {
+                    Button("Before change") { model.chooseLight(options, change: change, side: "before") }
+                    Button("After change") { model.chooseLight(options, change: change, side: "after") }
+                    Button("Use automatic side") { model.chooseLight(options, change: change) }
+                }
+            }
+            Menu("Use a flat group") {
+                ForEach(options["groups"].array, id: \.self) { group in
+                    Button(group["label"].text) { model.chooseLight(options, group: group) }
+                }
+            }
+        }.disabled(model.busy || model.stale)
+    }
+
 }
