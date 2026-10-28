@@ -8,27 +8,29 @@ objects in it. Turn a finished image into a camera tour with depth, motion, and
 titles. Image processing and video encoding run locally; optional online
 stellar-distance lookup sends sky coordinates to astronomical catalogues.
 
-[**Download Seiza for Mac 0.8.8**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.8-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
+[**Download Seiza for Mac 0.8.9**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.9-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
 **Also from Seiza:** [Core, CLI, and libraries](https://github.com/theatrus/seiza) ·
 [Seiza for Windows](https://github.com/theatrus/seiza-win) ·
 [FITS and XISF for Photoshop](https://github.com/theatrus/xisf-photoshop)
 
-## New in 0.8.8
+## New in 0.8.9
 
-This release brings the native Mac workflows to feature parity with Seiza for
-Windows 0.8.6, using published Seiza/C ABI 0.44.2.
+Open images from TXT or CSV file lists and stack selected lights directly onto
+an expanded mosaic canvas.
 
-- Compose **HOO/SHO** palettes, review stellar continuum fits, and extract or
-  restore RGB stars in **File → Color Tools…**. Build a float preview before
-  saving FITS or XISF; display products reopen with **No Stretch**.
-- Choose automatic GPU or CPU-only stacking and a persistent **GPU planning
-  budget** in Settings. Compatible live checkpoints resume with the current
-  policy while retaining accumulated frames; active runs keep their settings.
-- Group selected lights by solved sky coordinates, select panels or individual
-  exposures, and plan **expanded mosaics** with overlap and memory limits.
-- Browse and deduplicate Finder image aliases, fit wide mosaics below 1% zoom,
-  and preserve full-resolution 8/16-bit exports.
+- Choose **File → Open Image List…** (⇧⌘O), use the welcome-window button, or
+  drop a TXT/CSV list onto Seiza. Paths can span folders; SubframeSelector CSVs,
+  relative paths and quoted filenames are supported. Skipped entries include
+  their source list and line number.
+- List imports start with separate **source-directory groups**, so captures from
+  different folders remain easy to browse.
+- Choose **Fixed reference** or **Expanded mosaic** at the top of Stack Images.
+  Expanded stacking uses all selected lights on one canvas; solved sky-panel
+  grouping is optional and keeps your chosen canvas mode.
+- Select more than **512 lights** for stacking and optional sky-panel analysis.
+  Canvas memory limits still apply; optional panel analysis uses more time and
+  memory as the number of solved lights grows.
 
 ![All in-progress filters in Live Stack](docs/images/multi-filter-live/all-filters.png)
 
@@ -369,7 +371,7 @@ and refits the whole frame as its window changes size.
 
 ## Download
 
-[**Download Seiza for Mac 0.8.8**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.8-universal.dmg), open it, and drag Seiza to Applications.
+[**Download Seiza for Mac 0.8.9**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.9-universal.dmg), open it, and drag Seiza to Applications.
 
 Or install with [Homebrew](https://brew.sh) from the
 [theatrus/homebrew-seiza tap](https://github.com/theatrus/homebrew-seiza):

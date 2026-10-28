@@ -236,12 +236,10 @@ jobs:
             '' \
             "### New in ${version}" \
             '' \
-            '- Bring the Mac workflow to feature parity with Seiza for Windows 0.8.6, using published Seiza/C ABI 0.44.2.' \
-            '- Compose HOO/SHO palettes, analyze and review stellar continuum subtraction, and extract or restore RGB stars in File → Color Tools. Build a float preview before saving FITS or XISF.' \
-            '- Preserve signed continuum residuals, NaN coverage, source-bound plans and transfer/provenance tags. Display products reopen with No Stretch across the viewer, thumbnails and Quick Look.' \
-            '- Choose automatic GPU or CPU-only stacking and a persistent GPU planning budget in Settings. Resuming compatible checkpoints applies the current policy while preserving accumulated frames; active runs retain their captured settings.' \
-            '- Group selected lights by solved sky coordinates, inspect whole panels or individual exposures, and plan expanded mosaics with overlap and canvas-memory limits. Expanded canvases require local-background, global or no normalization.' \
-            '- Resolve and deduplicate Finder image aliases during folder browsing, fit wide mosaics below 1% zoom, and render full-resolution 8/16-bit images through the Mac image pipeline.' \
+            '- Open TXT and CSV image lists with File → Open Image List… (⇧⌘O), the welcome-window button, Open, or drag and drop. Supports SubframeSelector preambles, relative paths and quoted filenames across folders, with source-list and line details for skipped entries.' \
+            '- Start image-list imports with separate source-directory groups, independent of the saved grouping preference, and match the initial window title to the selected image.' \
+            '- Choose Fixed reference or Expanded mosaic at the top of Stack Images. Expanded mosaics combine the selected lights on one canvas without requiring sky-panel analysis; optional solved-coordinate grouping keeps the chosen canvas mode.' \
+            '- Remove the 512-light selection cap from stacking setup and optional sky-panel analysis. Canvas memory limits remain in force; solved-panel analysis still grows quadratically with the number of lights and remains cancellable.' \
             '- Uses published Seiza/C ABI 0.44.2, stacking 0.51.2, parallax 0.19.2, satellites 0.22.2, stretch 0.3.2 and image I/O 0.11.0.' \
             '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
