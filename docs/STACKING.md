@@ -1,11 +1,11 @@
 # Shared stacking references
 
-Seiza for Mac uses published `seiza-cabi` and `seiza` **0.46.0**,
-`seiza-stacking` **0.53.0**, and `seiza-download` **0.9.0**. The registry
-checksums are locked in `Cargo.lock`; `Shared/seiza_cabi.h` matches the
-published C ABI header. The shared calibration-library and session-planning
-APIs are available to the host; the new stacking-setup workflow remains disabled
-until its executor and parity checks are complete.
+This branch targets `seiza-cabi`/`seiza` **0.47.0**, `seiza-stacking` **0.54.0**
+and calibration **0.11.0**. While publication runs, Cargo pins the exact release
+commit and `Shared/seiza_cabi.h` matches its generated header. The graded setup
+uses native Rust library, session and evidence APIs; its fixed and expanded
+executors and replay tests are enabled. See the
+[calibration setup guide](STACKING-CALIBRATION.md) for supported inputs and limits.
 
 ## Upstream coverage
 

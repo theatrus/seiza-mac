@@ -1,8 +1,9 @@
 # Calibration quality
 
-The Mac app uses published core/C ABI 0.46.0, calibration 0.10.0, stacking
-0.53.0, stretch 0.3.2 and parallax 0.19.4, with registry checksums and the
-complete published header. The generated header matches the tagged package.
+This branch targets core/C ABI 0.47.0, calibration 0.11.0, stacking 0.54.0,
+stretch 0.3.2 and parallax 0.19.5. While publication runs, Cargo pins the exact
+release commit; the complete generated C header matches it. Graded library
+setup uses the native Rust API described in the [setup guide](STACKING-CALIBRATION.md).
 
 ## Review selected flats
 
