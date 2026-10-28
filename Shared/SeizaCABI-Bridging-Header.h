@@ -16,4 +16,3 @@ char *seiza_mac_sky_overlaps_json(const char *request, char **error_out);
 // Prepared color processing; free JSON/error strings with seiza_string_free.
 char *seiza_mac_color_tools_json(const char *request, char **error_out);
 int32_t seiza_mac_color_is_display(const char *path, char **error_out);
-
