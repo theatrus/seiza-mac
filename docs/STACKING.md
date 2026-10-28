@@ -1,9 +1,11 @@
 # Shared stacking references
 
-Seiza for Mac uses published `seiza-cabi` and `seiza` **0.39.0**,
-`seiza-stacking` **0.42.0**, and `seiza-download` **0.9.0**. The registry
+Seiza for Mac uses published `seiza-cabi` and `seiza` **0.46.0**,
+`seiza-stacking` **0.53.0**, and `seiza-download` **0.9.0**. The registry
 checksums are locked in `Cargo.lock`; `Shared/seiza_cabi.h` matches the
-published C ABI header. These replace the tested upstream Git pin.
+published C ABI header. The shared calibration-library and session-planning
+APIs are available to the host; the new stacking-setup workflow remains disabled
+until its executor and parity checks are complete.
 
 ## Upstream coverage
 

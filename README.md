@@ -445,8 +445,9 @@ DerivedData/Build/Products/Debug/Seiza.app
 
 Open `Seiza.xcodeproj` to run and sign it with a local development team.
 
-The app uses published `seiza-cabi` 0.44.2, `seiza` 0.44.2,
-`seiza-parallax` 0.19.2, `seiza-stacking` 0.51.2 and `seiza-download` 0.9.0, with dust maps, depth planes and
+The app uses published `seiza-cabi` 0.46.0, `seiza` 0.46.0,
+`seiza-calibration` 0.10.0, `seiza-parallax` 0.19.4, `seiza-stacking` 0.53.0
+and `seiza-download` 0.9.0, with dust maps, depth planes and
 image reading and writing through `seiza-image-io`. Library and bridge header
 must be updated together. About reports the linked release version and source
 commit. Optional [flat-quality review](docs/CALIBRATION-QUALITY.md) uses the native

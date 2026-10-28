@@ -1,7 +1,7 @@
-# Calibration quality and the published 0.39 API
+# Calibration quality
 
-The Mac app uses published core/C ABI 0.39.0, calibration 0.8.0, stacking
-0.42.0, stretch 0.3.1 and parallax 0.16.0, with registry checksums and the
+The Mac app uses published core/C ABI 0.46.0, calibration 0.10.0, stacking
+0.53.0, stretch 0.3.2 and parallax 0.19.4, with registry checksums and the
 complete published header. The generated header matches the tagged package.
 
 ## Review selected flats

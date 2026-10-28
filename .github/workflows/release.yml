@@ -240,7 +240,7 @@ jobs:
             '- Start image-list imports with separate source-directory groups, independent of the saved grouping preference, and match the initial window title to the selected image.' \
             '- Choose Fixed reference or Expanded mosaic at the top of Stack Images. Expanded mosaics combine the selected lights on one canvas without requiring sky-panel analysis; optional solved-coordinate grouping keeps the chosen canvas mode.' \
             '- Remove the 512-light selection cap from stacking setup and optional sky-panel analysis. Canvas memory limits remain in force; solved-panel analysis still grows quadratically with the number of lights and remains cancellable.' \
-            '- Uses published Seiza/C ABI 0.44.2, stacking 0.51.2, parallax 0.19.2, satellites 0.22.2, stretch 0.3.2 and image I/O 0.11.0.' \
+            '- Uses published Seiza/C ABI 0.46.0, calibration 0.10.0, stacking 0.53.0, parallax 0.19.4, satellites 0.22.2, stretch 0.3.2 and image I/O 0.11.0.' \
             '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
             "- [Download the zipped application](${release_base}/Seiza-${version}-universal.zip)" \

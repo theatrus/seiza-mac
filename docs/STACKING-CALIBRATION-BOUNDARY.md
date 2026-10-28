@@ -3,15 +3,21 @@
 Audit baseline: Mac `d063c9b`, C ABI 0.44.2, calibration 0.8.1, stacking 0.51.2;
 PSF Guard `79f5e31d53b8371e8fcd0b22a9b69692412cd8b4`.
 
-The current core can integrate different calibration sessions on a shared
-canvas and replay those assignments. It cannot yet expose the complete PSF
-Guard planning policy or plan an expanded raw-file canvas with different
-calibration for each planning input. Keep the setup feature disabled until both
-gaps are closed.
+At that audit baseline, the core could integrate different calibration sessions
+on a shared canvas and replay those assignments, but lacked the shared PSF Guard
+planning policy and expanded raw-file planning under per-light calibration.
 
-## Verified contracts
+The current dependency is published Seiza/C ABI **0.46.0**, calibration **0.10.0**
+and stacking **0.53.0**. Seiza #385 supplied the shared policy and
+`seiza_live_stacker_open_fits_expanding_sessions`; the generated header now exposes
+both. Library planning accepts cached host records and prepared groups, including
+master adoption, complete matching gates and flat-retry decisions. The Mac host
+still needs to execute those contracts and compare complete plan results against
+the reference fixtures. Keep setup disabled until that host work is complete.
 
-| Capability | Current boundary | Evidence and limitation |
+## Verified contracts from the original audit
+
+| Capability | Audited boundary | Evidence and limitation |
 | --- | --- | --- |
 | Bias/dark measurement | `seiza_calibration_measure_dark_json` | Typed Swift wrapper retains every native field, physical sample units and algorithm version; stored measurements can be screened after the file is removed |
 | Bias/dark/flat grades | `screen_bias_json`, `screen_darks_json`, `screen_flats_json` | Captured PSF Guard measurements give matching native grades/main finding codes; this does not choose peers or apply library overrides |
@@ -35,18 +41,17 @@ a session before applying it and abort the pending push if any setter fails.
 Never continue with a previous session after a failed switch. Set tolerances
 before the light-rotation basis: resetting tolerances restores recorded angles.
 
-## Shared policy still needed
+## Shared policy and remaining host work
 
 The captured [reference fixtures](../Tests/Fixtures/CalibrationParity/README.md)
 include actual PSF Guard selections, eligibility/override transitions, master
 counts and gates, and measured response-family/group/event decisions. Mac tests
 currently compare **screening**, not the complete planner's decisions.
 
-Extract the reusable policy behind PSF Guard's library selection and
-`flat_groups/measure/{model,lights,overrides,rows}` into Seiza. Keep database,
-filesystem/cache and bookmark access in the hosts. Expose versioned records and
-explanations through both C and Python. Run these fixtures against that shared
-implementation before replacing PSF Guard's policy or enabling Mac controls.
+The reusable policy behind PSF Guard's library selection and measured flat
+groups is now in Seiza, with versioned records and explanations through C and
+Python. Keep database, filesystem/cache and bookmark access in the hosts.
+Run these fixtures through the Mac adapter before enabling its controls.
 Preserve ungraded eligibility, suspect warnings, poor exclusion, persistent
 choices, hard compatibility, measured/unknown angle bases and fitted pedestal
 recipes. Default numbers must come from the shared implementation.
@@ -56,7 +61,7 @@ from actual images, inconclusive light fits, manual family choices, dark age/
 reach/cohort boundaries, readout-mode names, validity boundaries, mixed filters,
 missing metadata and physical/normalized XISF before claiming full parity.
 
-## Expanded planning API needed
+## Expanded planning audit and released API
 
 `seiza_live_stacker_open_fits_expanding` accepts one bias/dark/flat set and one
 dark exposure override. In stacking 0.51.2, `expand::plan` prepares **every**
@@ -70,7 +75,8 @@ PSF Guard instead prepares correctly calibrated scratch reference images before
 planning, then integrates original raw lights with their assigned sessions.
 That Rust path is not equivalent to the prepared-only C open.
 
-Add a shared core operation and C/Python binding for session-aware file planning:
+The published session-aware core operation and C/Python bindings now provide
+the required file-planning contract:
 
 1. Accept original light paths in caller order, each light's session assignment,
    exact master paths/dark exposure, effective tolerances and rotation basis.
@@ -85,8 +91,8 @@ Add a shared core operation and C/Python binding for session-aware file planning
 
 The request shape should be shared with the eventual executor rather than
 adding another unrelated session format. Prove C/Python binding parity, fixed
-and expanded outputs, replay, CPU/GPU fallback and cancellation before updating
-the Mac dependency. Follow the Seiza processing-output version procedure for
+and expanded outputs, replay, CPU/GPU fallback and cancellation before enabling
+the Mac executor. Follow the Seiza processing-output version procedure for
 any changed processing behavior. No processing algorithm or output version is
 changed by this Mac boundary/fixture work.
 

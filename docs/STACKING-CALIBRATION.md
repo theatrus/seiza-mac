@@ -223,8 +223,10 @@ Already calibrated inputs need an explicit state and must not be calibrated twic
 The canvas planner must see reference/overlap samples prepared with the same
 session calibration the corresponding original light will receive. Planning raw
 geometry/photometry under one set and switching masters only during integration
-is insufficient. Follow PSF Guard's calibrated-reference approach or add a shared
-session-aware native planner/loader; the exact API is a first implementation spike.
+is insufficient. Seiza 0.46.0 provides
+`seiza_live_stacker_open_fits_expanding_sessions` for this operation. Adapt the
+host's planned sessions to that file-input API, preserving each light's complete
+gate, scaling and pedestal recipe during planning, integration and replay.
 
 The final mosaic integrates each original eligible light once with its own recipe.
 Do not independently stack calibration groups and stitch those intermediate
@@ -240,18 +242,21 @@ as exposures.
 
 ## Share the implementation with PSF Guard
 
-Both hosts currently use calibration **0.8.1** and stacking **0.51.2**; the Mac
-reaches them through C ABI **0.44.2**. PSF Guard still owns substantial
-library grouping, quality-eligibility, flat-family and session-selection policy.
+Both dependency-adoption PRs now use the published Seiza **0.46.0** release,
+calibration **0.10.0** and stacking **0.53.0**. The Mac reaches them through
+C ABI **0.46.0**, with the complete matching published header. Seiza #385 moved
+PSF Guard's reusable grouping, grading, selection, master and flat-retry policy
+into the core. The Mac host still needs to adapt its library records and execute
+the returned plans before enabling the new setup controls.
 
 | Capability | Available foundation | Planned work |
 | --- | --- | --- |
 | Measure and screen calibration frames | C ABI measurement/screening exports; Mac flat review | Typed Mac models for all kinds, peer grouping and persistent grading/choices |
 | Metadata matching and master building | Native matcher/planner/build APIs and Mac cache/leases | Match per light; deduplicate recipes across sessions and outputs |
 | Complete acquisition signatures | PSF Guard host records and the native frame probe | Audit missing fields such as readout-mode names and expose shared normalization without weakening matching |
-| Measured flat families and change-aware choice | PSF Guard policy plus Seiza flat-response algorithms | Extract reusable policy/data contracts and audit C/Python exposure; older flat-response exports alone do not prove parity |
+| Measured flat families and change-aware choice | Shared `flat_group_plan`, prepared groups and calibration-library policy in Seiza 0.46.0 | Adapt cached host records and verify full planner decisions against the reference captures |
 | Master/gate changes during integration | Native path-based master swaps, tolerance and light-rotation setters | Typed session application and per-light provenance/replay tests |
-| Multi-session expanded planning | PSF Guard calibrated-reference planning | Prove a supported file-input path through the bindings, or add a session-aware core API |
+| Multi-session expanded planning | Published `open_fits_expanding_sessions` C ABI with immutable per-light assignments | Wire the host executor and prove fixed/expanded output, checkpoint and replay parity |
 
 Keep pixel algorithms and reusable matching/grouping policy in Seiza crates. Keep
 file discovery, bookmarks, local persistence, jobs and UI in the Mac host. Adapt
