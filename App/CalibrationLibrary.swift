@@ -39,15 +39,38 @@ struct LibraryRigSettings: Encodable, Sendable {
     let rig_uuid: String
     let settings: [LibrarySetting]
 }
+enum LibraryAssociation: String, Codable, CaseIterable, Identifiable, Sendable {
+    case automatic, oneSet = "one_set"
+    var id: Self { self }
+    var title: String { self == .automatic ? "Group and match automatically" : "Use all as one set" }
+}
 struct LibraryPreferences: Codable, Equatable, Sendable {
     var settings: [String: LibraryJSON] = [:]
     var rigs: [String: [String: LibraryJSON]] = [:]
     var choices: [LibraryChoice] = []
     var incomplete = "stop"
+    var flatAssociation = LibraryAssociation.automatic
+    var darkAssociation = LibraryAssociation.automatic
     var flatStarMasking = false
     var flatStability: LibraryJSON = .object([
         "enabled": .bool(true), "trim_unstable": .bool(true),
         "try_next_session": .bool(true), "retain_unstable": .bool(true)])
+    enum CodingKeys: String, CodingKey {
+        case settings, rigs, choices, incomplete, flatStarMasking, flatStability, flatAssociation, darkAssociation
+    }
+    init() {}
+    init(from decoder: Decoder) throws {
+        self.init()
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        settings = try c.decodeIfPresent([String: LibraryJSON].self, forKey: .settings) ?? settings
+        rigs = try c.decodeIfPresent([String: [String: LibraryJSON]].self, forKey: .rigs) ?? rigs
+        choices = try c.decodeIfPresent([LibraryChoice].self, forKey: .choices) ?? choices
+        incomplete = try c.decodeIfPresent(String.self, forKey: .incomplete) ?? incomplete
+        flatStarMasking = try c.decodeIfPresent(Bool.self, forKey: .flatStarMasking) ?? flatStarMasking
+        flatStability = try c.decodeIfPresent(LibraryJSON.self, forKey: .flatStability) ?? flatStability
+        flatAssociation = try c.decodeIfPresent(LibraryAssociation.self, forKey: .flatAssociation) ?? flatAssociation
+        darkAssociation = try c.decodeIfPresent(LibraryAssociation.self, forKey: .darkAssociation) ?? darkAssociation
+    }
     static func load(_ defaults: UserDefaults = .standard) -> Self {
         guard let data = defaults.data(forKey: "gradedCalibrationPreferences.v1"),
               let value = try? JSONDecoder().decode(Self.self, from: data) else { return Self() }
@@ -115,7 +138,7 @@ struct LibraryFileSession: Codable, Sendable {
     }
 }
 struct LibraryReview: Decodable, Sendable {
-    let reviewKey: String; let frames: [LibraryFrame]; let rigs: [LibraryRig]; let snapshot: LibraryJSON
+    let reviewKey: String; let frames: [LibraryFrame]; let rigs: [LibraryRig]; let snapshot: LibraryJSON; let grouping: LibraryJSON
     let warnings: [String]; let missing: [Bool]; let paths: [String]; let lightPaths: [String]
     let fileSessions: [LibraryFileSession]; let sources: [LibrarySource]
     var assignments: [Int] { snapshot["assignments"].array.compactMap { $0.number.map(Int.init) } }
@@ -125,6 +148,9 @@ struct LibraryRequest: Encodable, Sendable {
     var operation: String
     var library: String = ""
     var lights: [String] = []
+    var provided: [String] = []
+    var flatAssociation = LibraryAssociation.automatic
+    var darkAssociation = LibraryAssociation.automatic
     var cache: String = ""
     var settings: [LibrarySetting] = []
     var rigs: [LibraryRigSettings] = []
@@ -134,20 +160,22 @@ struct LibraryRequest: Encodable, Sendable {
     var sources: [LibrarySource] = []
     var accessURLs: [URL] = []
     enum CodingKeys: String, CodingKey {
-        case operation, library, lights, cache, settings, rigs, choices, reviewKey, incomplete, sources, flatStarMasking, flatStability
+        case operation, library, lights, provided, cache, settings, rigs, choices, reviewKey, incomplete, sources, flatStarMasking, flatStability, flatAssociation, darkAssociation
     }
     var flatStarMasking = false
     var flatStability: LibraryJSON = LibraryPreferences().flatStability
-    init(operation: String, library: URL? = nil, lights: [URL] = [], preferences: LibraryPreferences = .init(), reviewKey: String? = nil) {
+    init(operation: String, library: URL? = nil, lights: [URL] = [], provided: [URL] = [], preferences: LibraryPreferences = .init(), reviewKey: String? = nil) {
         self.operation = operation; self.library = library?.path ?? ""; self.lights = lights.map(\.path)
-        self.accessURLs = lights + [library].compactMap { $0 }
-        self.cache = library.map { CalibrationCachePaths.forLibrary($0.path).appendingPathComponent("graded-library").path } ?? ""
+        self.provided = provided.map(\.path)
+        self.accessURLs = lights + provided + [library].compactMap { $0 }
+        self.cache = CalibrationCachePaths.forLibrary(library?.path ?? "provided-calibration-frames").appendingPathComponent("graded-library").path
         settings = preferences.settings.sorted { $0.key < $1.key }.map { LibrarySetting(key: $0.key, value: $0.value) }
         rigs = preferences.rigs.sorted { $0.key < $1.key }.map { id, values in
             LibraryRigSettings(rig_uuid: id, settings: values.sorted { $0.key < $1.key }.map { LibrarySetting(key: $0.key, value: $0.value) })
         }
         choices = preferences.choices; self.reviewKey = reviewKey; incomplete = preferences.incomplete
         flatStarMasking = preferences.flatStarMasking; flatStability = preferences.flatStability
+        flatAssociation = preferences.flatAssociation; darkAssociation = preferences.darkAssociation
     }
 }
 enum CalibrationLibraryService {
@@ -244,12 +272,14 @@ struct LibraryPreparedPlan: Sendable {
             fields = try JSONDecoder().decode(Schema.self, from: CalibrationLibraryService.call(LibraryRequest(operation: "schema"))).settings
         } catch { self.error = error.localizedDescription }
     }
-    func analyze(library: URL, lights: [URL]) {
+    func analyze(library: URL?, lights: [URL], provided: [URL] = [], debounce: Bool = false) {
         invalidate(); busy = true; error = nil
         let current = generation
-        let request = LibraryRequest(operation: "analyze", library: library, lights: lights, preferences: preferences)
+        let request = LibraryRequest(operation: "analyze", library: library, lights: lights, provided: provided, preferences: preferences)
         task = Task {
             do {
+                if debounce { try await Task.sleep(for: .milliseconds(350)) }
+                try Task.checkCancellation()
                 let result = try await CalibrationLibraryService.perform(request)
                 guard current == generation else { return }
                 review = result; stale = false
@@ -275,7 +305,7 @@ struct CalibrationLibrarySettingsView: View {
                 Text("All rigs").tag("")
                 ForEach(model.review?.rigs ?? []) { Text($0.name).tag($0.id) }
             }
-            ForEach(["matching", "darks", "grades"], id: \.self) { group in
+            ForEach(["matching", "darks", "flat_groups", "grades"], id: \.self) { group in
                 DisclosureGroup(group.replacingOccurrences(of: "_", with: " ").capitalized) {
                     ForEach(model.fields.filter { $0.group == group && !["night_zone", "light_nights"].contains($0.key) }) { field in
                         VStack(alignment: .leading, spacing: 4) {
@@ -288,14 +318,14 @@ struct CalibrationLibrarySettingsView: View {
                     }
                 }
             }
-            Text("Flats are grouped by metadata and time. Measured dust/response families are not available in this setup yet.").font(.caption).foregroundStyle(.secondary)
+            Text("Automatic flats use measured response groups and capture times. One-set mode retains every eligible compatible input across nights. Grades and explicit exclusions still apply.").font(.caption).foregroundStyle(.secondary)
             Toggle("Mask stars when building flats", isOn: $model.preferences.flatStarMasking)
             ForEach([("enabled", "Check flat-set stability"), ("trim_unstable", "Retry without drifting flats"),
                 ("try_next_session", "Try another flat session"), ("retain_unstable", "Keep unstable flats with a warning")], id: \.0) { key, label in
-                Toggle(label, isOn: Binding(get: { model.preferences.flatStability[key].boolean }, set: { enabled in
+                Toggle(label, isOn: Binding(get: { key == "try_next_session" && model.preferences.flatAssociation == .oneSet ? false : model.preferences.flatStability[key].boolean }, set: { enabled in
                     var values = ["enabled", "trim_unstable", "try_next_session", "retain_unstable"].reduce(into: [String: LibraryJSON]()) { $0[$1] = model.preferences.flatStability[$1] }
                     values[key] = .bool(enabled); model.preferences.flatStability = .object(values)
-                }))
+                })).disabled(key == "try_next_session" && model.preferences.flatAssociation == .oneSet)
             }
         }
         .task { if model.fields.isEmpty { model.loadSchema() } }
@@ -343,15 +373,16 @@ struct CalibrationLibrarySettingsView: View {
 
 struct CalibrationLibraryReviewView: View {
     @ObservedObject var model: CalibrationLibraryModel
-    let library: URL
+    let library: URL?
     let lights: [URL]
+    var provided: [URL] = []
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Calibration library").font(.title2)
                 Spacer()
-                Button("Analyze again") { model.analyze(library: library, lights: lights) }.disabled(model.busy)
+                Button("Analyze again") { model.analyze(library: library, lights: lights, provided: provided) }.disabled(model.busy)
                 Button("Done") { dismiss() }
             }
             if model.busy { ProgressView("Measuring and matching calibration…") }
@@ -378,6 +409,7 @@ struct CalibrationLibraryReviewView: View {
                                 Text(URL(fileURLWithPath: path).lastPathComponent).font(.headline).help(path)
                                 Text(review.missing[index] ? "Incomplete calibration" : "Matched session \(review.assignments[index] + 1)")
                                 let selection = review.snapshot["selections"].array[index]
+                                Text("Flat association: \(selection["flat_basis"]["basis"].text.replacingOccurrences(of: "_", with: " "))").font(.caption)
                                 ForEach(["bias", "dark", "dark_flat", "flat"], id: \.self) { kind in
                                     let names = selection[kind].array.compactMap { id in review.frames.first { $0.id == id.text } }.map { URL(fileURLWithPath: $0.path).lastPathComponent }
                                     Text("\(kind.replacingOccurrences(of: "_", with: " ").capitalized): \(names.isEmpty ? "None" : names.joined(separator: ", "))").font(.caption)
@@ -400,6 +432,22 @@ struct CalibrationLibraryReviewView: View {
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading).padding()
                 }.tabItem { Text("Master plan") }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if model.preferences.flatAssociation == .oneSet {
+                            Text("All eligible compatible flats use one set.")
+                        }
+                        if let grouping = model.review?.grouping {
+                            Text("\(grouping["sessions"].array.count) measured flat sessions · \(grouping["families"].array.count) response families · \(grouping["events"].array.count) changes").font(.headline)
+                            ForEach(Array(grouping["sessions"].array.enumerated()), id: \.offset) { index, session in
+                                Text("Flat session \(index + 1): \(session["frame_uuids"].array.count) frames").font(.headline)
+                                Text(session["night"].text)
+                                Text(session["frame_uuids"].array.compactMap { id in model.review?.frames.first { $0.id == id.text } }.map { URL(fileURLWithPath: $0.path).lastPathComponent }.joined(separator: ", ")).font(.caption)
+                                Divider()
+                            }
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding()
+                }.tabItem { Text("Flat groups") }
                 Form { CalibrationLibrarySettingsView(model: model) }.tabItem { Text("Settings") }
             }
             ScrollView { VStack(alignment: .leading) { ForEach(model.review?.warnings ?? [], id: \.self) { Text($0).font(.caption) } } }.frame(maxHeight: 85)

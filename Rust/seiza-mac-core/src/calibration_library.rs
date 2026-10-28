@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::{Path, PathBuf};
 
+mod responses;
+
 type Result<T> = std::result::Result<T, String>;
 #[derive(Default, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
@@ -25,6 +27,9 @@ struct Request {
     sources: Vec<Source>,
     flat_star_masking: bool,
     flat_stability: policy::FlatRetryPolicy,
+    flat_association: policy::Association,
+    dark_association: policy::Association,
+    provided: Vec<PathBuf>,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -68,6 +73,7 @@ struct Report {
     frames: Vec<Frame>,
     rigs: Vec<Value>,
     snapshot: Value,
+    grouping: Value,
     warnings: Vec<String>,
     missing: Vec<bool>,
     paths: Vec<PathBuf>,
@@ -400,8 +406,12 @@ fn run(request: Request, cancel: CancelSignal) -> Result<Value> {
     .map_err(error)?;
     std::fs::create_dir_all(&request.cache).map_err(error)?;
     let cache = request.cache.canonicalize().map_err(error)?;
-    let library = request.library.canonicalize().map_err(error)?;
-    if library.starts_with(&cache) {
+    let library = if request.library.as_os_str().is_empty() {
+        None
+    } else {
+        Some(request.library.canonicalize().map_err(error)?)
+    };
+    if library.as_ref().is_some_and(|p| p.starts_with(&cache)) {
         return Err("The calibration library cannot be inside its cache".into());
     }
     let lock = std::fs::OpenOptions::new()
@@ -421,8 +431,13 @@ fn run(request: Request, cancel: CancelSignal) -> Result<Value> {
             Err(e) => return Err(e.to_string()),
         }
     }
-    let mut found = Vec::new();
-    discover(&library, &cache, &mut found, &cancel)?;
+    let mut found = request.provided.clone();
+    if let Some(library) = &library {
+        discover(library, &cache, &mut found, &cancel)?;
+    }
+    if found.is_empty() {
+        return Err("Choose calibration files or a library containing calibration frames".into());
+    }
     let mut identities = BTreeSet::new();
     let mut visited = BTreeSet::new();
     let mut rows = Vec::new();
@@ -465,7 +480,7 @@ fn run(request: Request, cancel: CancelSignal) -> Result<Value> {
             row.quality.override_choice = Some(choice.choice);
         }
     }
-    let planner = policy::Request {
+    let mut planner = policy::Request {
         frames: rows.iter().map(|r| r.frame.clone()).collect(),
         lights: lights.iter().map(|r| r.light.clone()).collect(),
         quality: rows.iter().map(|r| r.quality.clone()).collect(),
@@ -474,8 +489,13 @@ fn run(request: Request, cancel: CancelSignal) -> Result<Value> {
         regrade: true,
         flat_star_masking: request.flat_star_masking,
         flat_stability: request.flat_stability.clone(),
+        flat_association: request.flat_association,
+        dark_association: request.dark_association,
         ..Default::default()
     };
+    let (grouping, response_sources, grouping_snapshot) =
+        responses::prepare(&planner, &rows, &cache, &cancel, &mut warnings)?;
+    planner.grouping = grouping;
     let snapshot = policy::evaluate(planner.clone()).map_err(error)?;
     let mut sources: Vec<_> = rows
         .iter()
@@ -489,6 +509,7 @@ fn run(request: Request, cancel: CancelSignal) -> Result<Value> {
     {
         sources.push(stamp(&row.processed)?);
     }
+    sources.extend(response_sources);
     verify(&sources)?;
     let review_key = digest(
         serde_json::to_vec(&(
@@ -499,6 +520,9 @@ fn run(request: Request, cancel: CancelSignal) -> Result<Value> {
             &request.incomplete,
             request.flat_star_masking,
             &request.flat_stability,
+            request.flat_association,
+            request.dark_association,
+            &grouping_snapshot,
             policy::POLICY_ALGORITHM_VERSION,
             seiza_stacking::OUTPUT_VERSION,
         ))
@@ -538,6 +562,8 @@ fn run(request: Request, cancel: CancelSignal) -> Result<Value> {
             });
         missing.push(
             ungraded
+                || selection.flat_basis.flags()
+                || selection.flat_family.as_ref().is_some_and(|f| f.flags())
                 || (!available(Kind::Bias) && !available(Kind::Dark) && !available(Kind::Flat))
                 || (selection.library.bias && !available(Kind::Bias))
                 || (selection.library.dark && !available(Kind::Dark))
@@ -546,12 +572,6 @@ fn run(request: Request, cancel: CancelSignal) -> Result<Value> {
     }
     if missing.iter().any(|v| *v) {
         warnings.push(format!("{} lights have incomplete or ungraded calibration. Review Light matches and choose how to handle incomplete lights.",missing.iter().filter(|v|**v).count()));
-    }
-    if rows
-        .iter()
-        .any(|r| r.frame.kind == Kind::Flat && !r.frame.is_master)
-    {
-        warnings.push("Flat-response comparisons are not measured by this workflow yet. Seiza uses its metadata/time fallback where measured evidence is unavailable.".into());
     }
     let mut frames = Vec::new();
     let mut rigs = BTreeMap::new();
@@ -648,6 +668,7 @@ fn run(request: Request, cancel: CancelSignal) -> Result<Value> {
             .map(|(id, name)| json!({"id":id,"name":name}))
             .collect(),
         snapshot: serde_json::to_value(snapshot).map_err(error)?,
+        grouping: grouping_snapshot,
         warnings,
         missing,
         paths: lights.iter().map(|l| l.processed.clone()).collect(),
@@ -1189,6 +1210,213 @@ mod tests {
     }
     fn call(request: Request) -> Value {
         run(request, CancelSignal::new(|| false)).unwrap()
+    }
+    #[test]
+    fn measured_response_groups_reach_association_and_reuse_cached_pixels() {
+        let (dir, mut request) = fixture();
+        request.lights = vec![request.lights[0].clone()];
+        request.settings = vec![policy::Setting {
+            key: "flat_session_hours".into(),
+            value: json!(240.0),
+        }];
+        let input = FitsFrame::open(&request.lights[0]).unwrap();
+        seiza_stacking::write_processed_image_fits_f32(
+            &request.lights[0],
+            &input.image,
+            &input.headers,
+            &[
+                seiza_fits::WriteHeaderCard::new(
+                    "FILTER",
+                    seiza_fits::HeaderValue::String("Ha".into()),
+                ),
+                seiza_fits::WriteHeaderCard::new("ROTATANG", seiza_fits::HeaderValue::Float(0.0)),
+                seiza_fits::WriteHeaderCard::new(
+                    "IMAGETYP",
+                    seiza_fits::HeaderValue::String("LIGHT".into()),
+                ),
+            ],
+        )
+        .unwrap();
+        // Same detector and angle, three nights. The last response has a
+        // different vignette; the first two should form one measured group.
+        for (day, depth) in [(20, 0.1_f32), (23, 0.1), (26, 0.35)] {
+            for index in 0..3 {
+                let path = request.library.join(format!("flat-{day}-{index}.fits"));
+                use seiza_fits::HeaderValue as H;
+                let cards = vec![
+                    ("IMAGETYP", H::String("FLAT".into())),
+                    ("FILTER", H::String("Ha".into())),
+                    ("ROTATANG", H::Float(0.0)),
+                    ("INSTRUME", H::String("TestCam".into())),
+                    ("GAIN", H::Integer(100)),
+                    ("OFFSET", H::Integer(50)),
+                    ("EXPTIME", H::Float(30.0)),
+                    ("XBINNING", H::Integer(1)),
+                    ("YBINNING", H::Integer(1)),
+                    ("DATE-OBS", H::String(format!("2026-10-{day}T20:00:00Z"))),
+                ];
+                let data: Vec<_> = (0..4096)
+                    .map(|i| {
+                        let x = (i % 64) as f32 / 63.0 - 0.5;
+                        let y = (i / 64) as f32 / 63.0 - 0.5;
+                        20000.0 * (1.0 - depth * (x * x + y * y)) + (i % 7) as f32 - 3.0
+                    })
+                    .collect();
+                seiza_fits::write_f32_image(
+                    &path,
+                    64,
+                    64,
+                    seiza_fits::F32ImageData::Mono(&data),
+                    &cards
+                        .into_iter()
+                        .map(|(k, v)| seiza_fits::WriteHeaderCard::new(k, v))
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap();
+            }
+        }
+        let before = call(Request {
+            operation: "analyze".into(),
+            library: request.library.clone(),
+            settings: request.settings.clone(),
+            lights: request.lights.clone(),
+            cache: request.cache.clone(),
+            ..Default::default()
+        });
+        assert_eq!(
+            before["grouping"]["sessions"].as_array().unwrap().len(),
+            3,
+            "{before}"
+        );
+        assert!(
+            !before["grouping"]["events"].as_array().unwrap().is_empty(),
+            "{before}"
+        );
+        assert!(
+            !before["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str().unwrap().contains("not measured"))
+        );
+        let measurements: Vec<_> = std::fs::read_dir(&request.cache)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("response-") || name.starts_with("comparison-")
+            })
+            .map(|e| stamp(&e.path()).unwrap())
+            .collect();
+        assert!(measurements.iter().any(|s| {
+            s.path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("comparison-")
+        }));
+        let first_inputs = before["snapshot"]["selections"][0]["flat"]
+            .as_array()
+            .unwrap();
+        assert_eq!(first_inputs.len(), 6);
+        let held = before["snapshot"]["selections"][0]["flat_held_back"]
+            .as_array()
+            .unwrap();
+        assert!(held.is_empty());
+        let flat_recipe = before["snapshot"]["sessions"][0]["recipes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["kind"] == "flat")
+            .unwrap();
+        assert_eq!(flat_recipe["inputs"].as_array().unwrap().len(), 6);
+        let again = call(Request {
+            operation: "analyze".into(),
+            library: request.library.clone(),
+            settings: request.settings.clone(),
+            lights: request.lights.clone(),
+            cache: request.cache.clone(),
+            ..Default::default()
+        });
+        assert_eq!(before["reviewKey"], again["reviewKey"]);
+        verify(&measurements).unwrap();
+        // One-set changes only association; the measured caches survive.
+        request.flat_association = policy::Association::OneSet;
+        let explicit = call(request);
+        assert_eq!(
+            explicit["snapshot"]["selections"][0]["flat"]
+                .as_array()
+                .unwrap()
+                .len(),
+            9
+        );
+        assert!(
+            explicit["grouping"]["sessions"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_ne!(before["reviewKey"], explicit["reviewKey"]);
+        verify(&measurements).unwrap();
+        drop(dir);
+    }
+    #[test]
+    fn one_dark_set_builds_all_supplied_inputs_across_nights() {
+        let (_dir, mut request) = fixture();
+        request.lights.truncate(1);
+        request.dark_association = policy::Association::OneSet;
+        for i in 0..80 {
+            let path = request.library.join(format!("dark-{i}.fits"));
+            write(&path, "DARK", 100, 800.0);
+            if i >= 40 {
+                let bytes = std::fs::read(&path).unwrap();
+                let old = b"2026-10-20T20:00:00Z";
+                let offset = bytes.windows(old.len()).position(|s| s == old).unwrap();
+                let mut bytes = bytes;
+                bytes[offset..offset + old.len()].copy_from_slice(b"2026-10-23T20:00:00Z");
+                std::fs::write(path, bytes).unwrap();
+            }
+        }
+        let review = call(Request {
+            operation: "analyze".into(),
+            library: request.library.clone(),
+            cache: request.cache.clone(),
+            lights: request.lights.clone(),
+            dark_association: request.dark_association,
+            incomplete: request.incomplete.clone(),
+            ..Default::default()
+        });
+        let dark = review["snapshot"]["sessions"][0]["recipes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["kind"] == "dark")
+            .unwrap();
+        assert_eq!(dark["inputs"].as_array().unwrap().len(), 80);
+        request.operation = "execute".into();
+        request.review_key = Some(review["reviewKey"].as_str().unwrap().into());
+        let report = call(request);
+        let dark_path = report["fileSessions"][0]["dark"].as_str().unwrap();
+        let memo = Path::new(dark_path).with_extension("json");
+        let built: Built = serde_json::from_slice(&std::fs::read(memo).unwrap()).unwrap();
+        assert_eq!(built.used.len(), 80);
+        let image = FitsFrame::open(dark_path).unwrap();
+        assert!((image.image.data[0] - 300.0).abs() < 1.0);
+    }
+    #[test]
+    fn explicit_files_need_no_library() {
+        let (_dir, mut request) = fixture();
+        request.lights.truncate(1);
+        request.provided = std::fs::read_dir(&request.library)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .collect();
+        request.library = PathBuf::new();
+        let report = call(request);
+        assert_eq!(report["frames"].as_array().unwrap().len(), 6);
+        assert_eq!(report["missing"], json!([false]));
     }
     #[test]
     fn library_grades_and_builds_shared_aba_assignments() {

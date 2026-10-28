@@ -7,15 +7,17 @@ At that audit baseline, the core could integrate different calibration sessions
 on a shared canvas and replay those assignments, but lacked the shared PSF Guard
 planning policy and expanded raw-file planning under per-light calibration.
 
-The current dependency is published Seiza/C ABI **0.46.0**, calibration **0.10.0**
-and stacking **0.53.0**. Seiza #385 supplied the shared policy and
+The dependency is based on published Seiza/C ABI **0.46.0**, calibration **0.10.0**
+and stacking **0.53.0**, with an exact Git pin for the shared response-preparation
+and one-set association update. Seiza #385 supplied the shared policy and
 `seiza_live_stacker_open_fits_expanding_sessions`; the generated header now exposes
 both. The Mac now adapts cached host records to `library::evaluate`, executes its
 recipes and flat-retry policy, and exposes graded matching/settings in Stack
 Images. Both canvas modes use per-light sessions; the expanded path calls the
 released session-aware opener. Desktop tests cover the actual driver, A→B→A
-calibration/replay and per-rig gates. Measured flat-family evidence is not supplied
-yet; this is graded metadata/time matching, not full PSF Guard parity. See the
+calibration/replay and per-rig gates. The Mac now supplies raw-flat response measurements and native pair comparisons
+to the planner. Light-background evidence, correction maps and manual group
+choices remain unconnected; full PSF Guard parity is still incomplete. See the
 [current setup and limitations](STACKING-CALIBRATION.md).
 
 ## Verified contracts from the original audit
@@ -55,7 +57,7 @@ The reusable policy behind PSF Guard's library selection and measured flat
 groups is now in Seiza, with versioned records and explanations through C and
 Python. Keep database, filesystem/cache and bookmark access in the hosts.
 Complete measured-family fixture comparisons remain a prerequisite for claiming
-full parity. The enabled metadata/time path preserves ungraded eligibility, suspect warnings, poor exclusion, persistent
+full parity. The enabled shared path preserves ungraded eligibility, suspect warnings, poor exclusion, persistent
 choices, hard compatibility, measured/unknown angle bases and fitted pedestal
 recipes. Default numbers must come from the shared implementation.
 

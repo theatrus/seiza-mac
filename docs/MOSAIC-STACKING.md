@@ -66,8 +66,10 @@ build/reuse its native master recipes. One mosaic output can use several
 calibration sessions. Expanded canvas planning and integration receive the same
 per-light assignments, including when lights alternate between sessions. See
 [graded calibration setup](STACKING-CALIBRATION.md) for review and global/per-rig
-settings. Flat-family evidence is currently limited to Seiza's metadata/time
-fallback; measured dust/response families are not supplied by this setup yet.
+settings. Flat responses and requested pair comparisons feed Seiza's measured groups
+and change boundaries automatically. Flats and darks can independently use
+automatic association or one compatible supplied set. Light-background evidence,
+correction maps and manual group choices remain outside this setup.
 
 ## Choose canvas and memory
 

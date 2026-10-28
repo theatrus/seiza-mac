@@ -1,7 +1,8 @@
 # Graded calibration in Stack Images
 
-Stack Images uses published Seiza/C ABI **0.46.0**, calibration **0.10.0** and
-stacking **0.53.0** for library grading, per-light matching, master recipes and
+Stack Images pins the shared calibration-association update in Seiza (see the
+exact Git revision in `Rust/seiza-mac-core/Cargo.toml`), based on **0.46.0**,
+calibration **0.10.0** and stacking **0.53.0** for library grading, per-light matching, master recipes and
 shared-canvas execution. Fixed reference and Expanded mosaic both support several
 calibration sessions within one output. Live acquisition retains its existing
 preparation workflow.
@@ -9,19 +10,20 @@ preparation workflow.
 ## Use the library
 
 1. Select lights from images, folders or TXT/CSV lists and open **Stack Images**.
-2. Expand **Calibration**, choose **Match graded calibration library**, then choose
-   a folder containing FITS/XISF bias, dark, dark-flat and flat frames or masters.
+2. Expand **Calibration**, choose **Graded calibration files or library**, then add
+   files or choose a folder containing FITS/XISF bias, dark, dark-flat and flat frames or masters.
 3. Set **Calibration matching and grading settings**, globally or for a rig.
    Per-rig controls become available after the first analysis. A rig is identified
    by the camera and telescope metadata; gain, offset and other sensor fields
    remain part of Seiza's compatibility rules.
-4. Run **Analyze Calibration**. Discovery and measurement run off the main thread.
+4. Analysis runs automatically when files, lights or settings change.
+   **Analyze Calibration** can refresh it manually. Discovery and measurement run off the main thread.
    This step does not build masters. Unchanged measurements are reused and
    screened again using the current settings and grading peers.
 5. Open **Review Grades and Matches**. Inspect calibration grades and reasons,
    the selected files for each light, and each session's master recipes. **Keep
    out**, **Use anyway** and **Clear choice** persist against the exact source
-   path and fingerprint. Choices or settings changes require another analysis.
+   path and fingerprint. Choices or settings changes trigger another analysis.
 6. Choose **Incomplete lights**: **Stop and review** (default), **Exclude from
    stack**, or **Keep with available calibration**. The setup checks that every
    output retains at least two usable lights when excluding incomplete ones.
@@ -40,7 +42,7 @@ error; Keep/Exclude does not hide those execution failures.
 
 ## Settings and shared decisions
 
-The app renders the shared schema's matching, dark-selection and grade controls,
+The app renders the shared schema's matching, dark-selection, flat-group and grade controls,
 including their defaults, native units and help. It persists global settings,
 per-rig overrides, quality choices, incomplete-light policy, flat star masking and
 flat-stability retry options. A rig can inherit each global value independently.
@@ -53,6 +55,24 @@ immutable metadata and measurements to `seiza_calibration::library::evaluate`.
 Seiza determines grading peers, grades, compatible candidates, coherent cohorts,
 external-master adoption, effective gates, session identities and master recipes.
 Identical recipes share cached masters across lights and output groups.
+
+Flats and darks each have an independent **Group and match automatically** /
+**Use all as one set** choice, defaulting to automatic. Automatic flats use
+Seiza's raw-response preparation, bounded sample selection, pixel measurements
+and requested pair comparisons to establish response groups and change windows.
+The Flat groups review tab shows measured sessions, families and changes. Darks
+use the existing shared sensor/exposure/temperature and temporal selection.
+One-set mode includes every eligible compatible input of that kind across
+nights, without the automatic 64-input cap. It retains grading/exclusions and
+physical gates, refuses incompatible sets or mixed/multiple masters, and disables
+alternate-flat-session retries. Stability can still trim drifting raw flats.
+
+Response planes are cached independently of settings and pedestal estimates.
+Updated settings regrade and regroup stored measurements. Pair comparison cache
+keys include response source stamps, pedestal levels and metric versions.
+Untimed raw flats are explicitly reported; they cannot establish temporal changes.
+Unknown/inconclusive light placement is reported as incomplete calibration and
+follows the selected Stop/Exclude/Keep policy.
 
 The executor uses the native master builder with the recipe's exact dependencies,
 defect suppression, masking and dark screening. Flat stability measurements feed
@@ -93,17 +113,19 @@ stamp, not a cryptographic hash of every pixel. Staged sources and masters have
 independently checked stamps, so corrupted or removed cache files are regenerated
 or refused. Sources and historical masters cannot be overwritten by an output.
 Scoped library/input URL access is retained during analysis, execution and the
-stack, including after the review sheet closes. Directory symlinks are not
+stack, including explicitly provided file grants and after the review sheet closes. Directory symlinks are not
 traversed; duplicate physical inputs are detected.
 
 ## Remaining parity work
 
-This delivery supports graded metadata/time matching, not PSF Guard's complete
-measured flat-response workflow. Flat response extraction/comparison, measured
-families and change boundaries, manual family/split/join choices and light-side
-pixel evidence are not yet supplied to the shared planner. The setup and report
-state this explicitly; measured-family controls are not exposed. The native
-metadata/time fallback is used when measured evidence is unavailable.
+The workflow now supplies measured flat responses, comparisons, families and
+change boundaries to the shared planner. It does not yet supply light-background
+pixel evidence, change correction maps or manual family/split/join choices.
+Ambiguous change placement is flagged as incomplete; a correction is never
+claimed applied without its pixels. Seiza's metadata/time fallback remains
+available when response evidence is unavailable (for example missing capture
+times). These remaining PSF Guard host features need their own shared preparation
+contract and cross-host fixtures.
 
 Catalog-specific night/display controls, per-frame validity editing and light
 check/report settings are also not exposed in this setup. The shared APIs support

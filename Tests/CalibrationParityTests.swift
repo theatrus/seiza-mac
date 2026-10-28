@@ -426,6 +426,37 @@ final class GradedCalibrationWorkflowTests: XCTestCase {
                 options: options, calibration: .init(), libraryPlan: plan), cancellation: .init()) { _ in })
         }
     }
+    func testLegacyPreferencesRetainSettingsAndDefaultBothAssociationModes() throws {
+        let old = Data(#"{"settings":{"rotation_tolerance_deg":12},"incomplete":"keep","flatStarMasking":true}"#.utf8)
+        let restored = try JSONDecoder().decode(LibraryPreferences.self, from: old)
+        XCTAssertEqual(restored.flatAssociation, .automatic)
+        XCTAssertEqual(restored.darkAssociation, .automatic)
+        XCTAssertEqual(restored.settings["rotation_tolerance_deg"], .number(12))
+        XCTAssertEqual(restored.incomplete, "keep")
+        XCTAssertTrue(restored.flatStarMasking)
+        var changed = restored
+        changed.flatAssociation = .oneSet
+        let request = LibraryRequest(operation: "analyze", provided: [URL(fileURLWithPath: "/flat.fits")], preferences: changed)
+        let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as! [String: Any]
+        XCTAssertEqual(json["flatAssociation"] as? String, "one_set")
+        XCTAssertEqual(json["darkAssociation"] as? String, "automatic")
+        XCTAssertEqual(json["provided"] as? [String], ["/flat.fits"])
+        XCTAssertFalse(request.cache.isEmpty)
+        XCTAssertTrue(request.accessURLs.contains(URL(fileURLWithPath: "/flat.fits")))
+    }
+    func testProvidedFilesAnalyzeWithoutLibraryAndUseIndependentAssociationSettings() async throws {
+        let fixture = try Fixture(); defer { fixture.remove() }
+        let files = try FileManager.default.contentsOfDirectory(at: fixture.library, includingPropertiesForKeys: nil)
+        var preferences = LibraryPreferences()
+        preferences.flatAssociation = .oneSet
+        var request = LibraryRequest(operation: "analyze", lights: fixture.lights, provided: files, preferences: preferences)
+        request.cache = fixture.cache.path
+        let review = try await CalibrationLibraryService.perform(request)
+        XCTAssertEqual(review.assignments, [0, 1, 0])
+        XCTAssertEqual(review.missing, [false, false, false])
+        XCTAssertTrue(review.grouping["sessions"].array.isEmpty)
+        XCTAssertEqual(review.frames.count, 6)
+    }
     @MainActor func testNativeSettingsSchemaAndPreferencesRoundTripAndInvalidateReview() throws {
         let model = CalibrationLibraryModel()
         model.loadSchema()

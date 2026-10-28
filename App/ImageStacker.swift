@@ -88,7 +88,7 @@ enum StackCalibrationSource: String, CaseIterable, Identifiable, Sendable {
     var title: String {
         switch self {
         case .masters: "None or existing masters"
-        case .automatic: "Match graded calibration library"
+        case .automatic: "Graded calibration files or library"
         }
     }
 }
@@ -1456,6 +1456,7 @@ struct ImageStackWorkflowView: View {
     @State private var calibration = ImageStackCalibration()
     @State private var calibrationSource = StackCalibrationSource.masters
     @State private var calibrationLibrary: URL?
+    @State private var providedCalibration: [URL] = []
     @State private var splitByFilenameFilter = true
     @State private var outputBaseName = "stacked"
     @State private var groupsPanelsAutomatically = false
@@ -1512,12 +1513,13 @@ struct ImageStackWorkflowView: View {
                 })
         }
         .sheet(isPresented: $showsLibraryReview) {
-            if let library = calibrationLibrary {
-                CalibrationLibraryReviewView(model: libraryModel, library: library, lights: libraryLights)
-            }
+            CalibrationLibraryReviewView(model: libraryModel, library: calibrationLibrary, lights: libraryLights, provided: providedCalibration)
         }
-        .onChange(of: libraryLights) { _, _ in libraryModel.invalidate() }
-        .onChange(of: calibrationLibrary) { _, _ in libraryModel.invalidate() }
+        .onChange(of: libraryLights) { _, _ in analyzeCalibration() }
+        .onChange(of: calibrationLibrary) { _, _ in analyzeCalibration() }
+        .onChange(of: providedCalibration) { _, _ in analyzeCalibration() }
+        .onChange(of: libraryModel.preferences) { _, _ in analyzeCalibration() }
+        .onChange(of: calibrationSource) { _, _ in analyzeCalibration() }
         .onDisappear {
             libraryModel.task?.cancel()
             preparationTask?.cancel()
@@ -1809,7 +1811,7 @@ struct ImageStackWorkflowView: View {
                             )
                         }
                     } else {
-                        Text("Grade the library, review matches for every light, then build and reuse shared masters. Mosaics can use several calibration sessions in one output.")
+                        Text("Provide calibration files or a library folder. Frames are graded, grouped and matched automatically; masters are built when stacking. Mosaics can use several calibration sessions in one output.")
                             .font(.caption).foregroundStyle(.secondary)
                         LabeledContent("Library") {
                             HStack {
@@ -1823,10 +1825,23 @@ struct ImageStackWorkflowView: View {
                                 Button("Choose…") { chooseCalibrationLibrary() }
                             }
                         }
+                        LabeledContent("Files") {
+                            HStack {
+                                Text("\(providedCalibration.count) provided calibration frames")
+                                Button("Add…") { chooseCalibrationFiles() }
+                                if !providedCalibration.isEmpty { Button("Clear") { providedCalibration = [] } }
+                            }
+                        }
+                        Picker("Flats", selection: $libraryModel.preferences.flatAssociation) {
+                            ForEach(LibraryAssociation.allCases) { Text($0.title).tag($0) }
+                        }
+                        Picker("Darks", selection: $libraryModel.preferences.darkAssociation) {
+                            ForEach(LibraryAssociation.allCases) { Text($0.title).tag($0) }
+                        }
                         HStack {
                             Button(libraryModel.busy ? "Analyzing…" : "Analyze Calibration") {
-                                if let library = calibrationLibrary { libraryModel.analyze(library: library, lights: libraryLights) }
-                            }.disabled(calibrationLibrary == nil || libraryModel.busy)
+                                libraryModel.analyze(library: calibrationLibrary, lights: libraryLights, provided: providedCalibration)
+                            }.disabled((calibrationLibrary == nil && providedCalibration.isEmpty) || libraryModel.busy)
                             Button("Review Grades and Matches…") { showsLibraryReview = true }
                                 .disabled(libraryModel.review == nil)
                         }
@@ -2007,11 +2022,7 @@ struct ImageStackWorkflowView: View {
             }
         }
         if calibrationSource == .automatic {
-            guard let calibrationLibrary,
-                FileManager.default.fileExists(atPath: calibrationLibrary.path)
-            else {
-                return "Choose a calibration library folder."
-            }
+            if calibrationLibrary == nil && providedCalibration.isEmpty { return "Choose calibration files or a library folder." }
             if libraryModel.busy { return "Wait for calibration analysis to finish." }
             guard let review = libraryModel.review, !libraryModel.stale else { return "Analyze and review calibration before stacking." }
             if libraryModel.preferences.incomplete == "stop", review.missing.contains(true) { return "Some lights have incomplete calibration. Review their matches or change Incomplete lights." }
@@ -2090,6 +2101,28 @@ struct ImageStackWorkflowView: View {
         }
     }
 
+    private func analyzeCalibration() {
+        guard calibrationSource == .automatic, !libraryLights.isEmpty,
+              calibrationLibrary != nil || !providedCalibration.isEmpty else { libraryModel.invalidate(); return }
+        libraryModel.analyze(library: calibrationLibrary, lights: libraryLights, provided: providedCalibration, debounce: true)
+    }
+
+    private func chooseCalibrationFiles() {
+        isChoosingFile = true
+        Task { @MainActor in
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = true
+            panel.canChooseDirectories = false
+            panel.allowsMultipleSelection = true
+            panel.message = "Choose raw calibration frames or masters. FITS/XISF headers identify bias, dark, dark-flat and flat frames."
+            let chosen: [URL] = await withCheckedContinuation { continuation in
+                panel.begin { response in continuation.resume(returning: response == .OK ? panel.urls : []) }
+            }
+            for url in chosen where !providedCalibration.contains(url) { providedCalibration.append(url) }
+            isChoosingFile = false
+        }
+    }
+
     private func chooseCalibrationLibrary() {
         isChoosingFile = true
         Task { @MainActor in
@@ -2138,7 +2171,7 @@ struct ImageStackWorkflowView: View {
             guard let outputSelection else { return }
             preparationNotice = nil
 
-            guard calibrationSource == .automatic, let library = calibrationLibrary
+            guard calibrationSource == .automatic
             else {
                 startBatch(makeJobs(
                     groups: groups,
@@ -2157,9 +2190,10 @@ struct ImageStackWorkflowView: View {
                     let lights = libraryLights
                     let preferences = libraryModel.preferences
                     preparationMessage = "Building reviewed calibration masters…"
-                    let prepared = try await CalibrationLibraryService.perform(LibraryRequest(operation: "execute",
-                        library: library, lights: lights, preferences: preferences, reviewKey: reviewed.reviewKey))
-                    let plan = LibraryPreparedPlan(review: prepared, originalPaths: lights.map(\.path), accessURLs: [library] + lights)
+                    let execution = LibraryRequest(operation: "execute", library: calibrationLibrary, lights: lights,
+                        provided: providedCalibration, preferences: preferences, reviewKey: reviewed.reviewKey)
+                    let prepared = try await CalibrationLibraryService.perform(execution)
+                    let plan = LibraryPreparedPlan(review: prepared, originalPaths: lights.map(\.path), accessURLs: execution.accessURLs)
                     let jobs = try makeLibraryJobs(groups: groups, outputSelection: outputSelection, plan: plan,
                         excludeIncomplete: preferences.incomplete == "exclude")
                     isPreparingCalibration = false
