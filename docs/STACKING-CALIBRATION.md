@@ -124,8 +124,12 @@ pixel evidence, change correction maps or manual family/split/join choices.
 Ambiguous change placement is flagged as incomplete; a correction is never
 claimed applied without its pixels. Seiza's metadata/time fallback remains
 available when response evidence is unavailable (for example missing capture
-times). These remaining PSF Guard host features need their own shared preparation
-contract and cross-host fixtures.
+times). Seiza now provides `plan_flat_work` / `finish_flat_work` for these stages,
+including cached metadata contexts, bounded evidence questions, manual choice
+resolution and correction dependencies. PSF Guard can drive them from its own
+records/pixels; this Mac adapter currently executes the raw-response grouping
+stage and flags unresolved light placement. The additional core stages are not
+yet connected to the Mac setup.
 
 Catalog-specific night/display controls, per-frame validity editing and light
 check/report settings are also not exposed in this setup. The shared APIs support
