@@ -22,12 +22,12 @@ fn atomic_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 fn measure(
-    plan: &policy::FlatResponsePlan,
+    plan: &policy::FlatSessionPlan,
     rows: &BTreeMap<String, &Cached>,
     cache: &Path,
     cancel: &CancelSignal,
 ) -> Result<Measured> {
-    let key = digest(format!("response-1-{}", plan.row.response_key));
+    let key = digest(format!("response-1-{}", plan.response_key()));
     let memo = cache.join(format!("response-{key}.json"));
     if let Ok(data) = std::fs::read(&memo)
         && let Ok(value) = serde_json::from_slice::<Measured>(&data)
@@ -38,7 +38,8 @@ fn measure(
     }
     let mut binned = Vec::new();
     let mut bin = None;
-    for id in &plan.sample_frames {
+    for sample in plan.combined() {
+        let id = &sample.frame_uuid;
         check(cancel)?;
         let row = rows
             .get(id)
@@ -90,16 +91,32 @@ fn corrected(row: &groups::ResponseRow, measured: &Measured) -> Result<metric::P
     .without_pedestal(row.pedestal_adu.unwrap_or(0.0) as f32))
 }
 pub(super) fn prepare(
-    planner: &policy::Request,
+    planner: &Planner,
     rows: &[Cached],
     cache: &Path,
     cancel: &CancelSignal,
     warnings: &mut Vec<String>,
 ) -> Result<Prepared> {
-    let plans = policy::plan_flat_responses(planner.clone()).map_err(error)?;
-    if !plans.unplanned.is_empty() {
-        warnings.push(format!("{} flats have no capture time; measured temporal grouping is unavailable for those files.",plans.unplanned.len()));
+    let plans = if planner.associations.flat == policy::Association::OneSet {
+        Vec::new()
+    } else {
+        policy::plan_flat_sessions(&planner.frames, &planner.nights, &planner.rules)
+    };
+    let unplanned = planner
+        .frames
+        .iter()
+        .filter(|frame| {
+            planner.associations.flat != policy::Association::OneSet
+                && frame.kind == Kind::Flat
+                && !frame.is_master
+                && frame.kept_out.is_none()
+                && frame.captured_at.is_none()
+        })
+        .count();
+    if unplanned > 0 {
+        warnings.push(format!("{unplanned} flats have no capture time; measured temporal grouping is unavailable for those files."));
     }
+    let pedestals = policy::PedestalTable::new(&planner.frames, &planner.quality);
     let by_id = rows
         .iter()
         .map(|r| (r.frame.frame_uuid.clone(), r))
@@ -107,21 +124,51 @@ pub(super) fn prepare(
     let mut grouping = planner.grouping.clone();
     grouping.responses.clear();
     grouping.comparisons.clear();
-    grouping.limits = plans.limits;
-    grouping.night_boundaries = plans.night_boundaries;
+    grouping.limits = plans
+        .iter()
+        .map(|p| p.rig_uuid.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|rig_uuid| groups::RigLimits {
+            limits: planner.rules.for_rig(&rig_uuid).grouping_limits(),
+            rig_uuid,
+        })
+        .collect();
+    grouping.night_boundaries = planner.nights.boundaries();
     let mut measured = BTreeMap::new();
     let mut sources = Vec::new();
-    for plan in plans.plans {
+    for plan in plans {
+        if !plan.measurable()
+            || !planner
+                .rules
+                .for_rig(&plan.rig_uuid)
+                .grouping_limits()
+                .measured
+        {
+            continue;
+        }
         check(cancel)?;
-        let mut row = plan.row.clone();
+        let pedestal = pedestals.for_session(&plan);
+        let mut row = plan.pending_row(pedestal);
         match measure(&plan, &by_id, cache, cancel) {
             Ok(value) => {
-                row.frames = value.frames;
-                row.width = Some(value.width);
-                row.height = Some(value.height);
-                row.bin = Some(value.bin);
-                row.level_adu = Some(f64::from(value.level));
-                row.noise = Some(f64::from(value.noise));
+                let response = metric::FlatResponse {
+                    plane: metric::decode_plane(&std::fs::read(&value.plane.path).map_err(error)?)
+                        .ok_or("Invalid response cache")?,
+                    bin: value.bin,
+                    level: value.level,
+                    noise: value.noise,
+                    frames: value.frames,
+                };
+                row = plan.measured_row(
+                    pedestal,
+                    policy::ResponseRead {
+                        read: value.frames,
+                        bin: value.bin,
+                        response: Some(&response),
+                        unread: Vec::new(),
+                    },
+                );
                 sources.push(value.plane.clone());
                 measured.insert(row.response_key.clone(), value);
             }
@@ -210,30 +257,6 @@ pub(super) struct Prepared {
     pub sources: Vec<Source>,
     measured: BTreeMap<String, Measured>,
 }
-fn work_request(planner: &policy::Request, lights: &[Cached]) -> policy::FlatWorkRequest {
-    policy::FlatWorkRequest {
-        library: planner.clone(),
-        light_context: planner
-            .lights
-            .iter()
-            .enumerate()
-            .map(|(index, meta)| {
-                let found = lights
-                    .iter()
-                    .enumerate()
-                    .find(|(_, l)| l.source.path == meta.path);
-                policy::FlatLightContext {
-                    light_index: index,
-                    id: found.map(|(i, _)| i as i64),
-                    target: found
-                        .and_then(|(_, l)| l.target.clone())
-                        .unwrap_or_default(),
-                    ..Default::default()
-                }
-            })
-            .collect(),
-    }
-}
 fn read_binned(light: &Cached, cache: &Path, cancel: &CancelSignal) -> Result<metric::Plane> {
     check(cancel)?;
     verify(&[light.source.clone(), light.processed_source.clone()])?;
@@ -273,22 +296,73 @@ fn read_binned(light: &Cached, cache: &Path, cancel: &CancelSignal) -> Result<me
     atomic_json(&memo, &stamp(&path)?)?;
     Ok(plane)
 }
-fn samples(
-    ids: &[i64],
+fn sample_paths(
+    samples: &[policy::EvidenceLight],
     lights: &[Cached],
     cache: &Path,
     cancel: &CancelSignal,
 ) -> Result<Vec<metric::Plane>> {
-    ids.iter()
-        .map(|id| {
-            let index = usize::try_from(*id).map_err(|_| "Invalid evidence light ID")?;
+    samples
+        .iter()
+        .map(|sample| {
             read_binned(
-                lights.get(index).ok_or("Evidence light ID is missing")?,
+                lights
+                    .iter()
+                    .find(|l| l.source.path == sample.path)
+                    .ok_or("Missing evidence light")?,
                 cache,
                 cancel,
             )
         })
         .collect()
+}
+#[derive(Serialize)]
+struct Correction {
+    light_indices: Vec<usize>,
+    correction: policy::FlatCorrection,
+    before: groups::ResponseRow,
+    after: groups::ResponseRow,
+    bin: usize,
+    divide: bool,
+}
+fn corrections(planner: &Planner) -> Result<Vec<Correction>> {
+    let library = planner.library()?;
+    let book = library.flat_book();
+    let mut out: Vec<Correction> = Vec::new();
+    for (index, light) in planner.lights.iter().enumerate() {
+        let selected = planner.select(&library, light);
+        let Some(correction) = selected.flat_basis.correction() else {
+            continue;
+        };
+        if let Some(existing) = out.iter_mut().find(|c| c.correction.key == correction.key) {
+            existing.light_indices.push(index);
+            continue;
+        }
+        let before = book
+            .sessions
+            .iter()
+            .find(|s| s.row.response_key == correction.before_response)
+            .ok_or("Missing before correction response")?
+            .row
+            .clone();
+        let after = book
+            .sessions
+            .iter()
+            .find(|s| s.row.response_key == correction.after_response)
+            .ok_or("Missing after correction response")?
+            .row
+            .clone();
+        out.push(Correction {
+            light_indices: vec![index],
+            correction: correction.clone(),
+            bin: before.bin.ok_or("Missing correction binning")?,
+            before,
+            after,
+            divide: correction.light_side
+                == seiza_calibration::flat_response::evidence::Side::Before,
+        });
+    }
+    Ok(out)
 }
 impl Prepared {
     fn plane(&self, row: &groups::ResponseRow) -> Result<metric::Plane> {
@@ -326,192 +400,252 @@ impl Prepared {
     }
     pub(super) fn connect(
         &mut self,
-        planner: &mut policy::Request,
+        planner: &mut Planner,
         lights: &[Cached],
         cache: &Path,
         cancel: &CancelSignal,
         warnings: &mut Vec<String>,
-    ) -> Result<policy::FlatWorkPlans> {
-        use seiza_calibration::flat_response::{choice, evidence};
+    ) -> Result<Value> {
         planner.grouping = self.grouping.clone();
         planner.available_responses = self.measured.keys().cloned().collect();
-        let initial = policy::plan_flat_work(work_request(planner, lights)).map_err(error)?;
-        planner.grouping = initial.grouping;
-        for question in initial.changes {
-            check(cancel)?;
-            if question.answered {
-                continue;
-            }
-            let ids = question
-                .filters
-                .iter()
-                .flat_map(|f| f.sample_lights.iter().copied())
-                .collect::<Vec<_>>();
-            let memo = cache.join(format!(
-                "change-evidence-{}.json",
-                self.evidence_key(&question, &ids, lights)?
-            ));
-            let cached = std::fs::read(&memo)
-                .ok()
-                .and_then(|bytes| serde_json::from_slice::<groups::EvidenceRow>(&bytes).ok())
-                .filter(|row| {
-                    row.session_key == question.session_key && row.event_key == question.event_key
-                });
-            let row = if let Some(row) = cached {
-                row
-            } else {
-                let mut fits = Vec::new();
-                for filter in &question.filters {
-                    check(cancel)?;
-                    let before = self.plane(&filter.before)?;
-                    let after = self.plane(&filter.after)?;
-                    let reference = self.plane(&filter.reference)?;
-                    let Some(map) = evidence::change_map(
-                        &before,
-                        &after,
-                        &filter.vignetting_changes,
-                        filter.before.bin.unwrap_or(1),
-                    ) else {
-                        continue;
-                    };
-                    let binned = samples(&filter.sample_lights, lights, cache, cancel)?;
-                    let binned = binned
-                        .into_iter()
-                        .filter(|p| p.width == map.width && p.height == map.height)
-                        .collect::<Vec<_>>();
-                    let Some(background) = evidence::background(
-                        &binned,
-                        filter.pedestal_adu.unwrap_or(0.0) as f32,
-                        filter.reference.bin.unwrap_or(1),
-                    ) else {
-                        continue;
-                    };
-                    check(cancel)?;
-                    if let Some(fit) =
-                        evidence::fit(&background, &reference, filter.reference_side, &map)
-                    {
-                        fits.push(groups::EvidenceFit {
-                            filter: filter.filter.clone(),
-                            targets: filter.targets.clone(),
-                            lights: binned.len(),
-                            carried: fit.carried,
-                            spread: fit.spread.is_finite().then_some(fit.spread),
-                            verdict: fit.verdict,
-                        });
-                    }
-                }
-                let result =
-                    policy::finish_flat_work(policy::FlatWorkAnswer::Change { question, fits })
-                        .map_err(error)?;
-                let policy::FlatWorkResult::Change { row } = result else {
-                    return Err("Unexpected change-evidence result".into());
+        // Mac owns the acquisition identities; Seiza forms imaging sessions.
+        planner.grouping.imaging_lights = lights
+            .iter()
+            .enumerate()
+            .filter_map(|(id, l)| {
+                Some((
+                    id as i64,
+                    Some(l.light.rig_uuid.clone()),
+                    l.light.timestamp?,
+                ))
+            })
+            .collect();
+        planner.grouping.profile_rigs = lights
+            .iter()
+            .map(|l| l.light.rig_uuid.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|rig| (Some(rig.clone()), vec![rig]))
+            .collect();
+        if planner.associations.flat != policy::Association::OneSet {
+            let library = planner.library()?;
+            let book = library.flat_book();
+            let pedestals = policy::PedestalTable::new(&planner.frames, &planner.quality);
+            for (event, session) in book.sessions_needing_evidence() {
+                check(cancel)?;
+                let Some(question) = policy::change_question(
+                    book,
+                    event,
+                    session,
+                    planner.evidence_lights(
+                        &book.imaging[session],
+                        &book.events[event].rig_uuid,
+                        lights,
+                    ),
+                ) else {
+                    continue;
                 };
-                atomic_json(&memo, &row)?;
-                row
-            };
-            self.sources.push(stamp(&memo)?);
-            planner.grouping.evidence.push(row);
-        }
-        let family_plan = policy::plan_flat_work(work_request(planner, lights)).map_err(error)?;
-        planner.grouping = family_plan.grouping;
-        for question in family_plan.families {
-            check(cancel)?;
-            if question.answered {
-                continue;
-            }
-            let memo = cache.join(format!(
-                "family-evidence-{}.json",
-                self.evidence_key(&question, &question.sample_lights, lights)?
-            ));
-            let cached = std::fs::read(&memo)
-                .ok()
-                .and_then(|bytes| serde_json::from_slice::<groups::FamilyEvidenceRow>(&bytes).ok())
-                .filter(|row| {
-                    row.session_key == question.session_key
-                        && row.key == question.key
-                        && row.target == question.target
-                        && row.filter == question.filter
-                });
-            let row = if let Some(row) = cached {
-                row
-            } else {
-                let representatives = question
-                    .candidates
+                let ids = question
+                    .filters
                     .iter()
-                    .map(|candidate| candidate.response.as_ref())
-                    .collect::<Option<Vec<_>>>();
-                let mut count = 0;
-                let picked = if let Some(rows) = representatives
-                    && let Some(bin) = rows.first().and_then(|row| row.bin)
-                {
-                    let candidates = rows
-                        .iter()
-                        .map(|row| self.plane(row))
-                        .collect::<Result<Vec<_>>>()?;
-                    let binned = samples(&question.sample_lights, lights, cache, cancel)?;
-                    count = binned.len();
-                    if let Some(background) = evidence::background(
-                        &binned,
-                        question.pedestal_adu.unwrap_or(0.0) as f32,
-                        bin,
-                    ) {
-                        check(cancel)?;
-                        choice::choose_response(&background, &candidates, |a, b| {
-                            question.alike.contains(&(a, b)) || question.alike.contains(&(b, a))
-                        })
-                    } else {
-                        Default::default()
-                    }
+                    .flat_map(|f| f.lights.iter())
+                    .filter_map(|l| {
+                        lights
+                            .iter()
+                            .position(|c| c.source.path == l.path)
+                            .map(|i| i as i64)
+                    })
+                    .collect::<Vec<_>>();
+                let memo = cache.join(format!(
+                    "change-evidence-{}.json",
+                    self.evidence_key(
+                        &(
+                            "native-change-2",
+                            book.evidence_key(&book.events[event], &book.imaging[session])
+                        ),
+                        &ids,
+                        lights
+                    )?
+                ));
+                let cached = std::fs::read(&memo)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<groups::EvidenceRow>(&bytes).ok())
+                    .filter(|r| {
+                        r.session_key == book.imaging[session].key
+                            && r.event_key
+                                == book.evidence_key(&book.events[event], &book.imaging[session])
+                    });
+                let row = if let Some(row) = cached {
+                    row
                 } else {
-                    warnings.push("Flat family evidence has no measured representative; its pixel choice remains unknown.".into());
-                    Default::default()
+                    let mut fits = Vec::new();
+                    for filter in &question.filters {
+                        check(cancel)?;
+                        let (before, after) = filter.map_responses(book);
+                        let Some(map) =
+                            filter.change_map(book, &self.plane(before)?, &self.plane(after)?)
+                        else {
+                            continue;
+                        };
+                        let binned = sample_paths(&filter.lights, lights, cache, cancel)?;
+                        let pedestal = filter
+                            .lights
+                            .first()
+                            .and_then(|l| lights.iter().find(|c| c.source.path == l.path))
+                            .and_then(|l| {
+                                pedestals.light_pedestal(
+                                    &l.light.rig_uuid,
+                                    l.light.gain,
+                                    l.light.offset,
+                                )
+                            });
+                        if let Some(fit) = filter.fit(
+                            book,
+                            binned,
+                            &self.plane(&book.sessions[filter.reference].row)?,
+                            &map,
+                            pedestal,
+                        ) {
+                            fits.push(fit);
+                        }
+                    }
+                    let row = question.row(book, fits).map_err(error)?;
+                    atomic_json(&memo, &row)?;
+                    row
                 };
-                let result = policy::finish_flat_work(policy::FlatWorkAnswer::Family {
-                    question,
-                    choice: picked,
-                    lights: count,
-                })
-                .map_err(error)?;
-                let policy::FlatWorkResult::Family { row } = result else {
-                    return Err("Unexpected family-evidence result".into());
-                };
-                atomic_json(&memo, &row)?;
-                row
-            };
-            self.sources.push(stamp(&memo)?);
-            planner.grouping.family_evidence.push(row);
+                self.sources.push(stamp(&memo)?);
+                planner.grouping.evidence.push(row);
+            }
+            // Rebuild the immutable book with change answers before asking
+            // family questions. Their keys/representatives are core decisions.
+            let library = planner.library()?;
+            let book = library.flat_book();
+            let rigs = book
+                .imaging
+                .iter()
+                .flat_map(|s| s.rigs.iter().cloned())
+                .collect::<BTreeSet<_>>();
+            for rig in rigs {
+                let questions = policy::family_questions(
+                    &library,
+                    &planner.rules,
+                    &rig,
+                    |session| planner.evidence_lights(session, &rig, lights),
+                    |path| {
+                        lights
+                            .iter()
+                            .find(|l| l.source.path == path)
+                            .map(|l| l.light.clone())
+                    },
+                );
+                for question in questions {
+                    check(cancel)?;
+                    if question.answered {
+                        continue;
+                    }
+                    let sampled = question.sample().into_iter().cloned().collect::<Vec<_>>();
+                    let ids = sampled
+                        .iter()
+                        .filter_map(|l| {
+                            lights
+                                .iter()
+                                .position(|c| c.source.path == l.path)
+                                .map(|i| i as i64)
+                        })
+                        .collect::<Vec<_>>();
+                    let memo = cache.join(format!(
+                        "family-evidence-{}.json",
+                        self.evidence_key(
+                            &(
+                                "native-family-2",
+                                &question.key,
+                                &book.imaging[question.session].key,
+                                &question.filter,
+                                &question.target,
+                                question.low,
+                                question.high
+                            ),
+                            &ids,
+                            lights
+                        )?
+                    ));
+                    let cached = std::fs::read(&memo)
+                        .ok()
+                        .and_then(|b| serde_json::from_slice::<groups::FamilyEvidenceRow>(&b).ok())
+                        .filter(|row| {
+                            policy::RetentionKey::of(row) == question.retention_key(book)
+                        });
+                    let row = if let Some(row) = cached {
+                        row
+                    } else {
+                        let row = if let Some(reps) = question.representatives(book) {
+                            let planes = reps
+                                .sessions()
+                                .iter()
+                                .map(|i| {
+                                    let row = &book.sessions[*i].row;
+                                    if self.measured.contains_key(&row.response_key) {
+                                        self.plane(row).map(Some)
+                                    } else {
+                                        Ok(None)
+                                    }
+                                })
+                                .collect::<Result<Vec<_>>>()?;
+                            let binned = sample_paths(&sampled, lights, cache, cancel)?;
+                            let pedestal = sampled
+                                .first()
+                                .and_then(|l| lights.iter().find(|c| c.source.path == l.path))
+                                .and_then(|l| {
+                                    pedestals.light_pedestal(
+                                        &l.light.rig_uuid,
+                                        l.light.gain,
+                                        l.light.offset,
+                                    )
+                                });
+                            question.decide(book, &reps, binned, planes, pedestal)
+                        } else {
+                            warnings.push("Flat family evidence has no measured representative; its pixel choice remains unknown.".into());
+                            question.row(book, &Default::default(), 0).map_err(error)?
+                        };
+                        atomic_json(&memo, &row)?;
+                        row
+                    };
+                    self.sources.push(stamp(&memo)?);
+                    planner.grouping.family_evidence.push(row);
+                }
+            }
         }
-        let work = policy::plan_flat_work(work_request(planner, lights)).map_err(error)?;
-        planner.grouping = work.grouping.clone();
-        self.grouping = work.grouping.clone();
-        for state in &work.overrides {
+        self.grouping = planner.grouping.clone();
+        let library = planner.library()?;
+        let book = library.flat_book();
+        for state in &book.overrides {
             if let groups::OverrideStatus::Orphaned { reason } = &state.status {
                 warnings.push(format!("Saved flat group choice: {reason}"));
             }
         }
-        Ok(work)
+        Ok(
+            json!({"algorithm_version":2,"grouping":planner.grouping,"corrections":corrections(planner)?,"overrides":book.overrides}),
+        )
     }
     pub(super) fn correct_master(
         &self,
         flat: &Built,
-        planner: &policy::Request,
-        lights: &[Cached],
+        planner: &Planner,
+        _lights: &[Cached],
         cache: &Path,
         cancel: &CancelSignal,
         warnings: &mut Vec<String>,
     ) -> Result<Built> {
-        let work = policy::plan_flat_work(work_request(planner, lights)).map_err(error)?;
-        if work.corrections.is_empty() {
+        let corrections = corrections(planner)?;
+        if corrections.is_empty() {
             return Ok(flat.clone());
         }
-        if work.corrections.len() != 1
-            || work.corrections[0].light_indices.len() != planner.lights.len()
-        {
+        if corrections.len() != 1 || corrections[0].light_indices.len() != planner.lights.len() {
             return Err(
                 "The executed flat correction no longer shares one calibration session".into(),
             );
         }
-        let plan = &work.corrections[0];
+        let plan = &corrections[0];
         let before = self
             .measured
             .get(&plan.before.response_key)

@@ -9,7 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::{Path, PathBuf};
 
+mod planning;
 mod responses;
+use planning::{Planner, RigSettings, Setting};
 
 type Result<T> = std::result::Result<T, String>;
 #[derive(Default, Deserialize)]
@@ -19,8 +21,8 @@ struct Request {
     library: PathBuf,
     lights: Vec<PathBuf>,
     cache: PathBuf,
-    settings: Vec<policy::Setting>,
-    rigs: Vec<policy::RigSettings>,
+    settings: Vec<Setting>,
+    rigs: Vec<RigSettings>,
     choices: Vec<Choice>,
     review_key: Option<String>,
     incomplete: String,
@@ -415,9 +417,7 @@ fn discover(
 
 fn run(request: Request, cancel: CancelSignal) -> Result<Value> {
     if request.operation == "schema" {
-        return Ok(
-            json!({"settings":policy::evaluate(Default::default()).map_err(error)?.settings_schema}),
-        );
+        return Ok(json!({"settings":policy::rules::fields()}));
     }
     if request.operation == "verify" {
         verify(&request.sources)?;
@@ -430,12 +430,7 @@ fn run(request: Request, cancel: CancelSignal) -> Result<Value> {
         return Err("Choose lights and a calibration cache".into());
     }
     // Validate all native settings before touching image files.
-    policy::evaluate(policy::Request {
-        global_settings: request.settings.clone(),
-        rigs: request.rigs.clone(),
-        ..Default::default()
-    })
-    .map_err(error)?;
+    planning::rules(&request.settings, &request.rigs)?;
     std::fs::create_dir_all(&request.cache).map_err(error)?;
     let cache = request.cache.canonicalize().map_err(error)?;
     let library = if request.library.as_os_str().is_empty() {
@@ -512,19 +507,7 @@ fn run(request: Request, cancel: CancelSignal) -> Result<Value> {
             row.quality.override_choice = Some(choice.choice);
         }
     }
-    let mut planner = policy::Request {
-        frames: rows.iter().map(|r| r.frame.clone()).collect(),
-        lights: lights.iter().map(|r| r.light.clone()).collect(),
-        quality: rows.iter().map(|r| r.quality.clone()).collect(),
-        global_settings: request.settings.clone(),
-        rigs: request.rigs.clone(),
-        regrade: true,
-        flat_star_masking: request.flat_star_masking,
-        flat_stability: request.flat_stability.clone(),
-        flat_association: request.flat_association,
-        dark_association: request.dark_association,
-        ..Default::default()
-    };
+    let mut planner = Planner::new(&request, &rows, &lights)?;
     planner.grouping.group_overrides = request.group_overrides.clone();
     for choice in request
         .light_choices
@@ -552,15 +535,11 @@ fn run(request: Request, cancel: CancelSignal) -> Result<Value> {
     }
     let mut responses = responses::prepare(&planner, &rows, &cache, &cancel, &mut warnings)?;
     let work = responses.connect(&mut planner, &lights, &cache, &cancel, &mut warnings)?;
-    let grouping_snapshot = serde_json::to_value(
-        seiza_calibration::flat_response::groups::evaluate(planner.grouping.clone())
-            .map_err(error)?,
-    )
-    .map_err(error)?;
+    let grouping_snapshot = planning::grouping(planner.library()?.flat_book());
     let light_options = responses.light_options(&lights)?;
-    let mut flat_work = serde_json::to_value(work).map_err(error)?;
+    let mut flat_work = work;
     flat_work["group_edges"] = serde_json::to_value(responses.group_edges()?).map_err(error)?;
-    let snapshot = policy::evaluate(planner.clone()).map_err(error)?;
+    let snapshot = planner.snapshot()?;
     let mut sources: Vec<_> = rows
         .iter()
         .chain(&lights)
@@ -655,23 +634,23 @@ fn run(request: Request, cancel: CancelSignal) -> Result<Value> {
             ),
         );
     }
-    for (row, grade) in rows.iter().zip(&snapshot.grades) {
+    // Present the exact judgments that kept frames in/out of the library.
+    let quality = &planner.quality;
+    let judged = &planner.judged;
+    for row in &rows {
+        let grade = judged.get(&row.frame.frame_uuid);
         frames.push(Frame {
             path: row.source.path.clone(),
             fingerprint: row.source.fingerprint.clone(),
             id: row.frame.frame_uuid.clone(),
             kind: row.frame.kind,
             is_master: row.frame.is_master,
-            grade: grade
-                .judged
-                .as_ref()
-                .map(|g| format!("{:?}", g.grade).to_lowercase()),
-            reason: grade
-                .kept_out
-                .clone()
-                .or_else(|| grade.judged.as_ref().and_then(|g| g.reason.clone())),
-            measurement_state: grade.measurement_state.clone(),
-            error: grade.measure_error.clone(),
+            grade: grade.map(|g| g.grade.to_string()),
+            reason: quality
+                .kept_out(&row.frame, grade)
+                .or_else(|| grade.and_then(|g| g.reason.clone())),
+            measurement_state: quality.measurement_state(&row.frame).to_string(),
+            error: row.quality.measure_error.clone(),
         });
     }
     let mut file_sessions = Vec::new();
@@ -966,18 +945,12 @@ fn flat_attempt(
 // A retry is rematched through the complete shared planner. In particular, an
 // alternate flat exposure must select its own dark-flat rather than inherit the
 // first flat's dependencies. Only the permitted flat candidates are narrowed.
-fn retry_context(
-    context: &policy::Request,
-    ids: &[String],
-) -> Result<(policy::Request, policy::Session)> {
+fn retry_context(context: &Planner, ids: &[String]) -> Result<(Planner, policy::Session)> {
     let mut request = context.clone();
     request
         .frames
         .retain(|f| f.kind != Kind::Flat || ids.contains(&f.frame_uuid));
-    request
-        .quality
-        .retain(|q| request.frames.iter().any(|f| f.frame_uuid == q.frame_uuid));
-    let snapshot = policy::evaluate(request.clone()).map_err(error)?;
+    let snapshot = request.snapshot()?;
     if snapshot.sessions.len() != 1 {
         return Err("The retry no longer has a shared calibration session".into());
     }
@@ -986,7 +959,7 @@ fn retry_context(
 #[allow(clippy::too_many_arguments)]
 fn execute(
     session: &policy::Session,
-    context: &policy::Request,
+    context: &Planner,
     rows: &BTreeMap<String, &Cached>,
     lights: &[Cached],
     responses: &responses::Prepared,
@@ -1004,26 +977,21 @@ fn execute(
             .any(|r| r.kind == Kind::Flat && r.action == RecipeAction::Integrate)
     {
         // Native candidate selection order is significant for alternate retries.
-        let snapshot = policy::evaluate(context.clone()).map_err(error)?;
-        let selection = snapshot
-            .selections
-            .first()
-            .ok_or("Missing flat selection")?;
-        let mut feedback = policy::FlatRetryRequest {
-            session: Some(session.clone()),
-            candidates: selection
-                .flat
-                .iter()
-                .map(|id| rows[id].frame.clone())
-                .collect(),
-            first: flat_attempt(session, &outputs, rows, cancel, warnings)?,
-            ..Default::default()
-        };
+        let library = context.library()?;
+        let light = context.lights.first().ok_or("Missing flat selection")?;
+        let selection = context.select(&library, light);
+        let mut feedback = policy::FlatRetry::for_session(
+            flat_attempt(session, &outputs, rows, cancel, warnings)?,
+            &selection.flat,
+            session,
+            &selection.rules,
+        )
+        .map_err(error)?;
         let mut trimmed = None;
         let mut alternate = None;
         loop {
             check(cancel)?;
-            let decision = policy::flat_retry(feedback.clone()).map_err(error)?;
+            let decision = feedback.next();
             if let Some(note) = decision.note {
                 warnings.push(note);
             }
@@ -1052,32 +1020,28 @@ fn execute(
                         Ok::<_, String>((attempt, (request, retry, built)))
                     })();
                     match action {
-                        A::TryTrimmed => {
-                            feedback.trimmed_attempted = true;
-                            match result {
-                                Ok((attempt, built)) => {
-                                    feedback.trimmed = Some(attempt);
-                                    trimmed = Some(built);
-                                }
-                                Err(e) => {
-                                    check(cancel)?;
-                                    warnings.push(format!("Trimmed flat retry: {e}"));
-                                }
+                        A::TryTrimmed => match result {
+                            Ok((attempt, built)) => {
+                                feedback.trimmed(Some(attempt)).map_err(error)?;
+                                trimmed = Some(built);
                             }
-                        }
-                        A::TryAlternate => {
-                            feedback.alternate_attempted = true;
-                            match result {
-                                Ok((attempt, built)) => {
-                                    feedback.alternate = Some(attempt);
-                                    alternate = Some(built);
-                                }
-                                Err(e) => {
-                                    check(cancel)?;
-                                    warnings.push(format!("Alternate flat retry: {e}"));
-                                }
+                            Err(e) => {
+                                check(cancel)?;
+                                warnings.push(format!("Trimmed flat retry: {e}"));
+                                feedback.trimmed(None).map_err(error)?;
                             }
-                        }
+                        },
+                        A::TryAlternate => match result {
+                            Ok((attempt, built)) => {
+                                feedback.alternate(Some(attempt)).map_err(error)?;
+                                alternate = Some(built);
+                            }
+                            Err(e) => {
+                                check(cancel)?;
+                                warnings.push(format!("Alternate flat retry: {e}"));
+                                feedback.alternate(None).map_err(error)?;
+                            }
+                        },
                         _ => unreachable!(),
                     }
                 }
@@ -1108,17 +1072,7 @@ fn execute(
                 }
             }
         }
-        effective_context.pedestal_evidence = vec![policy::PedestalEvidence {
-            session_key: effective.key.clone(),
-            estimates,
-            pinned: None,
-        }];
-        effective = policy::evaluate(effective_context.clone())
-            .map_err(error)?
-            .sessions
-            .into_iter()
-            .find(|s| s.key == effective.key)
-            .ok_or("Pedestal session changed")?;
+        effective.accept_pedestal(&estimates, None).map_err(error)?;
         if let Some(value) = effective.application.pedestal {
             // The fixed C opener has no scalar-pedestal slot. Materialize the
             // shared policy's accepted constant as a bias master for both paths.
@@ -1652,10 +1606,62 @@ mod tests {
         verify(&[source]).unwrap();
     }
     #[test]
+    fn native_sessions_share_master_sets_despite_candidate_order_and_unrelated_options() {
+        let (_dir, mut request) = fixture();
+        request.lights = vec![request.lights[0].clone(), request.lights[2].clone()];
+        let redated = |path: &Path, day: u8| {
+            let mut frame = FitsFrame::open(path).unwrap();
+            frame.headers.retain(|(key, _)| key != "DATE-OBS");
+            frame.headers.push((
+                "DATE-OBS".into(),
+                seiza_fits::HeaderValue::String(format!("2026-10-{day}T20:00:00Z")),
+            ));
+            publish_frame(path, &frame).unwrap();
+        };
+        redated(&request.lights[1], 22);
+        for index in 0..3 {
+            redated(
+                &request.library.join(format!("bias-100-{index}.fits")),
+                20 + index,
+            );
+        }
+        let review = call(request_from(&request, "analyze", None));
+        assert_ne!(
+            review["snapshot"]["selections"][0]["bias"][0],
+            review["snapshot"]["selections"][1]["bias"][0]
+        );
+        assert_eq!(review["snapshot"]["assignments"], json!([0, 0]));
+        let built = call(request_from(
+            &request,
+            "execute",
+            review["reviewKey"].as_str().map(str::to_owned),
+        ));
+        assert_eq!(built["fileSessions"].as_array().unwrap().len(), 1);
+        request.flat_star_masking = true;
+        let changed = call(Request {
+            flat_star_masking: true,
+            ..request_from(&request, "analyze", None)
+        });
+        assert_ne!(review["reviewKey"], changed["reviewKey"]);
+        assert_eq!(
+            review["snapshot"]["sessions"][0]["key"],
+            changed["snapshot"]["sessions"][0]["key"]
+        );
+        let rebuilt = call(Request {
+            flat_star_masking: true,
+            ..request_from(
+                &request,
+                "execute",
+                changed["reviewKey"].as_str().map(str::to_owned),
+            )
+        });
+        assert_eq!(built["fileSessions"], rebuilt["fileSessions"]);
+    }
+    #[test]
     fn measured_response_groups_reach_association_and_reuse_cached_pixels() {
         let (dir, mut request) = fixture();
         request.lights = vec![request.lights[0].clone()];
-        request.settings = vec![policy::Setting {
+        request.settings = vec![Setting {
             key: "flat_session_hours".into(),
             value: json!(240.0),
         }];
@@ -1911,7 +1917,7 @@ mod tests {
             .filter_map(|e| e.ok())
             .map(|e| stamp(&e.path()).unwrap())
             .collect();
-        request.settings = vec![policy::Setting {
+        request.settings = vec![Setting {
             key: "grade_bias_level".into(),
             value: json!({"suspect":null,"poor":null}),
         }];
@@ -1930,7 +1936,7 @@ mod tests {
         let source = stamp(&request.lights[0]).unwrap();
         write(&request.lights[0], "LIGHT", 100, 1200.0);
         assert!(verify(&[source]).unwrap_err().contains("changed"));
-        request.settings = vec![policy::Setting {
+        request.settings = vec![Setting {
             key: "unknown_setting".into(),
             value: json!(true),
         }];

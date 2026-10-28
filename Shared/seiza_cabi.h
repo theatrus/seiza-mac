@@ -3563,10 +3563,11 @@ bool seiza_live_stacker_light_rotation(const SeizaLiveStacker *stacker,
                                        double *degrees_out);
 
 /*
- Analyze mono FITS/XISF inputs without stacking. Request: inputs (paths,
+ Analyze mono, raw Bayer or RGB FITS/XISF inputs without stacking. Request: inputs (paths,
  directories or text lists), samples (8192..2097152, default 262144), filter
  (optional), maxFrames (optional), metricsOnly (default false). Returns the core report with camelCase
- keys. Individual frame failures remain in the report. Free with seiza_string_free.
+ keys (schema 3). Frames are source/component records with sampling geometry;
+ groups separate filter, imageKind and component. Individual frame failures remain in the report. Free with seiza_string_free.
 
  # Safety
  request_json must be NUL-terminated UTF-8. error_out must be null or writable.
@@ -3627,6 +3628,16 @@ char *seiza_stack_report_html(const char *report_json, char **error_out);
  report_json must be NUL-terminated UTF-8; error_out must be null or writable.
  */
 char *seiza_stack_collection_html(const char *report_json, char **error_out);
+
+/*
+ Select none, cheap retained diagnostics, or rich source analysis. Request:
+ {report: optional camelCase stack report, level: string, inputs: source paths}.
+ Returns owned camelCase JSON (JSON null for none), freed with seiza_string_free.
+ Rich reads inputs again; it never changes the completed stack.
+ # Safety
+ request_json must be NUL-terminated UTF-8; error_out null or writable.
+ */
+char *seiza_prepare_stack_report_json(const char *request_json, char **error_out);
 
 /*
  Fit premeasured common stellar fluxes. Request JSON contains sources, stars
@@ -4262,8 +4273,45 @@ SeizaFlatGroups *seiza_flat_groups_prepare_json(const char *request_json, char *
 void seiza_flat_groups_free(SeizaFlatGroups *groups);
 
 /*
+ The JSON Schema (draft 2020-12) of the calibration library's JSON calls:
+ `calls` maps each export to the schema of its request and of its answer,
+ and `$defs` holds the types they share. Property names are camelCase, as
+ the calls take and return them; enum values are as given. Rust hosts call
+ the native API instead, and Python binds it. Free the result or error
+ with seiza_string_free.
+
+ # Safety
+ When non-null, `error_out` must point to writable storage for one pointer.
+ */
+char *seiza_calibration_library_schema_json(char **error_out);
+
+/*
+ The calibration settings a library request takes, in the order a settings
+ panel shows them: each key, group, label, help, effect, kind with its range
+ and default. camelCase JSON array. Free the result or error with
+ seiza_string_free.
+
+ # Safety
+ When non-null, `error_out` must point to writable storage for one pointer.
+ */
+char *seiza_calibration_settings_schema_json(char **error_out);
+
+/*
+ Judge one setting value as a settings panel saves it. `request_json` is
+ camelCase `{key, value}`; the value stays as given. Returns camelCase
+ `{key, valid, error, text, default}`: whether it can be saved, why not, the
+ value in words, and whether it means the default. Free the result or
+ error with seiza_string_free.
+
+ # Safety
+ `request_json` must point to NUL-terminated UTF-8. When non-null,
+ `error_out` must point to writable storage for one pointer.
+ */
+char *seiza_calibration_setting_check_json(const char *request_json, char **error_out);
+
+/*
  Grade and select a calibration library using PSF Guard's shared policy.
- `request_json` is a camelCase library::Request: frames, lights, quality,
+ `request_json` is a camelCase library::json::Request: frames, lights, quality,
  globalSettings, rigs, grouping, availableResponses, nightShifts, regrade, masterFailures, pedestalEvidence,
  forceFlatWithoutPedestal, flatStarMasking, flatStability, flatAssociation and darkAssociation.
  Missing collections are empty. Settings are {key,value} records; identifiers,
@@ -4305,7 +4353,7 @@ char *seiza_calibration_master_plan_json(const char *request_json,
  Light choices may use exact full paths; these take precedence over basename
  entries, preserving existing catalog lookup for other lights.
  Plan raw-flat response sessions and bounded samples from a camelCase
- library::Request. Returns plans, resolved limits/night boundaries, grades
+ library::json::Request. Returns plans, resolved limits/night boundaries, grades
  and unplanned frame IDs. Pure metadata/measurement policy; no pixel I/O.
  flatAssociation/darkAssociation accept automatic (default) or one_set in
  library and master requests. OneSet keeps all eligible compatible inputs;

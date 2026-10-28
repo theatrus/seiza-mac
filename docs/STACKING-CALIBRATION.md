@@ -1,8 +1,8 @@
 # Graded calibration in Stack Images
 
 Stack Images pins the shared calibration-association update in Seiza (see the
-exact Git revision in `Rust/seiza-mac-core/Cargo.toml`), based on **0.46.0**,
-calibration **0.10.0** and stacking **0.53.0** for library grading, per-light matching, master recipes and
+exact dependency in `Rust/seiza-mac-core/Cargo.toml`), targeting **0.47.0**,
+calibration **0.11.0** and stacking **0.54.0** for library grading, per-light matching, master recipes and
 shared-canvas execution. Fixed reference and Expanded mosaic both support several
 calibration sessions within one output. Live acquisition retains its existing
 preparation workflow.
@@ -51,10 +51,15 @@ No grading thresholds, temporal selection rules or master-selection policy are
 implemented in Swift or copied into the Mac Rust adapter.
 
 The host measures dark/bias/dark-flat and flat pixels with Seiza, then submits
-immutable metadata and measurements to `seiza_calibration::library::evaluate`.
+native `RuleBook`, `QualityIndex` and `Library` objects. `QualityIndex::regrade`
+judges measurements once, and the exact judgments feed both review and selection.
 Seiza determines grading peers, grades, compatible candidates, coherent cohorts,
 external-master adoption, effective gates, session identities and master recipes.
 Identical recipes share cached masters across lights and output groups.
+Session identity version 5 treats master inputs as a set: different nearest-first
+candidate orders reuse one session and build, anchored by the first light.
+Builder options key only the recipes they affect. Native session methods decide
+flat use, and the retry carries that session's policy and held-back frames.
 
 Flats and darks each have an independent **Group and match automatically** /
 **Use all as one set** choice, defaulting to automatic. Automatic flats use
@@ -76,11 +81,12 @@ follows the selected Stop/Exclude/Keep policy.
 
 The executor uses the native master builder with the recipe's exact dependencies,
 defect suppression, masking and dark screening. Flat stability measurements feed
-`library::flat_retry`: trim, alternate-session retry, retain-with-warning and
+`FlatRetry::for_session` and its `next`/`trimmed`/`alternate` methods: trim,
+alternate-session retry, retain-with-warning and
 withhold decisions stay in Seiza. Retry candidates go through the complete
 planner again so a different flat exposure selects its own dark-flat dependency.
-For flat-only mono sessions, native pedestal fits feed the shared acceptance
-policy. An accepted constant is materialized as a bias master for the fixed C
+For flat-only mono sessions, native pedestal fits feed
+`Session::accept_pedestal`. An accepted constant is materialized as a bias master for the fixed C
 opener. Inconclusive/CFA fits withhold the flat and reapply the incomplete-light
 policy; the host never silently forces a flat without pedestal removal.
 
@@ -118,11 +124,13 @@ traversed; duplicate physical inputs are detected.
 
 ## Light evidence, corrections and manual choices
 
-The adapter passes cached target/sensor metadata to Seiza's `plan_flat_work`.
-It reads only the bounded light samples requested by the core, bins them with
-the shared kernels, and submits background/response-choice and change-map fits
-through `finish_flat_work`. Resolved evidence feeds the library planner before
-master recipes are chosen. Change evidence excludes broad vignetting as directed
+The adapter uses Seiza's `plan_flat_sessions`, `PedestalTable`,
+`family_questions` and `change_question` directly. It reads only their bounded
+samples, then calls `FamilyQuestion::decide`, `ChangeFilter::change_map`/`fit`
+and `ChangeQuestion::row`. Resolved evidence feeds `Library::select_associated`
+and `resolve_session` before master recipes are chosen. Rust does not call the
+C ABI's `library::json` workflows or convert native inputs through JSON.
+JSON only presents the resulting records to Swift. Change evidence excludes broad vignetting as directed
 by the core; an inconclusive fit stays unknown and follows the incomplete-light
 policy. Responses, light bins and evidence have separate stamped caches.
 

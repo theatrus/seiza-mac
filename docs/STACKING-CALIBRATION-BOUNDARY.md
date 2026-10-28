@@ -7,17 +7,23 @@ At that audit baseline, the core could integrate different calibration sessions
 on a shared canvas and replay those assignments, but lacked the shared PSF Guard
 planning policy and expanded raw-file planning under per-light calibration.
 
-The dependency is based on published Seiza/C ABI **0.46.0**, calibration **0.10.0**
-and stacking **0.53.0**, with an exact Git pin for the shared response-preparation
-and one-set association update. Seiza #385 supplied the shared policy and
-`seiza_live_stacker_open_fits_expanding_sessions`; the generated header now exposes
-both. The Mac now adapts cached host records to `library::evaluate`, executes its
-recipes and flat-retry policy, and exposes graded matching/settings in Stack
-Images. Both canvas modes use per-light sessions; the expanded path calls the
-released session-aware opener. Desktop tests cover the actual driver, A→B→A
-calibration/replay and per-rig gates. The Mac now supplies raw-flat response measurements and native pair comparisons
-to the planner. Light-background evidence, correction maps and manual group
-choices remain unconnected; full PSF Guard parity is still incomplete. See the
+The current adapter targets Seiza/C ABI **0.47.0**, calibration **0.11.0** and
+stacking **0.54.0**. Seiza #385 supplied the shared policy and session-aware
+expanded opener; the merged #403 made the policy a native Rust API, moved the
+remaining PSF Guard evidence stages into it, and kept C's workflows separately.
+The Mac holds `RuleBook`, `QualityIndex` and `Library`, calls
+`select_associated`/`resolve_session`, and drives `FlatRetry::for_session` and
+native family/change questions with cached measurements. It renders settings,
+grades, selected files and manual choices in Stack Images. The C header stays
+synchronized with the dependency, while the Mac's Rust adapter uses the native
+API directly.
+
+Both canvas modes use per-light sessions during planning, integration and replay.
+Desktop tests cover A→B→A calibration, per-rig gates, and required corrected
+flats. File-level fixtures cover measured responses, family/change light
+evidence, unknown fits, manual group/side choices, source isolation, master
+reuse and set-based session identity. This covers the setup's supported inputs;
+full PSF Guard UI/catalog parity is not claimed. See the
 [current setup and limitations](STACKING-CALIBRATION.md).
 
 ## Verified contracts from the original audit
@@ -51,7 +57,8 @@ before the light-rotation basis: resetting tolerances restores recorded angles.
 The captured [reference fixtures](../Tests/Fixtures/CalibrationParity/README.md)
 include actual PSF Guard selections, eligibility/override transitions, master
 counts and gates, and measured response-family/group/event decisions. Mac tests
-currently compare **screening**, not the complete planner's decisions.
+compare captured screening records and exercise the native planner/executor on
+file fixtures; they do not compare every catalog-level PSF Guard decision.
 
 The reusable policy behind PSF Guard's library selection and measured flat
 groups is now in Seiza, with versioned records and explanations through C and
