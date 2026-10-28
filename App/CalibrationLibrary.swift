@@ -25,7 +25,29 @@ enum LibraryJSON: Codable, Hashable, Sendable {
         case .null: try c.encodeNil()
         }
     }
-    subscript(_ key: String) -> LibraryJSON { if case .object(let v) = self { return v[key] ?? .null }; return .null }
+    // Preferences written before the C ABI migration retain native snake_case
+    // records. Read either spelling; send current C fields only at the boundary.
+    static func camel(_ key: String) -> String {
+        let parts = key.split(separator: "_")
+        return (parts.first.map(String.init) ?? "") + parts.dropFirst().map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined()
+    }
+    subscript(_ key: String) -> LibraryJSON {
+        if case .object(let values) = self { return values[key] ?? values[Self.camel(key)] ?? .null }
+        return .null
+    }
+    var cabiFields: LibraryJSON {
+        switch self {
+        case .array(let values): return .array(values.map(\.cabiFields))
+        case .object(let values):
+            var result: [String: LibraryJSON] = [:]
+            for (key, value) in values {
+                let name = Self.camel(key)
+                if key == name || values[name] == nil { result[name] = key == "value" ? value : value.cabiFields }
+            }
+            return .object(result)
+        default: return self
+        }
+    }
     var array: [LibraryJSON] { if case .array(let v) = self { return v }; return [] }
     var text: String { if case .string(let v) = self { return v }; return "" }
     var number: Double? { if case .number(let v) = self { return v }; return nil }
@@ -43,6 +65,7 @@ struct LibrarySetting: Codable, Sendable { let key: String; let value: LibraryJS
 struct LibraryRigSettings: Encodable, Sendable {
     let rig_uuid: String
     let settings: [LibrarySetting]
+    enum CodingKeys: String, CodingKey { case rig_uuid = "rigUuid", settings }
 }
 enum LibraryAssociation: String, Codable, CaseIterable, Identifiable, Sendable {
     case automatic, oneSet = "one_set"
@@ -102,8 +125,7 @@ struct LibraryFileSession: Codable, Sendable {
     let tolerances: LibraryJSON
     enum CodingKeys: String, CodingKey {
         case bias, dark, flat, pedestal, tolerances
-        case darkExposureSeconds = "dark_exposure_seconds"
-        case normalizedFullScale = "normalized_full_scale"
+        case darkExposureSeconds, normalizedFullScale
     }
     var calibration: ImageStackCalibration {
         ImageStackCalibration(bias: bias.map { URL(fileURLWithPath: $0) },
@@ -184,22 +206,19 @@ struct LibraryRequest: Encodable, Sendable {
         rigs = preferences.rigs.sorted { $0.key < $1.key }.map { id, values in
             LibraryRigSettings(rig_uuid: id, settings: values.sorted { $0.key < $1.key }.map { LibrarySetting(key: $0.key, value: $0.value) })
         }
-        groupOverrides = preferences.groupOverrides; lightChoices = preferences.lightChoices
+        groupOverrides = preferences.groupOverrides.map(\.cabiFields)
+        lightChoices = preferences.lightChoices.map { .init(path: $0.path, fingerprint: $0.fingerprint, row: $0.row.cabiFields) }
         choices = preferences.choices; self.reviewKey = reviewKey; incomplete = preferences.incomplete
-        flatStarMasking = preferences.flatStarMasking; flatStability = preferences.flatStability
+        flatStarMasking = preferences.flatStarMasking; flatStability = preferences.flatStability.cabiFields
         flatAssociation = preferences.flatAssociation; darkAssociation = preferences.darkAssociation
     }
 }
 enum CalibrationLibraryService {
     static func call(_ request: LibraryRequest, cancellation: CalibrationCancelSignal? = nil) throws -> Data {
         let json = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
-        let context = cancellation.map { Unmanaged.passUnretained($0).toOpaque() }
         var failure: UnsafeMutablePointer<CChar>?
         let result = json.withCString { request in
-            seiza_mac_calibration_library_json(request, { context in
-                guard let context else { return false }
-                return Unmanaged<CalibrationCancelSignal>.fromOpaque(context).takeUnretainedValue().wasCancelled
-            }, context, &failure)
+            seiza_calibration_files_json(request, cancellation?.pointer, nil, nil, &failure)
         }
         defer { if let result { seiza_string_free(result) }; if let failure { seiza_string_free(failure) } }
         if cancellation?.wasCancelled == true { throw CancellationError() }
@@ -305,9 +324,9 @@ struct LibraryPreparedPlan: Sendable {
     func chooseGroupEdge(_ edge: LibraryJSON, choice: String?) {
         let row = edge["row"]
         preferences.groupOverrides.removeAll { $0["session_key"] == row["session_key"] && $0["family_key"] == row["family_key"] }
-        if let choice, case .object(var values) = row {
+        if let choice, case .object(var values) = row.cabiFields {
             values["choice"] = .string(choice)
-            values["chosen_at"] = .number(Date().timeIntervalSince1970.rounded(.down))
+            values["chosenAt"] = .number(Date().timeIntervalSince1970.rounded(.down))
             preferences.groupOverrides.append(.object(values))
         }
     }

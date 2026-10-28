@@ -452,7 +452,9 @@ Open `Seiza.xcodeproj` to run and sign it with a local development team.
 
 This branch targets `seiza-cabi`/`seiza` 0.47.0, `seiza-calibration` 0.11.0,
 `seiza-parallax` 0.19.5, `seiza-stacking` 0.54.0 and `seiza-download` 0.9.0.
-While 0.47 publication runs, the exact release commit is pinned in Cargo.
+The shared file coordinator from [Seiza #406](https://github.com/theatrus/seiza/pull/406)
+is pinned to its exact upstream commit until it ships. Swift calls its C ABI
+directly; the Mac calibration coordinator has moved upstream.
 The app uses native dust maps, depth planes and
 image reading and writing through `seiza-image-io`. Library and bridge header
 must be updated together. About reports the linked release version and source

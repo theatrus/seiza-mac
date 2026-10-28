@@ -1,11 +1,12 @@
 # Graded calibration in Stack Images
 
-Stack Images pins the shared calibration-association update in Seiza (see the
-exact dependency in `Rust/seiza-mac-core/Cargo.toml`), targeting **0.47.0**,
-calibration **0.11.0** and stacking **0.54.0** for library grading, per-light matching, master recipes and
-shared-canvas execution. Fixed reference and Expanded mosaic both support several
-calibration sessions within one output. Live acquisition retains its existing
-preparation workflow.
+Stack Images calls `seiza_calibration_files_json`, the shared file coordinator
+in [Seiza #406](https://github.com/theatrus/seiza/pull/406), based on Seiza/C ABI
+**0.47.0**, calibration **0.11.0** and stacking **0.54.0**. Cargo pins the exact
+upstream coordinator commit until it ships. The generated C header matches it.
+Swift owns setup, access grants and review; the app has no calibration
+orchestrator in Rust. Both canvas modes support per-light sessions. Live
+acquisition retains its existing preparation workflow.
 
 ## Use the library
 
@@ -48,9 +49,9 @@ per-rig overrides, quality choices, incomplete-light policy, flat star masking a
 flat-stability retry options. A rig can inherit each global value independently.
 Unknown keys and invalid values are rejected by Seiza before image processing.
 No grading thresholds, temporal selection rules or master-selection policy are
-implemented in Swift or copied into the Mac Rust adapter.
+implemented in Swift. The Mac has no duplicate calibration coordinator.
 
-The host measures dark/bias/dark-flat and flat pixels with Seiza, then submits
+The upstream file coordinator measures dark/bias/dark-flat and flat pixels, then uses
 native `RuleBook`, `QualityIndex` and `Library` objects. `QualityIndex::regrade`
 judges measurements once, and the exact judgments feed both review and selection.
 Seiza determines grading peers, grades, compatible candidates, coherent cohorts,
@@ -104,8 +105,9 @@ masters, then replaces the complete gate/rotation/master set before every push.
 A failed setter aborts the push. Native history retains per-frame calibration
 for A→B→A replay, including transient removal.
 
-The Mac adapter owns recursive discovery, file identities, cached measurements,
-atomic master publication and cancellation. The additional cache is under the
+Seiza's shared file coordinator owns recursive discovery, file identities, cached
+measurements and atomic master publication. Swift supplies a native cancellation
+handle and retains platform access grants. The additional cache is under the
 library's existing `CalibrationMasters` directory in `graded-library/`; live-stack
 cache maintenance does not prune it. Automatic eviction for this new cache is
 not implemented. Raw inputs are never modified. Declared 0:1 XISF samples are
@@ -124,13 +126,15 @@ traversed; duplicate physical inputs are detected.
 
 ## Light evidence, corrections and manual choices
 
-The adapter uses Seiza's `plan_flat_sessions`, `PedestalTable`,
+The upstream coordinator uses Seiza's `plan_flat_sessions`, `PedestalTable`,
 `family_questions` and `change_question` directly. It reads only their bounded
 samples, then calls `FamilyQuestion::decide`, `ChangeFilter::change_map`/`fit`
 and `ChangeQuestion::row`. Resolved evidence feeds `Library::select_associated`
 and `resolve_session` before master recipes are chosen. Rust does not call the
 C ABI's `library::json` workflows or convert native inputs through JSON.
-JSON only presents the resulting records to Swift. Change evidence excludes broad vignetting as directed
+The C ABI presents the resulting records to Swift in camelCase. Legacy preference
+rows are converted at the boundary; enum values and settings keys retain their
+native spellings. Change evidence excludes broad vignetting as directed
 by the core; an inconclusive fit stays unknown and follows the incomplete-light
 policy. Responses, light bins and evidence have separate stamped caches.
 
@@ -162,11 +166,10 @@ both canvases, corrected flat publication and transient-removal replay, manual
 choice preference migration/round trips, per-rig gates overriding global defaults,
 master reuse, Keep/Exclude/Stop preparation policy and protected/stale sources.
 
-The [Mac Rust adapter tests](../Rust/seiza-mac-core/src/calibration_library.rs)
-cover measured family/change light evidence, unknown fits, source-scoped manual
-choices, split/join commands, correction pixels and cache reuse, plus poor-grade
-overrides without relaxed sensor gates, native flat stability
-and trimmed rebuilds, pedestal acceptance, normalized XISF staging, corrupted
-cache recovery, changed settings/sources, aliases and cancellation. The
-[native boundary audit](STACKING-CALIBRATION-BOUNDARY.md) records the original API
-gaps and the released contracts that now support this workflow.
+The [upstream coordinator tests](https://github.com/theatrus/seiza/blob/01b5f5574f462c12856e30c13c6c7eb41a0823b5/seiza-stacking/src/calibration_files/mod.rs)
+were moved with the implementation. They cover family/change evidence, unknown
+fits, path-scoped choices, split/join, correction pixels/cache reuse, poor grades,
+stability trim/rebuild, pedestal acceptance, normalized XISF staging, aliases,
+settings/source review invalidation and cancellation. C and Python exercise the
+same native coordinator; the [guide](https://github.com/theatrus/seiza/blob/01b5f5574f462c12856e30c13c6c7eb41a0823b5/docs/calibration-files.md)
+describes its Rust/C/Python interfaces and cache/source contracts.

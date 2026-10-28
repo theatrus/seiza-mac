@@ -1,9 +1,10 @@
 # Shared stacking references
 
 This branch targets `seiza-cabi`/`seiza` **0.47.0**, `seiza-stacking` **0.54.0**
-and calibration **0.11.0**. While publication runs, Cargo pins the exact release
-commit and `Shared/seiza_cabi.h` matches its generated header. The graded setup
-uses native Rust library, session and evidence APIs; its fixed and expanded
+and calibration **0.11.0**. Cargo pins the shared file coordinator
+commit from [Seiza #406](https://github.com/theatrus/seiza/pull/406) and `Shared/seiza_cabi.h` matches its generated header. The graded setup
+calls the shared C ABI directly; the native library/session/evidence orchestration
+lives in Seiza. Its fixed and expanded
 executors and replay tests are enabled. See the
 [calibration setup guide](STACKING-CALIBRATION.md) for supported inputs and limits.
 

@@ -7,16 +7,14 @@ At that audit baseline, the core could integrate different calibration sessions
 on a shared canvas and replay those assignments, but lacked the shared PSF Guard
 planning policy and expanded raw-file planning under per-light calibration.
 
-The current adapter targets Seiza/C ABI **0.47.0**, calibration **0.11.0** and
-stacking **0.54.0**. Seiza #385 supplied the shared policy and session-aware
-expanded opener; the merged #403 made the policy a native Rust API, moved the
-remaining PSF Guard evidence stages into it, and kept C's workflows separately.
-The Mac holds `RuleBook`, `QualityIndex` and `Library`, calls
-`select_associated`/`resolve_session`, and drives `FlatRetry::for_session` and
-native family/change questions with cached measurements. It renders settings,
-grades, selected files and manual choices in Stack Images. The C header stays
-synchronized with the dependency, while the Mac's Rust adapter uses the native
-API directly.
+The current setup uses the file coordinator from
+[Seiza #406](https://github.com/theatrus/seiza/pull/406), based on core/C ABI
+0.47.0. Swift calls `seiza_calibration_files_json` directly. The upstream Rust
+coordinator holds `RuleBook`, `QualityIndex` and `Library`, drives native evidence,
+master generation, retries and corrections, and returns prepared file sessions.
+The app-owned Rust coordinator and its custom C export are removed. Swift keeps
+scoped access, preferences and review. Database clients retain the native stages
+introduced by #403 and can use their own catalog/caches/pixels.
 
 Both canvas modes use per-light sessions during planning, integration and replay.
 Desktop tests cover A→B→A calibration, per-rig gates, and required corrected

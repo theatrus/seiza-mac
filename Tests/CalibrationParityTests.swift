@@ -491,7 +491,7 @@ final class GradedCalibrationWorkflowTests: XCTestCase {
         let options: LibraryJSON = .object(["path": .string("/first/light.fits"), "fingerprint": .string("source-v1"), "guid": .string("guid"), "rig_uuid": .string("rig")])
         let change: LibraryJSON = .object(["key": .string("change"), "start": .number(10), "end": .number(20)])
         let group: LibraryJSON = .object(["frame": .string("flat"), "session_key": .string("session"), "label": .string("Ha group")])
-        let edge: LibraryJSON = .object(["row": .object(["anchor_frame": .string("flat"), "session_key": .string("session"), "family_key": .string("family")])])
+        let edge: LibraryJSON = .object(["row": .object(["anchorFrame": .string("flat"), "sessionKey": .string("session"), "familyKey": .string("family"), "chosenAt": .number(0)])])
         model.stale = false
         model.chooseLight(options, change: change, side: "before")
         XCTAssertTrue(model.stale)
@@ -505,7 +505,11 @@ final class GradedCalibrationWorkflowTests: XCTestCase {
         let choices = try XCTUnwrap(wire["lightChoices"] as? [[String: Any]])
         XCTAssertEqual(choices.first?["fingerprint"] as? String, "source-v1")
         XCTAssertEqual((choices.first?["row"] as? [String: Any])?["choice"] as? String, "before")
+        XCTAssertEqual((choices.first?["row"] as? [String: Any])?["changeKey"] as? String, "change")
+        XCTAssertNil((choices.first?["row"] as? [String: Any])?["change_key"])
+        XCTAssertEqual((wire["flatStability"] as? [String: Any])?["tryNextSession"] as? Bool, true)
         XCTAssertEqual((wire["groupOverrides"] as? [[String: Any]])?.first?["choice"] as? String, "split")
+        XCTAssertGreaterThan((wire["groupOverrides"] as? [[String: Any]])?.first?["chosenAt"] as? Double ?? 0, 0)
         model.chooseGroupEdge(edge, choice: nil)
         model.chooseLight(options, change: change)
         XCTAssertEqual(model.preferences.lightChoices.count, 1)
@@ -562,6 +566,6 @@ final class GradedCalibrationWorkflowTests: XCTestCase {
         let request = LibraryRequest(operation: "schema", preferences: restored)
         let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as! [String: Any]
         let rigs = try XCTUnwrap(json["rigs"] as? [[String: Any]])
-        XCTAssertTrue(rigs.contains { $0["rig_uuid"] as? String == "test-rig" })
+        XCTAssertTrue(rigs.contains { $0["rigUuid"] as? String == "test-rig" })
     }
 }

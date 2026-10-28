@@ -10,18 +10,16 @@ publish = false
 crate-type = ["staticlib"]
 
 [dependencies]
-seiza-cabi = { git = "https://github.com/theatrus/seiza", rev = "3b2e6dab590688190c3a6a99622d2d801eb025aa" }
-seiza = { git = "https://github.com/theatrus/seiza", rev = "3b2e6dab590688190c3a6a99622d2d801eb025aa" }
-seiza-calibration = { git = "https://github.com/theatrus/seiza", rev = "3b2e6dab590688190c3a6a99622d2d801eb025aa" }
-fs2 = "0.4"
+seiza-cabi = { git = "https://github.com/theatrus/seiza", rev = "01b5f5574f462c12856e30c13c6c7eb41a0823b5" }
+seiza = { git = "https://github.com/theatrus/seiza", rev = "01b5f5574f462c12856e30c13c6c7eb41a0823b5" }
 tempfile = "3"
-seiza-download = { git = "https://github.com/theatrus/seiza", rev = "3b2e6dab590688190c3a6a99622d2d801eb025aa" }
-seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "3b2e6dab590688190c3a6a99622d2d801eb025aa" }
-seiza-image-io = { git = "https://github.com/theatrus/seiza", rev = "3b2e6dab590688190c3a6a99622d2d801eb025aa" }
+seiza-download = { git = "https://github.com/theatrus/seiza", rev = "01b5f5574f462c12856e30c13c6c7eb41a0823b5" }
+seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "01b5f5574f462c12856e30c13c6c7eb41a0823b5" }
+seiza-image-io = { git = "https://github.com/theatrus/seiza", rev = "01b5f5574f462c12856e30c13c6c7eb41a0823b5" }
 serde = { version = "1", features = ["derive"] }
-seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "3b2e6dab590688190c3a6a99622d2d801eb025aa" }
-seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "3b2e6dab590688190c3a6a99622d2d801eb025aa" }
-seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "3b2e6dab590688190c3a6a99622d2d801eb025aa" }
+seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "01b5f5574f462c12856e30c13c6c7eb41a0823b5" }
+seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "01b5f5574f462c12856e30c13c6c7eb41a0823b5" }
+seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "01b5f5574f462c12856e30c13c6c7eb41a0823b5" }
 sha2 = "0.11"
 serde_json = "1"
 tokio = { version = "1", features = ["rt"] }

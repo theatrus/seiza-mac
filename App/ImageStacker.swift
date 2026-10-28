@@ -1009,11 +1009,17 @@ enum ImageStackEngine {
             for candidate in candidates {
                 let session = try plan.session(for: candidate.path)
                 var options = try JSONSerialization.jsonObject(with: request.options.jsonData) as! [String: Any]
-                var gate = try JSONSerialization.jsonObject(with: JSONEncoder().encode(session.tolerances)) as! [String: Any]
+                // This existing StackOptions subdocument uses native snake_case;
+                // file-coordinator reports use the C ABI's camelCase fields.
+                let fields = ["allow_flat_gain_offset_mismatch", "exposure_seconds", "exposure_fraction", "dark_temperature_c", "rotation_deg", "focal_length_mm", "light_rotation"]
+                let values = Dictionary(uniqueKeysWithValues: fields.compactMap { key -> (String, LibraryJSON)? in
+                    let value = session.tolerances[key]
+                    if case .null = value { return nil }
+                    return (key, value)
+                })
+                let gate = try JSONSerialization.jsonObject(with: JSONEncoder().encode(values)) as! [String: Any]
                 // StackOptions accepts application gates only; master cohort
                 // temperature/session windows belong to file-session policy.
-                gate.removeValue(forKey: "master_temperature_c")
-                gate.removeValue(forKey: "flat_session_seconds")
                 options["match_tolerances"] = gate
                 let json = String(decoding: try JSONSerialization.data(withJSONObject: options), as: UTF8.self)
                 do {
