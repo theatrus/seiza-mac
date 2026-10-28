@@ -293,3 +293,155 @@ final class CalibrationSessionBoundaryTests: XCTestCase {
         XCTAssertEqual(try state(handle).inputMode, "prepared-only")
     }
 }
+
+/// End-to-end desktop orchestration, using the released policy and the same
+/// batch engine invoked by Stack Images. Calibration is deliberately interleaved.
+final class GradedCalibrationWorkflowTests: XCTestCase {
+    private struct Fixture {
+        let root: URL
+        let library: URL
+        let lights: [URL]
+        let cache: URL
+        init() throws {
+            root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            library = root.appendingPathComponent("calibration")
+            cache = root.appendingPathComponent("cache")
+            try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+            let sky = SyntheticFrame.noisyStarField()
+            func cards(_ kind: String, _ gain: Int) -> [String] {
+                SyntheticFrame.lightCards().filter { !$0.hasPrefix("IMAGETYP") && !$0.hasPrefix("GAIN") }
+                    + ["IMAGETYP= '\(kind)'", "GAIN    = \(gain)", "DATE-OBS= '2026-10-20T20:00:00Z'", "ROTATANG=                  0.0"]
+            }
+            var inputs: [URL] = []
+            for (index, gain) in [100, 200, 100].enumerated() {
+                let bias = gain == 100 ? 500 : 1500
+                inputs.append(try SyntheticFrame.write(width: 160, height: 128,
+                    values: sky.map { Int16(Int($0) + bias - 32768) }, cards: cards("LIGHT", gain),
+                    directory: root, name: "light-\(index).fits"))
+            }
+            lights = inputs
+            for gain in [100, 200] {
+                for index in 0..<3 {
+                    let bias = gain == 100 ? 500 : 1500
+                    _ = try SyntheticFrame.write(width: 160, height: 128,
+                        values: (0..<(160 * 128)).map { Int16(bias + $0 % 7 - 3 - 32768) },
+                        cards: cards("BIAS", gain), directory: library, name: "bias-\(gain)-\(index).fits")
+                }
+            }
+        }
+        func request(_ operation: String, preferences: LibraryPreferences = .init(), key: String? = nil) -> LibraryRequest {
+            var value = LibraryRequest(operation: operation, library: library, lights: lights, preferences: preferences, reviewKey: key)
+            value.cache = cache.path
+            return value
+        }
+        func remove() { try? FileManager.default.removeItem(at: root) }
+    }
+    func testActualDesktopEngineUsesGradedABAPlanOnFixedAndExpandedCanvases() async throws {
+        let fixture = try Fixture(); defer { fixture.remove() }
+        let original = try fixture.lights.map { try Data(contentsOf: $0) }
+        let review = try await CalibrationLibraryService.perform(fixture.request("analyze"))
+        XCTAssertEqual(review.assignments, [0, 1, 0])
+        XCTAssertEqual(review.frames.map(\.grade), Array(repeating: "ok", count: 6))
+        XCTAssertEqual(review.missing, [false, false, false])
+        let before = try FileManager.default.contentsOfDirectory(atPath: fixture.cache.path)
+        XCTAssertFalse(before.contains { $0.hasPrefix("master-") }) // Review does no master integration.
+        let built = try await CalibrationLibraryService.perform(fixture.request("execute", key: review.reviewKey))
+        let plan = LibraryPreparedPlan(review: built, originalPaths: fixture.lights.map(\.path))
+        XCTAssertNotEqual(try plan.session(for: fixture.lights[0].path).bias, try plan.session(for: fixture.lights[1].path).bias)
+        XCTAssertEqual(try plan.session(for: fixture.lights[0].path).bias, try plan.session(for: fixture.lights[2].path).bias)
+        for expanded in [false, true] {
+            var options = ImageStackOptions()
+            options.useGPU = false; options.normalization = .none; options.rejection = .none
+            options.canvasMode = expanded ? .expanded : .fixed
+            options.minimumOverlap = 0.05; options.maximumCanvasMegasamples = 1
+            options.removesTransients = true
+            let output = fixture.root.appendingPathComponent("stack-\(expanded).fits")
+            let result = try ImageStackEngine.stack(request: .init(inputs: try plan.preparedInputs(fixture.lights, excludeIncomplete: false),
+                output: output, options: options, calibration: .init(), libraryPlan: plan), cancellation: .init()) { _ in }
+            XCTAssertEqual(result.acceptedFrames, 3)
+            XCTAssertEqual(result.rejectedFrames, 0)
+            XCTAssertNil(result.transientNote, result.transientNote ?? "")
+            let measured = try CalibrationService.measureDark(.init(path: output.path))
+            XCTAssertEqual(measured.level, 100, accuracy: 8) // Detects leaving B on A's pedestal, including during replay.
+        }
+        XCTAssertEqual(try fixture.lights.map { try Data(contentsOf: $0) }, original)
+        let firstSources = built.fileSessions.compactMap(\.bias).map { URL(fileURLWithPath: $0) }
+        let beforeMasters = try firstSources.map { try $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate }
+        _ = try await CalibrationLibraryService.perform(fixture.request("execute", key: review.reviewKey))
+        XCTAssertEqual(try firstSources.map { try $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate }, beforeMasters)
+        try Data("changed source".utf8).write(to: fixture.lights[0])
+        XCTAssertThrowsError(try ImageStackEngine.stack(request: .init(inputs: try plan.preparedInputs(fixture.lights, excludeIncomplete: false),
+            output: fixture.root.appendingPathComponent("stale.fits"), options: .init(), calibration: .init(), libraryPlan: plan), cancellation: .init()) { _ in })
+    }
+    func testIncompleteExclusionsPreserveInputOrderAndStopRequiresReview() async throws {
+        let fixture = try Fixture(); defer { fixture.remove() }
+        var preferences = LibraryPreferences()
+        preferences.settings["external_masters"] = .string("ignore")
+        let files = try FileManager.default.contentsOfDirectory(at: fixture.library, includingPropertiesForKeys: nil)
+        for file in files where file.lastPathComponent.contains("200") { try FileManager.default.removeItem(at: file) }
+        let review = try await CalibrationLibraryService.perform(fixture.request("analyze", preferences: preferences))
+        XCTAssertEqual(review.missing, [false, true, false])
+        do { _ = try await CalibrationLibraryService.perform(fixture.request("execute", preferences: preferences, key: review.reviewKey)); XCTFail("Stop must reject an incomplete plan") } catch {}
+        preferences.incomplete = "exclude"
+        let updated = try await CalibrationLibraryService.perform(fixture.request("analyze", preferences: preferences))
+        let built = try await CalibrationLibraryService.perform(fixture.request("execute", preferences: preferences, key: updated.reviewKey))
+        let plan = LibraryPreparedPlan(review: built, originalPaths: fixture.lights.map(\.path))
+        XCTAssertEqual(try plan.preparedInputs(fixture.lights, excludeIncomplete: true).map(\.lastPathComponent), ["light-0.fits", "light-2.fits"])
+        XCTAssertEqual(try plan.preparedInputs(fixture.lights, excludeIncomplete: false).count, 3)
+    }
+    func testRigMatchingSettingsReachBothOpenersAndProtectHistoricalMasters() async throws {
+        let fixture = try Fixture(); defer { fixture.remove() }
+        let flat = try SyntheticFrame.write(width: 160, height: 128,
+            values: .init(repeating: -32767, count: 160 * 128),
+            cards: SyntheticFrame.lightCards().filter { !$0.hasPrefix("IMAGETYP") }
+                + ["IMAGETYP= 'MASTER FLAT'", "FLATNORM=                    T", "ROTATANG=                 10.0"],
+            directory: fixture.library, name: "external-flat.fits")
+        var request = fixture.request("analyze")
+        request.lights = [fixture.lights[0].path, fixture.lights[2].path]
+        let first = try await CalibrationLibraryService.perform(request)
+        XCTAssertEqual(first.missing, [true, true])
+        var preferences = LibraryPreferences()
+        preferences.settings["rotation_tolerance_deg"] = .number(1)
+        preferences.rigs[try XCTUnwrap(first.rigs.first).id] = ["rotation_tolerance_deg": .number(12)]
+        var changed = fixture.request("execute", preferences: preferences, key: first.reviewKey)
+        changed.lights = request.lights
+        do { _ = try await CalibrationLibraryService.perform(changed); XCTFail("Changed settings need a fresh plan") } catch {}
+        changed.operation = "analyze"; changed.reviewKey = nil
+        let review = try await CalibrationLibraryService.perform(changed)
+        XCTAssertEqual(review.missing, [false, false])
+        changed.operation = "execute"; changed.reviewKey = review.reviewKey
+        let built = try await CalibrationLibraryService.perform(changed)
+        let plan = LibraryPreparedPlan(review: built, originalPaths: request.lights)
+        XCTAssertEqual(built.fileSessions.first?.tolerances["rotation_deg"].number, 12)
+        for expanded in [false, true] {
+            var options = ImageStackOptions()
+            options.canvasMode = expanded ? .expanded : .fixed
+            options.useGPU = false; options.normalization = .none; options.rejection = .none
+            let inputs = request.lights.map { URL(fileURLWithPath: $0) }
+            let result = try ImageStackEngine.stack(request: .init(inputs: inputs,
+                output: fixture.root.appendingPathComponent("custom-gate-\(expanded).fits"), options: options,
+                calibration: .init(), libraryPlan: plan), cancellation: .init()) { _ in }
+            XCTAssertEqual(result.acceptedFrames, 2)
+            XCTAssertThrowsError(try ImageStackEngine.stack(request: .init(inputs: inputs, output: flat,
+                options: options, calibration: .init(), libraryPlan: plan), cancellation: .init()) { _ in })
+        }
+    }
+    @MainActor func testNativeSettingsSchemaAndPreferencesRoundTripAndInvalidateReview() throws {
+        let model = CalibrationLibraryModel()
+        model.loadSchema()
+        XCTAssertNil(model.error)
+        XCTAssertTrue(model.fields.contains { $0.key == "rotation_tolerance_deg" })
+        XCTAssertTrue(model.fields.contains { $0.key == "grade_flat_dim" })
+        let saved = model.preferences
+        defer { model.preferences = saved }
+        model.stale = false
+        model.preferences.rigs["test-rig"] = ["rotation_tolerance_deg": .number(12)]
+        XCTAssertTrue(model.stale)
+        let restored = try JSONDecoder().decode(LibraryPreferences.self, from: JSONEncoder().encode(model.preferences))
+        XCTAssertEqual(restored, model.preferences)
+        let request = LibraryRequest(operation: "schema", preferences: restored)
+        let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as! [String: Any]
+        let rigs = try XCTUnwrap(json["rigs"] as? [[String: Any]])
+        XCTAssertTrue(rigs.contains { $0["rig_uuid"] as? String == "test-rig" })
+    }
+}

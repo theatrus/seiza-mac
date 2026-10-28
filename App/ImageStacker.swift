@@ -88,7 +88,7 @@ enum StackCalibrationSource: String, CaseIterable, Identifiable, Sendable {
     var title: String {
         switch self {
         case .masters: "None or existing masters"
-        case .automatic: "Build from calibration frames"
+        case .automatic: "Match graded calibration library"
         }
     }
 }
@@ -514,7 +514,8 @@ struct StackChannelReferenceSelection: Decodable, Sendable {
 enum StackNativeOpener {
     static func openExpanded(
         paths: [String], optionsJSON: String, calibration: ImageStackCalibration,
-        maximumMegasamples: Int, cancellation: ImageStackCancellation
+        maximumMegasamples: Int, cancellation: ImageStackCancellation,
+        libraryPlan: LibraryPreparedPlan? = nil
     ) throws -> (handle: OpaquePointer, note: String) {
         guard paths.count >= 2, (1...4096).contains(maximumMegasamples) else {
             throw ImageStackError.invalidRequest("Choose at least two lights and a valid canvas sample limit.")
@@ -525,7 +526,19 @@ enum StackNativeOpener {
         let pathsJSON = String(decoding: try JSONEncoder().encode(paths), as: UTF8.self)
         var error: UnsafeMutablePointer<CChar>?
         defer { if let error { seiza_string_free(error) } }
-        let handle = withOptionalCString(calibration.bias?.path) { bias in
+        let handle: OpaquePointer?
+        if let libraryPlan {
+            let sessionsJSON = String(decoding: try JSONEncoder().encode(libraryPlan.review.fileSessions), as: UTF8.self)
+            let assignments = try paths.map { libraryPlan.review.assignments[try libraryPlan.index($0)] }
+            let assignmentsJSON = String(decoding: try JSONEncoder().encode(assignments), as: UTF8.self)
+            handle = pathsJSON.withCString { paths in sessionsJSON.withCString { sessions in
+                assignmentsJSON.withCString { assignments in optionsJSON.withCString { options in
+                    seiza_live_stacker_open_fits_expanding_sessions(paths, sessions, assignments, options,
+                        maximumMegasamples, cancellation.nativeSignal?.pointer, &error)
+                } }
+            } }
+        } else {
+        handle = withOptionalCString(calibration.bias?.path) { bias in
             withOptionalCString(calibration.dark?.path) { dark in
                 withOptionalCString(calibration.flat?.path) { flat in
                     pathsJSON.withCString { paths in
@@ -537,6 +550,7 @@ enum StackNativeOpener {
                     }
                 }
             }
+        }
         }
         // Take ownership before observing cancellation: even cancelled opens may return a handle.
         guard let handle else {
@@ -722,9 +736,10 @@ struct ImageStackRequest: Sendable {
     let referenceImage: URL?
     let choosesReferenceAutomatically: Bool
     let additionalProtectedSources: [URL]
+    let libraryPlan: LibraryPreparedPlan?
 
     var protectedSources: [URL] {
-        inputs + additionalProtectedSources + [calibration.bias, calibration.dark, calibration.flat, referenceImage].compactMap { $0 }
+        inputs + additionalProtectedSources + (libraryPlan?.review.sources.map { URL(fileURLWithPath: $0.path) } ?? []) + [calibration.bias, calibration.dark, calibration.flat, referenceImage].compactMap { $0 }
     }
 
     init(
@@ -735,7 +750,8 @@ struct ImageStackRequest: Sendable {
         calibration: ImageStackCalibration,
         referenceImage: URL? = nil,
         choosesReferenceAutomatically: Bool = false,
-        additionalProtectedSources: [URL] = []
+        additionalProtectedSources: [URL] = [],
+        libraryPlan: LibraryPreparedPlan? = nil
     ) {
         self.inputs = inputs
         self.output = output
@@ -745,6 +761,7 @@ struct ImageStackRequest: Sendable {
         self.referenceImage = referenceImage
         self.choosesReferenceAutomatically = choosesReferenceAutomatically
         self.additionalProtectedSources = additionalProtectedSources
+        self.libraryPlan = libraryPlan
     }
 }
 
@@ -932,10 +949,9 @@ enum ImageStackEngine {
             ?? request.calibration.validationMessage(for: request.inputs) {
             throw ImageStackError.invalidRequest(message)
         }
-        try StackInputProtection.validate(output: request.output, sources: request.protectedSources)
 
         let accessURLs = Set(
-            request.inputs + [
+            request.protectedSources + (request.libraryPlan?.accessURLs ?? []) + [
                 request.calibration.bias,
                 request.calibration.dark,
                 request.calibration.flat,
@@ -946,6 +962,7 @@ enum ImageStackEngine {
         )
         let accessedURLs = accessURLs.filter { $0.startAccessingSecurityScopedResource() }
         defer { accessedURLs.forEach { $0.stopAccessingSecurityScopedResource() } }
+        try StackInputProtection.validate(output: request.output, sources: request.protectedSources)
 
         if cancellation.isCancelled { throw CancellationError() }
         progress(ImageStackProgress(
@@ -957,6 +974,7 @@ enum ImageStackEngine {
             rejectedFrames: 0
         ))
 
+        if let plan = request.libraryPlan { try CalibrationLibraryService.verify(plan.review.sources) }
         let optionsJSON = String(decoding: try request.options.jsonData, as: UTF8.self)
         var errorPointer: UnsafeMutablePointer<CChar>?
         var candidates = [request.inputs[0]]
@@ -980,9 +998,34 @@ enum ImageStackEngine {
             let paths = ([anchor] + request.inputs.filter { $0 != anchor }).map(\.path)
             let plan = try StackNativeOpener.openExpanded(paths: paths, optionsJSON: optionsJSON,
                 calibration: request.calibration, maximumMegasamples: request.options.maximumCanvasMegasamples,
-                cancellation: cancellation)
+                cancellation: cancellation, libraryPlan: request.libraryPlan)
             opened = (plan.handle, nil)
             canvasNote = plan.note
+        } else if let plan = request.libraryPlan {
+            // Each ranked candidate must open with its own complete calibration
+            // gate. A failed open owns no state and cannot leak the previous set.
+            var selected: (handle: OpaquePointer, selection: StackChannelReferenceSelection?)?
+            var failures: [String] = []
+            for candidate in candidates {
+                let session = try plan.session(for: candidate.path)
+                var options = try JSONSerialization.jsonObject(with: request.options.jsonData) as! [String: Any]
+                var gate = try JSONSerialization.jsonObject(with: JSONEncoder().encode(session.tolerances)) as! [String: Any]
+                // StackOptions accepts application gates only; master cohort
+                // temperature/session windows belong to file-session policy.
+                gate.removeValue(forKey: "master_temperature_c")
+                gate.removeValue(forKey: "flat_session_seconds")
+                options["match_tolerances"] = gate
+                let json = String(decoding: try JSONSerialization.data(withJSONObject: options), as: UTF8.self)
+                do {
+                    selected = try StackNativeOpener.open(candidates: [candidate.path],
+                        referenceImagePath: request.referenceImage?.path, optionsJSON: json,
+                        calibration: session.calibration)
+                    candidates = [candidate]
+                    break
+                } catch { failures.append("\(candidate.lastPathComponent): \(error.localizedDescription)") }
+            }
+            guard let selected else { throw ImageStackError.core(failures.joined(separator: "\n")) }
+            opened = selected
         } else {
             opened = try StackNativeOpener.open(candidates: candidates.map(\.path),
                 referenceImagePath: request.referenceImage?.path, optionsJSON: optionsJSON,
@@ -1027,6 +1070,10 @@ enum ImageStackEngine {
 
         for (offset, url) in orderedInputs.dropFirst(initialCount).enumerated() {
             if cancellation.isCancelled { throw CancellationError() }
+            if let plan = request.libraryPlan {
+                try plan.verifyActiveSources(for: url.path)
+                if !expanded, let liveStacker { try plan.session(for: url.path).apply(to: liveStacker) }
+            }
             errorPointer = nil
             let responsePointer = url.path.withCString { path in
                 seiza_live_stacker_push_fits_json(liveStacker, path, &errorPointer)
@@ -1074,6 +1121,7 @@ enum ImageStackEngine {
         }
 
         if cancellation.isCancelled { throw CancellationError() }
+        if let plan = request.libraryPlan { try CalibrationLibraryService.verify(plan.review.sources) }
         guard seiza_live_stacker_accepted_frames(liveStacker) > 1 else {
             throw ImageStackError.noAdditionalFrames(dispositions)
         }
@@ -1398,6 +1446,8 @@ struct ImageStackWorkflowView: View {
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var coordinator = ImageStackCoordinator()
+    @StateObject private var libraryModel = CalibrationLibraryModel()
+    @State private var showsLibraryReview = false
     @State private var selectedURLs: Set<URL>
     @State private var referenceURLs: [String: URL] = [:]
     @State private var automaticReferenceGroups: Set<String> = []
@@ -1406,7 +1456,6 @@ struct ImageStackWorkflowView: View {
     @State private var calibration = ImageStackCalibration()
     @State private var calibrationSource = StackCalibrationSource.masters
     @State private var calibrationLibrary: URL?
-    @State private var flatQualityOptions = FlatQualityOptions()
     @State private var splitByFilenameFilter = true
     @State private var outputBaseName = "stacked"
     @State private var groupsPanelsAutomatically = false
@@ -1421,7 +1470,6 @@ struct ImageStackWorkflowView: View {
     @State private var pendingWarnings: [String]?
     @State private var pendingFlatReviews: [FlatQualityReview] = []
     @State private var pendingJobs: [ImageStackJob]?
-    @State private var preparedResults: [CalibrationPreparationResult] = []
     @State private var preparationTask: Task<Void, Never>?
 
     init(urls: [URL], onComplete: @escaping (ImageStackBatchResult) -> Void) {
@@ -1461,12 +1509,18 @@ struct ImageStackWorkflowView: View {
                     pendingJobs = nil
                     preparationNotice = "Stacking was cancelled before any light "
                         + "frames were processed."
-                    releasePreparedResults()
                 })
         }
+        .sheet(isPresented: $showsLibraryReview) {
+            if let library = calibrationLibrary {
+                CalibrationLibraryReviewView(model: libraryModel, library: library, lights: libraryLights)
+            }
+        }
+        .onChange(of: libraryLights) { _, _ in libraryModel.invalidate() }
+        .onChange(of: calibrationLibrary) { _, _ in libraryModel.invalidate() }
         .onDisappear {
+            libraryModel.task?.cancel()
             preparationTask?.cancel()
-            releasePreparedResults()
         }
     }
 
@@ -1547,14 +1601,8 @@ struct ImageStackWorkflowView: View {
                     pendingWarnings = nil
                     pendingFlatReviews = []
                     pendingJobs = nil
-                    releasePreparedResults()
                 }
             })
-    }
-
-    private func releasePreparedResults() {
-        preparedResults.forEach { $0.release() }
-        preparedResults = []
     }
 
     private var configurationView: some View {
@@ -1761,12 +1809,8 @@ struct ImageStackWorkflowView: View {
                             )
                         }
                     } else {
-                        Text("Seiza prepares one compatible calibration set per output "
-                            + "across that output's selected lights, builds bias, dark, dark-flat, "
-                            + "and flat masters in dependency order, and caches "
-                            + "them for reuse.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        Text("Grade the library, review matches for every light, then build and reuse shared masters. Mosaics can use several calibration sessions in one output.")
+                            .font(.caption).foregroundStyle(.secondary)
                         LabeledContent("Library") {
                             HStack {
                                 Text(calibrationLibrary?.path
@@ -1779,15 +1823,26 @@ struct ImageStackWorkflowView: View {
                                 Button("Choose…") { chooseCalibrationLibrary() }
                             }
                         }
-                        FlatQualityControls(options: $flatQualityOptions)
-                            .disabled(isPreparingCalibration || coordinator.isRunning)
-                        if calibrationLibrary != nil {
-                            Text("Masters are matched independently for each output "
-                                + "and cached for reuse. Panels and folders within "
-                                + "one output share the same calibration set.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        HStack {
+                            Button(libraryModel.busy ? "Analyzing…" : "Analyze Calibration") {
+                                if let library = calibrationLibrary { libraryModel.analyze(library: library, lights: libraryLights) }
+                            }.disabled(calibrationLibrary == nil || libraryModel.busy)
+                            Button("Review Grades and Matches…") { showsLibraryReview = true }
+                                .disabled(libraryModel.review == nil)
                         }
+                        if libraryModel.busy { ProgressView("Measuring and matching…") }
+                        if let review = libraryModel.review {
+                            Text("\(review.frames.count) calibration frames · \(review.sessionCount) sessions · \(review.missing.filter { $0 }.count) incomplete lights")
+                                .font(.caption)
+                        }
+                        if let error = libraryModel.error { Text(error).foregroundStyle(.red) }
+                        Picker("Incomplete lights", selection: $libraryModel.preferences.incomplete) {
+                            Text("Stop and review").tag("stop")
+                            Text("Exclude from stack").tag("exclude")
+                            Text("Keep with available calibration").tag("keep")
+                        }
+                        CalibrationLibrarySettingsView(model: libraryModel).disabled(libraryModel.busy)
+
                     }
                 }
 
@@ -1957,7 +2012,19 @@ struct ImageStackWorkflowView: View {
             else {
                 return "Choose a calibration library folder."
             }
-            return options.validationMessage ?? flatQualityOptions.validationMessage
+            if libraryModel.busy { return "Wait for calibration analysis to finish." }
+            guard let review = libraryModel.review, !libraryModel.stale else { return "Analyze and review calibration before stacking." }
+            if libraryModel.preferences.incomplete == "stop", review.missing.contains(true) { return "Some lights have incomplete calibration. Review their matches or change Incomplete lights." }
+            if libraryModel.preferences.incomplete == "exclude" {
+                for group in stackGroups {
+                    let count = group.inputs.filter { url in
+                        guard let index = libraryLights.firstIndex(of: url) else { return false }
+                        return !review.missing[index]
+                    }.count
+                    if count < 2 { return "\(group.title) needs at least two lights with complete calibration." }
+                }
+            }
+            return options.validationMessage
         }
         return options.validationMessage ?? calibration.validationMessage(for: selectedFrames)
     }
@@ -2084,30 +2151,48 @@ struct ImageStackWorkflowView: View {
             preparationMessage = "Inspecting target light headers…"
             preparationTask = Task { @MainActor in
                 do {
-                    let prepared = try await prepareCalibrations(
-                        groups: groups, library: library)
+                    guard let reviewed = libraryModel.review, !libraryModel.stale else {
+                        throw ImageStackError.invalidRequest("Analyze calibration again before stacking.")
+                    }
+                    let lights = libraryLights
+                    let preferences = libraryModel.preferences
+                    preparationMessage = "Building reviewed calibration masters…"
+                    let prepared = try await CalibrationLibraryService.perform(LibraryRequest(operation: "execute",
+                        library: library, lights: lights, preferences: preferences, reviewKey: reviewed.reviewKey))
+                    let plan = LibraryPreparedPlan(review: prepared, originalPaths: lights.map(\.path), accessURLs: [library] + lights)
+                    let jobs = try makeLibraryJobs(groups: groups, outputSelection: outputSelection, plan: plan,
+                        excludeIncomplete: preferences.incomplete == "exclude")
                     isPreparingCalibration = false
-                    let jobs = makeJobs(
-                        groups: groups,
-                        outputSelection: outputSelection,
-                        calibrationsByGroup: prepared.byGroup)
-                    if prepared.warnings.isEmpty && prepared.reviews.isEmpty {
+                    let newWarnings = prepared.warnings.filter { !reviewed.warnings.contains($0) }
+                    if newWarnings.isEmpty {
                         startBatch(jobs)
                     } else {
                         pendingJobs = jobs
-                        pendingFlatReviews = prepared.reviews
-                        pendingWarnings = prepared.warnings
+                        pendingFlatReviews = []
+                        pendingWarnings = newWarnings
                     }
                 } catch is CancellationError {
                     isPreparingCalibration = false
                     preparationNotice = "Calibration preparation was cancelled."
-                    releasePreparedResults()
                 } catch {
                     isPreparingCalibration = false
                     preparationNotice = error.localizedDescription
-                    releasePreparedResults()
                 }
             }
+        }
+    }
+
+    private var libraryLights: [URL] { stackGroups.flatMap { orderedInputs(for: $0) } }
+
+    private func makeLibraryJobs(groups: [ImageStackGroup], outputSelection: StackFilePanels.OutputSelection,
+        plan: LibraryPreparedPlan, excludeIncomplete: Bool) throws -> [ImageStackJob] {
+        try zip(groups, outputSelection.outputs).map { group, output in
+            let inputs = try plan.preparedInputs(orderedInputs(for: group), excludeIncomplete: excludeIncomplete)
+            guard inputs.count >= 2 else { throw ImageStackError.invalidRequest("\(group.title) needs two usable lights after calibration exclusions.") }
+            return ImageStackJob(group: group, request: ImageStackRequest(inputs: inputs, output: output,
+                outputAccessURL: outputSelection.accessURL, options: stackOptions, calibration: ImageStackCalibration(),
+                referenceImage: referenceImage, choosesReferenceAutomatically: automaticReferenceGroups.contains(group.id),
+                additionalProtectedSources: urls, libraryPlan: plan))
         }
     }
 
@@ -2145,9 +2230,8 @@ struct ImageStackWorkflowView: View {
 
     private func startBatch(_ jobs: [ImageStackJob]) {
         if groupsPanelsAutomatically,
-            panelAnalysis?.sourcesUnchanged(jobs.flatMap { $0.request.inputs }) != true {
+            panelAnalysis?.sourcesUnchanged(selectedFrames) != true {
             preparationNotice = "A selected source changed. Solve and group it again."
-            releasePreparedResults()
             return
         }
         coordinator.start(
@@ -2159,126 +2243,7 @@ struct ImageStackWorkflowView: View {
         )
     }
 
-    private struct BatchPreparation {
-        var byGroup: [String: ImageStackCalibration] = [:]
-        var warnings: [String] = []
-        var reviews: [FlatQualityReview] = []
-    }
 
-    /// Probes every group's lights and prepares one master set per filter
-    /// group, protecting masters produced for earlier groups from pruning.
-    private func prepareCalibrations(
-        groups: [ImageStackGroup],
-        library: URL
-    ) async throws -> BatchPreparation {
-        var preparation = BatchPreparation()
-        var protectedMasters: [String] = []
-        let cacheDirectory = CalibrationCachePaths.forLibrary(library.path)
-        let service = CalibrationPreparationService()
-
-        for (index, group) in groups.enumerated() {
-            preparationMessage = "\(group.title): inspecting target light headers…"
-            let title = group.title
-            let inputs = orderedInputs(for: group).map(\.path)
-            let probed = try await probeLights(inputs)
-            preparation.warnings.append(
-                contentsOf: probed.warnings.map { "\(title): \($0)" })
-            let selection = CalibrationTargetSelection.partition(probed.probes)
-            preparation.warnings.append(
-                contentsOf: selection.warnings.map { "\(title): \($0)" })
-            guard let reference = selection.eligible.first else {
-                preparation.warnings.append(
-                    "\(title): no raw light frame could be inspected; the stack "
-                        + "runs without automatic calibration.")
-                continue
-            }
-
-            let request = CalibrationPreparationRequest(
-                reference: reference,
-                targetLights: Array(selection.eligible.dropFirst()),
-                sourcePaths: [library.path],
-                cacheDirectory: cacheDirectory,
-                protectedMasterPaths: protectedMasters,
-                options: CalibrationPreparationOptions(flatQuality: flatQualityOptions))
-            let count = groups.count
-            let position = index + 1
-            let result = try await service.prepare(request) { update in
-                Task { @MainActor in
-                    preparationMessage =
-                        "\(title) (\(position) of \(count)): \(update.message)"
-                }
-            }
-            preparedResults.append(result)
-            preparation.byGroup[group.id] = result.calibration
-            preparation.warnings.append(
-                contentsOf: result.warnings.map { "\(title): \($0)" })
-            preparation.reviews.append(contentsOf: result.flatQualityReviews.map { review in
-                var grouped = review
-                grouped.groupTitle = title
-                return grouped
-            })
-            protectedMasters.append(
-                contentsOf: result.summaries.compactMap(\.masterPath))
-        }
-        return preparation
-    }
-
-    /// Probes a group's lights, tolerating unreadable files: an overnight
-    /// batch is not refused because one frame's header cannot be read. The
-    /// frame is still offered to the stacker, whose native admission decides
-    /// its fate.
-    private func probeLights(
-        _ paths: [String]
-    ) async throws -> (probes: [CalibrationFrameProbe], warnings: [String]) {
-        enum ProbeResult: Sendable {
-            case probed(index: Int, probe: CalibrationFrameProbe)
-            case failed(index: Int, path: String, message: String)
-        }
-
-        var probesByIndex: [Int: CalibrationFrameProbe] = [:]
-        var failures: [(index: Int, path: String, message: String)] = []
-        try await withThrowingTaskGroup(of: ProbeResult.self) { group in
-            var iterator = paths.enumerated().makeIterator()
-            var inFlight = 0
-            func enqueueNext() {
-                guard let (index, path) = iterator.next() else { return }
-                inFlight += 1
-                group.addTask {
-                    do {
-                        let probe = try await runBlocking {
-                            try CalibrationService.probe(path: path)
-                        }
-                        return .probed(index: index, probe: probe)
-                    } catch is CancellationError {
-                        throw CancellationError()
-                    } catch {
-                        return .failed(
-                            index: index, path: path,
-                            message: error.localizedDescription)
-                    }
-                }
-            }
-            for _ in 0..<4 {
-                enqueueNext()
-            }
-            while inFlight > 0, let result = try await group.next() {
-                inFlight -= 1
-                switch result {
-                case .probed(let index, let probe):
-                    probesByIndex[index] = probe
-                case .failed(let index, let path, let message):
-                    failures.append((index, path, message))
-                }
-                enqueueNext()
-            }
-        }
-        let probes = paths.indices.compactMap { probesByIndex[$0] }
-        let warnings = failures.sorted { $0.index < $1.index }.map { failure in
-            let name = URL(fileURLWithPath: failure.path).lastPathComponent
-            return "Could not inspect \(name): \(failure.message)"
-        }
-        return (probes, warnings)
-    }
 }
 
 @MainActor

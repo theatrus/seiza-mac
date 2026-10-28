@@ -2502,8 +2502,10 @@ dependencies = [
 name = "seiza-mac-core"
 version = "0.8.9"
 dependencies = [
+ "fs2",
  "seiza",
  "seiza-cabi",
+ "seiza-calibration",
  "seiza-download",
  "seiza-fits",
  "seiza-image-io",

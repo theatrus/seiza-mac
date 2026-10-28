@@ -222,7 +222,12 @@ with optional grouping by filename filter. Choose a channel reference for each g
 or let Seiza rank candidates and retry alignment. An optional **Shared alignment
 image** puts every filter on the same output grid while preserving each
 channel’s own normalization. Calibrate with existing masters or build and
-cache matched masters from raw calibration frames. Track progress and SNR,
+cache matched masters from raw calibration frames. **Match graded calibration
+library** measures and grades a library, exposes global/per-rig matching and grade
+settings, and lets you review each light's matches before masters are built.
+Fixed and expanded outputs can switch calibration sessions per light. See the
+[calibration setup guide](docs/STACKING-CALIBRATION.md) for choices, coverage policy
+and the current metadata/time flat-grouping limitation. Track progress and SNR,
 cancel a run, and open the saved results.
 
 ### Stack a mosaic from selected lights
@@ -450,8 +455,9 @@ The app uses published `seiza-cabi` 0.46.0, `seiza` 0.46.0,
 and `seiza-download` 0.9.0, with dust maps, depth planes and
 image reading and writing through `seiza-image-io`. Library and bridge header
 must be updated together. About reports the linked release version and source
-commit. Optional [flat-quality review](docs/CALIBRATION-QUALITY.md) uses the native
-dust diagnostics during automatic calibration.
+commit. [Graded calibration setup](docs/STACKING-CALIBRATION.md) uses the shared library
+policy and master builders. Live acquisition retains its existing optional
+[flat-quality review](docs/CALIBRATION-QUALITY.md).
 
 **File → Color Tools…** opens preview-first narrowband, continuum subtraction,
 and RGB star extraction/restoration workflows. See [Color Tools](docs/COLOR-TOOLS.md)

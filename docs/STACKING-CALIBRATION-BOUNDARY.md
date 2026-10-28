@@ -10,10 +10,13 @@ planning policy and expanded raw-file planning under per-light calibration.
 The current dependency is published Seiza/C ABI **0.46.0**, calibration **0.10.0**
 and stacking **0.53.0**. Seiza #385 supplied the shared policy and
 `seiza_live_stacker_open_fits_expanding_sessions`; the generated header now exposes
-both. Library planning accepts cached host records and prepared groups, including
-master adoption, complete matching gates and flat-retry decisions. The Mac host
-still needs to execute those contracts and compare complete plan results against
-the reference fixtures. Keep setup disabled until that host work is complete.
+both. The Mac now adapts cached host records to `library::evaluate`, executes its
+recipes and flat-retry policy, and exposes graded matching/settings in Stack
+Images. Both canvas modes use per-light sessions; the expanded path calls the
+released session-aware opener. Desktop tests cover the actual driver, A→B→A
+calibration/replay and per-rig gates. Measured flat-family evidence is not supplied
+yet; this is graded metadata/time matching, not full PSF Guard parity. See the
+[current setup and limitations](STACKING-CALIBRATION.md).
 
 ## Verified contracts from the original audit
 
@@ -36,7 +39,7 @@ the reference's gain/rotation. The boundary test intentionally uses both
 different gain and a different flat angle. Geometry remains common to a stack.
 
 All native operations require exclusive access to the handle. Gate and master
-setters are separate calls, not one transaction. A future executor must validate
+setters are separate calls, not one transaction. The executor must validate
 a session before applying it and abort the pending push if any setter fails.
 Never continue with a previous session after a failed switch. Set tolerances
 before the light-rotation basis: resetting tolerances restores recorded angles.
@@ -51,8 +54,8 @@ currently compare **screening**, not the complete planner's decisions.
 The reusable policy behind PSF Guard's library selection and measured flat
 groups is now in Seiza, with versioned records and explanations through C and
 Python. Keep database, filesystem/cache and bookmark access in the hosts.
-Run these fixtures through the Mac adapter before enabling its controls.
-Preserve ungraded eligibility, suspect warnings, poor exclusion, persistent
+Complete measured-family fixture comparisons remain a prerequisite for claiming
+full parity. The enabled metadata/time path preserves ungraded eligibility, suspect warnings, poor exclusion, persistent
 choices, hard compatibility, measured/unknown angle bases and fitted pedestal
 recipes. Default numbers must come from the shared implementation.
 
@@ -92,8 +95,9 @@ the required file-planning contract:
 The request shape should be shared with the eventual executor rather than
 adding another unrelated session format. Prove C/Python binding parity, fixed
 and expanded outputs, replay, CPU/GPU fallback and cancellation before enabling
-the Mac executor. Follow the Seiza processing-output version procedure for
-any changed processing behavior. No processing algorithm or output version is
-changed by this Mac boundary/fixture work.
+additional measured-family behavior. The current desktop executor has fixed and
+expanded output/replay and per-rig gate coverage. Follow the Seiza processing-output version procedure for
+any changed processing behavior. The Mac orchestration uses the published processing
+algorithms and output versions unchanged.
 
 Continue with the [stacking setup plan](STACKING-CALIBRATION.md).

@@ -1,3 +1,4 @@
+mod calibration_library;
 mod catalogs;
 mod color_tools;
 mod sky_overlap;
