@@ -10,16 +10,16 @@ publish = false
 crate-type = ["staticlib"]
 
 [dependencies]
-seiza-cabi = { git = "https://github.com/theatrus/seiza", rev = "01b5f5574f462c12856e30c13c6c7eb41a0823b5" }
-seiza = { git = "https://github.com/theatrus/seiza", rev = "01b5f5574f462c12856e30c13c6c7eb41a0823b5" }
+seiza-cabi = { git = "https://github.com/theatrus/seiza", rev = "d11b570f06305dc1638c5bbe86894ebcf667c64f" }
+seiza = { git = "https://github.com/theatrus/seiza", rev = "d11b570f06305dc1638c5bbe86894ebcf667c64f" }
 tempfile = "3"
-seiza-download = { git = "https://github.com/theatrus/seiza", rev = "01b5f5574f462c12856e30c13c6c7eb41a0823b5" }
-seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "01b5f5574f462c12856e30c13c6c7eb41a0823b5" }
-seiza-image-io = { git = "https://github.com/theatrus/seiza", rev = "01b5f5574f462c12856e30c13c6c7eb41a0823b5" }
+seiza-download = { git = "https://github.com/theatrus/seiza", rev = "d11b570f06305dc1638c5bbe86894ebcf667c64f" }
+seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "d11b570f06305dc1638c5bbe86894ebcf667c64f" }
+seiza-image-io = { git = "https://github.com/theatrus/seiza", rev = "d11b570f06305dc1638c5bbe86894ebcf667c64f" }
 serde = { version = "1", features = ["derive"] }
-seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "01b5f5574f462c12856e30c13c6c7eb41a0823b5" }
-seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "01b5f5574f462c12856e30c13c6c7eb41a0823b5" }
-seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "01b5f5574f462c12856e30c13c6c7eb41a0823b5" }
+seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "d11b570f06305dc1638c5bbe86894ebcf667c64f" }
+seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "d11b570f06305dc1638c5bbe86894ebcf667c64f" }
+seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "d11b570f06305dc1638c5bbe86894ebcf667c64f" }
 sha2 = "0.11"
 serde_json = "1"
 tokio = { version = "1", features = ["rt"] }

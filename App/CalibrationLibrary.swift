@@ -103,6 +103,12 @@ struct LibraryPreferences: Codable, Equatable, Sendable {
         flatAssociation = try c.decodeIfPresent(LibraryAssociation.self, forKey: .flatAssociation) ?? flatAssociation
         darkAssociation = try c.decodeIfPresent(LibraryAssociation.self, forKey: .darkAssociation) ?? darkAssociation
     }
+    /// This execution policy does not change Seiza's reviewed matches or key.
+    var reviewInputs: Self {
+        var inputs = self
+        inputs.incomplete = "stop"
+        return inputs
+    }
     static func load(_ defaults: UserDefaults = .standard) -> Self {
         guard let data = defaults.data(forKey: "gradedCalibrationPreferences.v1"),
               let value = try? JSONDecoder().decode(Self.self, from: data) else { return Self() }
@@ -285,7 +291,7 @@ struct LibraryPreparedPlan: Sendable {
 @MainActor final class CalibrationLibraryModel: ObservableObject {
     @Published var preferences = LibraryPreferences.load() {
         didSet {
-            invalidate()
+            if preferences.reviewInputs != oldValue.reviewInputs { invalidate() }
             if let data = try? JSONEncoder().encode(preferences) { UserDefaults.standard.set(data, forKey: "gradedCalibrationPreferences.v1") }
         }
     }

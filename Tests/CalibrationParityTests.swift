@@ -382,9 +382,14 @@ final class GradedCalibrationWorkflowTests: XCTestCase {
         let review = try await CalibrationLibraryService.perform(fixture.request("analyze", preferences: preferences))
         XCTAssertEqual(review.missing, [false, true, false])
         do { _ = try await CalibrationLibraryService.perform(fixture.request("execute", preferences: preferences, key: review.reviewKey)); XCTFail("Stop must reject an incomplete plan") } catch {}
+        // The policy is chosen after reviewing missing matches; reuse that key.
+        preferences.incomplete = "keep"
+        let kept = try await CalibrationLibraryService.perform(fixture.request("execute", preferences: preferences, key: review.reviewKey))
+        XCTAssertEqual(kept.reviewKey, review.reviewKey)
+        XCTAssertEqual(kept.missing, review.missing)
         preferences.incomplete = "exclude"
-        let updated = try await CalibrationLibraryService.perform(fixture.request("analyze", preferences: preferences))
-        let built = try await CalibrationLibraryService.perform(fixture.request("execute", preferences: preferences, key: updated.reviewKey))
+        let built = try await CalibrationLibraryService.perform(fixture.request("execute", preferences: preferences, key: review.reviewKey))
+        XCTAssertEqual(built.reviewKey, review.reviewKey)
         let plan = LibraryPreparedPlan(review: built, originalPaths: fixture.lights.map(\.path))
         XCTAssertEqual(try plan.preparedInputs(fixture.lights, excludeIncomplete: true).map(\.lastPathComponent), ["light-0.fits", "light-2.fits"])
         XCTAssertEqual(try plan.preparedInputs(fixture.lights, excludeIncomplete: false).count, 3)
@@ -549,6 +554,45 @@ final class GradedCalibrationWorkflowTests: XCTestCase {
         XCTAssertEqual(review.missing, [false, false, false])
         XCTAssertTrue(review.grouping["sessions"].array.isEmpty)
         XCTAssertEqual(review.frames.count, 6)
+    }
+    func testLibraryDiscoveryReadsLinkedCalibrationFilesAndReusesTheirMasters() async throws {
+        let fixture = try Fixture(); defer { fixture.remove() }
+        let originals = fixture.root.appendingPathComponent("original-calibration")
+        try FileManager.default.moveItem(at: fixture.library, to: originals)
+        try FileManager.default.createDirectory(at: fixture.library, withIntermediateDirectories: true)
+        for source in try FileManager.default.contentsOfDirectory(at: originals, includingPropertiesForKeys: nil) {
+            try FileManager.default.createSymbolicLink(at: fixture.library.appendingPathComponent(source.lastPathComponent), withDestinationURL: source)
+        }
+        // Recursive directory links must not loop or cause the cache to be scanned.
+        try FileManager.default.createSymbolicLink(at: fixture.library.appendingPathComponent("loop"), withDestinationURL: fixture.library)
+        let review = try await CalibrationLibraryService.perform(fixture.request("analyze"))
+        XCTAssertEqual(review.frames.count, 6)
+        XCTAssertEqual(review.assignments, [0, 1, 0])
+        XCTAssertEqual(review.missing, [false, false, false])
+        let expectedPaths = Set(try FileManager.default.contentsOfDirectory(at: originals, includingPropertiesForKeys: nil)
+            .map { $0.resolvingSymlinksInPath().path })
+        XCTAssertEqual(Set(review.frames.map { URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().path }), expectedPaths)
+        let built = try await CalibrationLibraryService.perform(fixture.request("execute", key: review.reviewKey))
+        let again = try await CalibrationLibraryService.perform(fixture.request("execute", key: review.reviewKey))
+        XCTAssertEqual(built.fileSessions.map(\.bias), again.fileSessions.map(\.bias))
+        try CalibrationLibraryService.verify(built.sources)
+    }
+    @MainActor func testIncompletePolicyKeepsReviewedMatchesAndPendingAnalysis() {
+        let model = CalibrationLibraryModel()
+        let saved = model.preferences
+        defer { model.preferences = saved }
+        model.stale = false
+        model.busy = true
+        let inputs = model.preferences.reviewInputs
+        for policy in ["keep", "exclude", "stop"] {
+            model.preferences.incomplete = policy
+            XCTAssertEqual(model.preferences.reviewInputs, inputs)
+            XCTAssertFalse(model.stale)
+            XCTAssertTrue(model.busy)
+        }
+        model.preferences.flatAssociation = model.preferences.flatAssociation == .automatic ? .oneSet : .automatic
+        XCTAssertTrue(model.stale)
+        XCTAssertFalse(model.busy)
     }
     @MainActor func testNativeSettingsSchemaAndPreferencesRoundTripAndInvalidateReview() throws {
         let model = CalibrationLibraryModel()

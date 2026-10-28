@@ -1524,7 +1524,7 @@ struct ImageStackWorkflowView: View {
         .onChange(of: libraryLights) { _, _ in analyzeCalibration() }
         .onChange(of: calibrationLibrary) { _, _ in analyzeCalibration() }
         .onChange(of: providedCalibration) { _, _ in analyzeCalibration() }
-        .onChange(of: libraryModel.preferences) { _, _ in analyzeCalibration() }
+        .onChange(of: libraryModel.preferences.reviewInputs) { _, _ in analyzeCalibration() }
         .onChange(of: calibrationSource) { _, _ in analyzeCalibration() }
         .onDisappear {
             libraryModel.task?.cancel()

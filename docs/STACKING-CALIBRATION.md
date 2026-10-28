@@ -3,7 +3,7 @@
 Stack Images calls `seiza_calibration_files_json`, the shared file coordinator
 in [Seiza #406](https://github.com/theatrus/seiza/pull/406), based on Seiza/C ABI
 **0.47.0**, calibration **0.11.0** and stacking **0.54.0**. Cargo pins the exact
-upstream coordinator commit until it ships. The generated C header matches it.
+upstream review commit `d11b570` until it ships. The generated C header matches it.
 Swift owns setup, access grants and review; the app has no calibration
 orchestrator in Rust. Both canvas modes support per-light sessions. Live
 acquisition retains its existing preparation workflow.
@@ -28,6 +28,8 @@ acquisition retains its existing preparation workflow.
 6. Choose **Incomplete lights**: **Stop and review** (default), **Exclude from
    stack**, or **Keep with available calibration**. The setup checks that every
    output retains at least two usable lights when excluding incomplete ones.
+   Changing this policy keeps the current review and does not restart analysis;
+   matching, grading and source changes still require a fresh review.
 7. Choose the output and stack. The app verifies the reviewed plan, builds or
    reuses masters in dependency order, and carries each light's assignment into
    planning, integration and transient-removal replay. New execution warnings,
@@ -121,8 +123,11 @@ stamp, not a cryptographic hash of every pixel. Staged sources and masters have
 independently checked stamps, so corrupted or removed cache files are regenerated
 or refused. Sources and historical masters cannot be overwritten by an output.
 Scoped library/input URL access is retained during analysis, execution and the
-stack, including explicitly provided file grants and after the review sheet closes. Directory symlinks are not
-traversed; duplicate physical inputs are detected.
+stack, including explicitly provided file grants and after the review sheet closes.
+Linked calibration files are read by their canonical targets; directory symlinks
+and links into the cache are not traversed. Duplicate physical inputs are detected.
+Refused library files are remembered by their source stamp, avoiding repeat pixel
+reads when a library also contains lights or processed images.
 
 ## Light evidence, corrections and manual choices
 
@@ -164,12 +169,13 @@ PSF Guard screening, native session/checkpoint/replay, and the actual desktop
 planner/executor/engine. The desktop tests exercise graded A→B→A assignments on
 both canvases, corrected flat publication and transient-removal replay, manual
 choice preference migration/round trips, per-rig gates overriding global defaults,
-master reuse, Keep/Exclude/Stop preparation policy and protected/stale sources.
+master reuse, Keep/Exclude/Stop changes against the same reviewed key, linked
+calibration files, and protected/stale sources.
 
-The [upstream coordinator tests](https://github.com/theatrus/seiza/blob/01b5f5574f462c12856e30c13c6c7eb41a0823b5/seiza-stacking/src/calibration_files/mod.rs)
+The [upstream coordinator tests](https://github.com/theatrus/seiza/blob/d11b570f06305dc1638c5bbe86894ebcf667c64f/seiza-stacking/src/calibration_files/mod.rs)
 were moved with the implementation. They cover family/change evidence, unknown
 fits, path-scoped choices, split/join, correction pixels/cache reuse, poor grades,
 stability trim/rebuild, pedestal acceptance, normalized XISF staging, aliases,
 settings/source review invalidation and cancellation. C and Python exercise the
-same native coordinator; the [guide](https://github.com/theatrus/seiza/blob/01b5f5574f462c12856e30c13c6c7eb41a0823b5/docs/calibration-files.md)
+same native coordinator; the [guide](https://github.com/theatrus/seiza/blob/d11b570f06305dc1638c5bbe86894ebcf667c64f/docs/calibration-files.md)
 describes its Rust/C/Python interfaces and cache/source contracts.
