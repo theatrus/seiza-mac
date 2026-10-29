@@ -1448,6 +1448,9 @@ final class ImageStackCoordinator: ObservableObject {
 
 struct ImageStackWorkflowView: View {
     let urls: [URL]
+    let sourceAccessURLs: [URL]
+    @State private var importedFrames: StackInputSelection?
+    private var lightURLs: [URL] { importedFrames?.lights ?? [] }
     let onComplete: (ImageStackBatchResult) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -1479,16 +1482,23 @@ struct ImageStackWorkflowView: View {
     @State private var pendingJobs: [ImageStackJob]?
     @State private var preparationTask: Task<Void, Never>?
 
-    init(urls: [URL], onComplete: @escaping (ImageStackBatchResult) -> Void) {
+    init(urls: [URL], sourceAccessURLs: [URL] = [], onComplete: @escaping (ImageStackBatchResult) -> Void) {
         precondition(!urls.isEmpty)
         self.urls = urls
+        self.sourceAccessURLs = sourceAccessURLs
         self.onComplete = onComplete
-        _selectedURLs = State(initialValue: Set(urls))
+        _selectedURLs = State(initialValue: [])
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            if coordinator.isRunning || isPreparingCalibration {
+            if importedFrames == nil {
+                VStack(spacing: 16) {
+                    ProgressView("Reading frame types…")
+                    Text("Separating lights and calibration frames using FITS/XISF headers.").foregroundStyle(.secondary)
+                    Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                }
+            } else if coordinator.isRunning || isPreparingCalibration {
                 progressView
             } else {
                 configurationView
@@ -1496,6 +1506,7 @@ struct ImageStackWorkflowView: View {
         }
         .frame(width: 620, height: 640)
         .interactiveDismissDisabled(coordinator.isRunning || isPreparingCalibration)
+        .task { await importFrames() }
         .sheet(isPresented: warningSheetBinding) {
             CalibrationWarningsSheet(
                 warnings: pendingWarnings ?? [],
@@ -1519,7 +1530,7 @@ struct ImageStackWorkflowView: View {
                 })
         }
         .sheet(isPresented: $showsLibraryReview) {
-            CalibrationLibraryReviewView(model: libraryModel, library: calibrationLibrary, lights: libraryLights, provided: providedCalibration)
+            CalibrationLibraryReviewView(model: libraryModel, library: calibrationLibrary, lights: libraryLights, provided: providedCalibration, accessURLs: sourceAccessURLs)
         }
         .onChange(of: libraryLights) { _, _ in analyzeCalibration() }
         .onChange(of: calibrationLibrary) { _, _ in analyzeCalibration() }
@@ -1649,11 +1660,11 @@ struct ImageStackWorkflowView: View {
                 }
                 Section("Frames") {
                     HStack {
-                        Text("\(selectedURLs.count) of \(urls.count) selected")
+                        Text("\(selectedURLs.count) of \(lightURLs.count) lights selected")
                             .foregroundStyle(.secondary)
                         Spacer()
                         Button("All") {
-                            selectedURLs = Set(groupsPanelsAutomatically ? (panelAnalysis?.solved.map(\.url) ?? urls) : urls)
+                            selectedURLs = Set(groupsPanelsAutomatically ? (panelAnalysis?.solved.map(\.url) ?? lightURLs) : lightURLs)
                         }
                         Button("None") {
                             selectedURLs.removeAll()
@@ -1661,7 +1672,7 @@ struct ImageStackWorkflowView: View {
                     }
 
                     if !groupsPanelsAutomatically || panelAnalysis == nil {
-                        List(urls, id: \.self) { url in
+                        List(lightURLs, id: \.self) { url in
                             Toggle(isOn: selectedBinding(for: url)) {
                                 Text(url.lastPathComponent).lineLimit(1)
                             }
@@ -1669,6 +1680,17 @@ struct ImageStackWorkflowView: View {
                         .frame(height: 150)
                     }
 
+                    if let importedFrames {
+                        if !importedFrames.calibration.isEmpty {
+                            Text("\(importedFrames.calibration.count) calibration frames found in this collection.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        if !importedFrames.notes.isEmpty {
+                            DisclosureGroup("Import notes (\(importedFrames.notes.count))") {
+                                ForEach(importedFrames.notes, id: \.self) { Text($0).font(.caption).textSelection(.enabled) }
+                            }
+                        }
+                    }
                     DisclosureGroup("Optional sky-panel analysis") {
                         Toggle("Group lights by solved sky position", isOn: $groupsPanelsAutomatically)
                         Text("Plate-solve selected lights to review repeated pointings and split disconnected fields into separate outputs. Expanded mosaic works without this step. Installed solving catalogs are required for this analysis.")
@@ -1846,7 +1868,7 @@ struct ImageStackWorkflowView: View {
                         }
                         HStack {
                             Button(libraryModel.busy ? "Analyzing…" : "Analyze Calibration") {
-                                libraryModel.analyze(library: calibrationLibrary, lights: libraryLights, provided: providedCalibration)
+                                libraryModel.analyze(library: calibrationLibrary, lights: libraryLights, provided: providedCalibration, accessURLs: sourceAccessURLs)
                             }.disabled((calibrationLibrary == nil && providedCalibration.isEmpty) || libraryModel.busy)
                             Button("Review Grades and Matches…") { showsLibraryReview = true }
                                 .disabled(libraryModel.review == nil)
@@ -1983,14 +2005,15 @@ struct ImageStackWorkflowView: View {
     }
 
     private var selectedFrames: [URL] {
-        urls.filter(selectedURLs.contains)
+        lightURLs.filter(selectedURLs.contains)
     }
 
     private var hasMultipleDetectedFilters: Bool {
-        ImageStackGrouping.hasMultipleDetectedFilters(in: urls)
+        ImageStackGrouping.hasMultipleDetectedFilters(in: lightURLs)
     }
 
     private var stackGroups: [ImageStackGroup] {
+        guard !selectedFrames.isEmpty else { return [] }
         if groupsPanelsAutomatically {
             return panelAnalysis?.selectedGroups(selectedFrames, splitByFilter: splitByFilenameFilter) ?? []
         }
@@ -2107,10 +2130,25 @@ struct ImageStackWorkflowView: View {
         }
     }
 
+    private func importFrames() async {
+        guard importedFrames == nil else { return }
+        let urls = urls, accessURLs = sourceAccessURLs
+        let worker = Task.detached(priority: .userInitiated) { try StackInputService.classify(urls, accessURLs: accessURLs) }
+        do {
+            let frames = try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
+            try Task.checkCancellation()
+            importedFrames = frames
+            selectedURLs = Set(frames.lights)
+            providedCalibration = frames.calibration
+            if !frames.calibration.isEmpty { calibrationSource = .automatic; showsCalibration = true }
+        } catch is CancellationError { }
+        catch { importedFrames = .init(notes: [error.localizedDescription]) }
+    }
+
     private func analyzeCalibration() {
         guard calibrationSource == .automatic, !libraryLights.isEmpty,
               calibrationLibrary != nil || !providedCalibration.isEmpty else { libraryModel.invalidate(); return }
-        libraryModel.analyze(library: calibrationLibrary, lights: libraryLights, provided: providedCalibration, debounce: true)
+        libraryModel.analyze(library: calibrationLibrary, lights: libraryLights, provided: providedCalibration, accessURLs: sourceAccessURLs, debounce: true)
     }
 
     private func chooseCalibrationFiles() {
@@ -2196,8 +2234,9 @@ struct ImageStackWorkflowView: View {
                     let lights = libraryLights
                     let preferences = libraryModel.preferences
                     preparationMessage = "Building reviewed calibration masters…"
-                    let execution = LibraryRequest(operation: "execute", library: calibrationLibrary, lights: lights,
+                    var execution = LibraryRequest(operation: "execute", library: calibrationLibrary, lights: lights,
                         provided: providedCalibration, preferences: preferences, reviewKey: reviewed.reviewKey)
+                    execution.accessURLs += sourceAccessURLs
                     let prepared = try await CalibrationLibraryService.perform(execution)
                     let plan = LibraryPreparedPlan(review: prepared, originalPaths: lights.map(\.path), accessURLs: execution.accessURLs)
                     let jobs = try makeLibraryJobs(groups: groups, outputSelection: outputSelection, plan: plan,
@@ -2232,7 +2271,7 @@ struct ImageStackWorkflowView: View {
             return ImageStackJob(group: group, request: ImageStackRequest(inputs: inputs, output: output,
                 outputAccessURL: outputSelection.accessURL, options: stackOptions, calibration: ImageStackCalibration(),
                 referenceImage: referenceImage, choosesReferenceAutomatically: automaticReferenceGroups.contains(group.id),
-                additionalProtectedSources: urls, libraryPlan: plan))
+                additionalProtectedSources: urls + sourceAccessURLs, libraryPlan: plan))
         }
     }
 
@@ -2262,7 +2301,7 @@ struct ImageStackWorkflowView: View {
                             : calibration),
                     referenceImage: referenceImage,
                     choosesReferenceAutomatically: automaticReferenceGroups.contains(group.id),
-                    additionalProtectedSources: urls
+                    additionalProtectedSources: urls + sourceAccessURLs
                 )
             )
         }

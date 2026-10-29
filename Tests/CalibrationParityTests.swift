@@ -336,6 +336,48 @@ final class GradedCalibrationWorkflowTests: XCTestCase {
         }
         func remove() { try? FileManager.default.removeItem(at: root) }
     }
+    func testOpenedMixedFolderRoutesCalibrationAndStacksOnlyLights() async throws {
+        let fixture = try Fixture(); defer { fixture.remove() }
+        let nested = fixture.root.appendingPathComponent("nested")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        // Names intentionally disagree with the roles: only native headers route files.
+        let moved = nested.appendingPathComponent("flat-looking-name.fits")
+        try FileManager.default.moveItem(at: fixture.lights[0], to: moved)
+        let master = try SyntheticFrame.write(width: 160, height: 128,
+            values: .init(repeating: -32700, count: 160 * 128),
+            cards: ["IMAGETYP= 'MASTER LIGHT'", "SEIZAMST=                    T"],
+            directory: nested, name: "old-stack.fits")
+        let broken = nested.appendingPathComponent("broken.fits")
+        try Data("not an image".utf8).write(to: broken)
+        let scan = try await ImageCollection.scanInBackground(from: [fixture.root])
+        let selected = try await Task.detached {
+            try StackInputService.classify(scan.images, accessURLs: scan.directories)
+        }.value
+        XCTAssertEqual(selected.lights.count, 3)
+        XCTAssertEqual(selected.calibration.count, 6)
+        XCTAssertTrue(selected.lights.contains(moved))
+        XCTAssertFalse(selected.lights.contains(master))
+        XCTAssertTrue(selected.notes.contains { $0.contains("old-stack.fits") })
+        XCTAssertTrue(selected.notes.contains { $0.contains("broken.fits") })
+        var request = LibraryRequest(operation: "analyze", lights: selected.lights, provided: selected.calibration)
+        request.cache = fixture.cache.path
+        request.accessURLs += scan.directories
+        let review = try await CalibrationLibraryService.perform(request)
+        XCTAssertEqual(review.missing, [false, false, false])
+        request.operation = "execute"; request.reviewKey = review.reviewKey
+        let built = try await CalibrationLibraryService.perform(request)
+        let plan = LibraryPreparedPlan(review: built, originalPaths: selected.lights.map(\.path), accessURLs: request.accessURLs)
+        for expanded in [false, true] {
+            var options = ImageStackOptions()
+            options.canvasMode = expanded ? .expanded : .fixed
+            options.useGPU = false; options.normalization = .none; options.rejection = .none
+            let result = try ImageStackEngine.stack(request: .init(inputs: selected.lights,
+                output: fixture.root.appendingPathComponent("folder-stack-\(expanded).fits"), options: options,
+                calibration: .init(), additionalProtectedSources: scan.images, libraryPlan: plan), cancellation: .init()) { _ in }
+            XCTAssertEqual(result.acceptedFrames, 3)
+        }
+    }
+
     func testActualDesktopEngineUsesGradedABAPlanOnFixedAndExpandedCanvases() async throws {
         let fixture = try Fixture(); defer { fixture.remove() }
         let original = try fixture.lights.map { try Data(contentsOf: $0) }

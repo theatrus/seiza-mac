@@ -5,9 +5,24 @@ stretch 0.3.2 and parallax 0.19.5. Cargo pins the shared file coordinator
 commit from [Seiza #406](https://github.com/theatrus/seiza/pull/406); the complete generated C header matches it. Graded library
 setup calls the shared C ABI described in the [setup guide](STACKING-CALIBRATION.md).
 
-## Review selected flats
+## Inspect one flat in the sidebar
 
-In **Stack Images** or **Live Stack**, choose **Build from calibration frames**
+Open a flat image, show the right-hand Inspector and click **Inspect Flat**.
+The source file is measured off the main thread with the existing native flat
+measurement and screening calls. The sidebar includes raw levels, clipping,
+noise, dust geometry, vignetting and an illumination map. Saturation and optional
+optical geometry are adjustable. It shows the default single-frame grade for raw
+flats, but no raw-exposure grade for processed or master flats. It does not infer
+session stability or light matching from one frame. Changing viewer adjustments
+does not alter the measurement input. See [the inspection guide](USING-SEIZA.md#inspect-a-flat).
+
+For a mixed folder, **Stack Images** routes calibration frames to the shared
+graded coordinator automatically. Review the group's grades and matches there;
+its matching settings and selection remain native.
+
+## Review selected flats during live preparation
+
+In **Live Stack**, choose **Build from calibration frames**
 and enable **Review flat quality**. Seiza measures the exact raw flat set
 selected by native metadata matching, including when its master is cached.
 The review appears before light frames are processed. It does not exclude,

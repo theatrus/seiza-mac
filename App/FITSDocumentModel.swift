@@ -121,7 +121,16 @@ final class ImageDocumentModel: ObservableObject {
         }
     }
 
+    enum FlatInspectionState {
+        case idle, inspecting
+        case inspected(FlatInspection)
+        case failed(String)
+    }
+
     let url: URL
+    @Published private(set) var frameProbe: CalibrationFrameProbe?
+    @Published private(set) var flatInspectionState: FlatInspectionState = .idle
+    private var flatInspectionGeneration = 0
     @Published private(set) var loadState: LoadState = .loading
     @Published private(set) var solveState: SolveState = .idle
     @Published private(set) var starAnalysisState: StarAnalysisState = .idle
@@ -202,6 +211,38 @@ final class ImageDocumentModel: ObservableObject {
             }
         }
         load()
+        loadFrameProbe()
+    }
+
+    private func loadFrameProbe() {
+        guard ImageCollection.isStackableImage(url) else { return }
+        let url = url
+        Task { @MainActor [weak self] in
+            let probe = await Task.detached(priority: .utility) {
+                let accessed = url.startAccessingSecurityScopedResource()
+                defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+                return try? CalibrationService.probe(path: url.path)
+            }.value
+            self?.frameProbe = probe
+        }
+    }
+
+    /// Measure the linear file, independent of stretch and other viewer edits.
+    func inspectFlat(options: FlatQualityOptions) {
+        flatInspectionGeneration &+= 1
+        let generation = flatInspectionGeneration
+        flatInspectionState = .inspecting
+        let url = url
+        Task { @MainActor [weak self] in
+            let outcome = await Task.detached(priority: .userInitiated) {
+                Result { try FlatInspectionService.inspect(url, options: options) }
+            }.value
+            guard let self, self.flatInspectionGeneration == generation else { return }
+            switch outcome {
+            case .success(let result): self.flatInspectionState = .inspected(result)
+            case .failure(let error): self.flatInspectionState = .failed(error.localizedDescription)
+            }
+        }
     }
 
     var supportsAstronomyProcessing: Bool {

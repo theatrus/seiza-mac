@@ -11,8 +11,13 @@ acquisition retains its existing preparation workflow.
 ## Use the library
 
 1. Select lights from images, folders or TXT/CSV lists and open **Stack Images**.
-2. Expand **Calibration**, choose **Graded calibration files or library**, then add
-   files or choose a folder containing FITS/XISF bias, dark, dark-flat and flat frames or masters.
+2. A whole folder may contain lights alongside bias, dark, dark-flat and flat
+   frames or masters, including in subfolders. Stack Images reads native frame
+   roles from the FITS/XISF headers, selects only lights, and sends calibration
+   files to **Graded calibration files or library** automatically. The browser
+   keeps all images available for inspection. Import notes explain unreadable or
+   set-aside files; images without a recorded type are offered as lights for review.
+   You can also expand **Calibration** and add files or a library separately.
 3. Set **Calibration matching and grading settings**, globally or for a rig.
    Per-rig controls become available after the first analysis. A rig is identified
    by the camera and telescope metadata; gain, offset and other sensor fields

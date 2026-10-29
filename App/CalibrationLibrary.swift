@@ -309,10 +309,11 @@ struct LibraryPreparedPlan: Sendable {
             fields = try JSONDecoder().decode(Schema.self, from: CalibrationLibraryService.call(LibraryRequest(operation: "schema"))).settings
         } catch { self.error = error.localizedDescription }
     }
-    func analyze(library: URL?, lights: [URL], provided: [URL] = [], debounce: Bool = false) {
+    func analyze(library: URL?, lights: [URL], provided: [URL] = [], accessURLs: [URL] = [], debounce: Bool = false) {
         invalidate(); busy = true; error = nil
         let current = generation
-        let request = LibraryRequest(operation: "analyze", library: library, lights: lights, provided: provided, preferences: preferences)
+        var request = LibraryRequest(operation: "analyze", library: library, lights: lights, provided: provided, preferences: preferences)
+        request.accessURLs += accessURLs
         task = Task {
             do {
                 if debounce { try await Task.sleep(for: .milliseconds(350)) }
@@ -442,13 +443,14 @@ struct CalibrationLibraryReviewView: View {
     let library: URL?
     let lights: [URL]
     var provided: [URL] = []
+    var accessURLs: [URL] = []
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Calibration library").font(.title2)
                 Spacer()
-                Button("Analyze again") { model.analyze(library: library, lights: lights, provided: provided) }.disabled(model.busy)
+                Button("Analyze again") { model.analyze(library: library, lights: lights, provided: provided, accessURLs: accessURLs) }.disabled(model.busy)
                 Button("Done") { dismiss() }
             }
             if model.busy { ProgressView("Measuring and matching calibration…") }
