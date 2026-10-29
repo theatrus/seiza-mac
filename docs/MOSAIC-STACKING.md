@@ -61,10 +61,15 @@ file identity before using solved selections; solve again if a source changes.
 Outputs cannot replace any original input, including unselected or excluded
 files, calibration masters or a shared alignment image.
 
-Automatic calibration prepares one compatible set per output, checked against
-that output's eligible raw lights. It does not assign different calibration sets
-to individual panels or source folders. Lights requiring different flat sessions
-must be calibrated separately before they are combined into one mosaic output.
+Automatic calibration can grade a library, match each light independently, and
+build/reuse its native master recipes. One mosaic output can use several
+calibration sessions. Expanded canvas planning and integration receive the same
+per-light assignments, including when lights alternate between sessions. See
+[graded calibration setup](STACKING-CALIBRATION.md) for review and global/per-rig
+settings. Flat responses and requested pair comparisons feed Seiza's measured groups
+and change boundaries automatically. Flats and darks can independently use
+automatic association or one compatible supplied set. Light-background evidence,
+correction maps and manual group choices remain outside this setup.
 
 ## Choose canvas and memory
 

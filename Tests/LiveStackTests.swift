@@ -1712,6 +1712,42 @@ final class FlatQualityTests: XCTestCase {
         XCTAssertEqual(object["largeFeatures"] as? Bool, true)
     }
 
+    func testFlatInspectionReadsSourceAndDoesNotGradeNormalizedMasters() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var values: [Int16] = []
+        for index in 0..<(256 * 256) {
+            let sample: Int = 7232 + (index % 11) - 5
+            values.append(Int16(sample))
+        }
+        let raw = try SyntheticFrame.write(width: 256, height: 256, values: values,
+            cards: ["IMAGETYP= 'FLAT'"], directory: root, name: "raw.fits")
+        let original = try Data(contentsOf: raw)
+        var options = FlatQualityOptions(); options.enabled = true
+        let inspected = try FlatInspectionService.inspect(raw, options: options)
+        XCTAssertEqual(inspected.probe.role, CalibrationFrameRole.flat)
+        XCTAssertEqual(inspected.measurement.level, 40000, accuracy: 2)
+        XCTAssertEqual(inspected.measurement.illumination.response.count,
+            inspected.measurement.illumination.columns * inspected.measurement.illumination.rows)
+        XCTAssertNotNil(inspected.verdict)
+        let direct = try CalibrationService.screenFlats([inspected.measurement])
+        XCTAssertEqual(inspected.verdict?.grade, direct.frames.first?.grade)
+        options.fullScale = 40000
+        let rescaled = try FlatInspectionService.inspect(raw, options: options)
+        XCTAssertEqual(rescaled.measurement.fullScale, 40000)
+        XCTAssertGreaterThan(rescaled.measurement.clippedFraction, inspected.measurement.clippedFraction)
+        XCTAssertEqual(try Data(contentsOf: raw), original)
+        let master = try SyntheticFrame.write(width: 256, height: 256, values: values,
+            cards: ["IMAGETYP= 'MASTER FLAT'", "FLATNORM=                    T"], directory: root, name: "master.fits")
+        XCTAssertNil(try FlatInspectionService.inspect(master, options: options).verdict)
+        let light = try SyntheticFrame.write(width: 256, height: 256, values: values,
+            cards: ["IMAGETYP= 'LIGHT'"], directory: root, name: "light.fits")
+        XCTAssertThrowsError(try FlatInspectionService.inspect(light, options: options))
+        options.useOptics = true
+        XCTAssertThrowsError(try FlatInspectionService.inspect(raw, options: options))
+    }
+
     func testNativeMeasurementPreservesDustGeometryAndScreening() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("flat-quality-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

@@ -153,6 +153,7 @@ struct ViewerView: View {
     let urls: [URL]
     let initialImageURL: URL
     let browserCollection: ImageBrowserCollection
+    let sourceAccessURLs: [URL]
     let scanIssues: [ImageCollection.ScanIssue]
     let collectionName: String?
     let showsImageBrowser: Bool
@@ -168,7 +169,7 @@ struct ViewerView: View {
     @State private var showInspector = false
     @State private var showImageBrowser: Bool
     @State private var isDropTarget = false
-    @State private var showStackWorkflow = false
+    @State private var stackWindowID = UUID()
     @AppStorage private var preferredBrowserGrouping: ImageBrowserGrouping
     @State private var browserGrouping: ImageBrowserGrouping
 
@@ -187,6 +188,7 @@ struct ViewerView: View {
         onStackComplete: @escaping (ImageStackBatchResult) -> Void = { _ in }
     ) {
         self.urls = urls
+        self.sourceAccessURLs = directories
         self.scanIssues = scanIssues
         self.collectionName = collectionName
         let collection = ImageBrowserCollection(urls: urls, directories: directories)
@@ -275,7 +277,8 @@ struct ViewerView: View {
 
                 ToolbarItem {
                     Button {
-                        showStackWorkflow = true
+                        ImageStackWindowController.present(id: stackWindowID, urls: stackableURLs,
+                            sourceAccessURLs: sourceAccessURLs, onComplete: onStackComplete)
                     } label: {
                         Label("Stack Images", systemImage: "square.stack.3d.up")
                     }
@@ -286,18 +289,6 @@ struct ViewerView: View {
                             : "Stack Images…"
                     )
                 }
-            }
-        }
-        .sheet(isPresented: $showStackWorkflow) {
-            ImageStackWorkflowView(
-                urls: stackableURLs,
-                onComplete: onStackComplete
-            )
-            .onAppear {
-                ImageRenderQueue.suspendThumbnailWork()
-            }
-            .onDisappear {
-                ImageRenderQueue.resumeThumbnailWork()
             }
         }
     }
@@ -903,19 +894,28 @@ private struct ImagePageView: View {
                 .disabled(isSolving || model.image == nil)
                 .help(solveHelp)
 
-                Button {
-                    startStarAnalysis()
-                } label: {
-                    if isAnalyzingStars {
-                        ProgressView()
-                            .controlSize(.small)
-                            .accessibilityLabel("Analyzing stars")
-                    } else {
-                        Label("Analyze", systemImage: "star.circle")
+                if model.frameProbe?.role == CalibrationFrameRole.flat {
+                    Button {
+                        showInspector = true
+                        model.inspectFlat(options: model.flatInspectionOptions)
+                    } label: { Label("Inspect Flat", systemImage: "circle.lefthalf.filled") }
+                    .disabled(model.image == nil || model.flatIsInspecting || model.flatInspectionOptions.validationMessage != nil)
+                    .help("Measure flat illumination, clipping and dust in the linear source")
+                } else {
+                    Button {
+                        startStarAnalysis()
+                    } label: {
+                        if isAnalyzingStars {
+                            ProgressView()
+                                .controlSize(.small)
+                                .accessibilityLabel("Analyzing stars")
+                        } else {
+                            Label("Analyze", systemImage: "star.circle")
+                        }
                     }
+                    .disabled(isAnalyzingStars || model.image == nil || !supportsStarAnalysis)
+                    .help("Measure stars, field tilt, and curvature in the source image")
                 }
-                .disabled(isAnalyzingStars || model.image == nil || !supportsStarAnalysis)
-                .help("Measure stars, field tilt, and curvature in the source image")
 
                 Menu {
                     Toggle("Measured Stars", isOn: $showMeasuredStars)
@@ -1064,12 +1064,11 @@ private struct ImagePageView: View {
                 }
                 .help("Zoom In")
                 .keyboardShortcut("+", modifiers: .command)
-
-                Button {
-                    showInspector.toggle()
-                } label: {
-                    Label("Inspector", systemImage: "sidebar.trailing")
-                }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button { showInspector.toggle() } label: { Label("Inspector", systemImage: "sidebar.trailing") }
+                    .help("Show or hide the image inspector")
+                    .keyboardShortcut("i", modifiers: [.command, .option])
             }
         }
         .onChange(of: starAnalysisModel != nil) { _, hasAnalysis in
@@ -3374,7 +3373,10 @@ private struct InspectorView: View {
     @State private var headerQuery = ""
 
     var body: some View {
-        List {
+        Form {
+            if model.frameProbe?.role == CalibrationFrameRole.flat {
+                Section("Flat inspection") { FlatInspectionDetails(model: model).id(model.url) }
+            }
             if let metadata = model.metadata {
                 Section("Image") {
                     LabeledContent("Dimensions", value: "\(metadata.width) × \(metadata.height)")
@@ -3466,12 +3468,16 @@ private struct InspectorView: View {
                 }
             }
 
-            Section("Stars and sensor tilt") {
-                starAnalysisDetails
+            if let probe = model.frameProbe {
+                Section("Frame") {
+                    LabeledContent("Type", value: (probe.isMaster ? "Master " : "") + probe.role.capitalized)
+                    if let filter = probe.signature.filter { LabeledContent("Filter", value: filter) }
+                    if let exposure = probe.signature.exposureSeconds { LabeledContent("Exposure", value: "\(exposure.formatted()) s") }
+                }
             }
-
-            Section("Plate solution") {
-                solveDetails
+            if model.frameProbe?.role != CalibrationFrameRole.flat {
+                Section("Stars and sensor tilt") { starAnalysisDetails }
+                Section("Plate solution") { solveDetails }
             }
 
             if let headers = model.metadata?.headers, !headers.isEmpty {
@@ -3500,7 +3506,8 @@ private struct InspectorView: View {
                 }
             }
         }
-        .listStyle(.sidebar)
+        .formStyle(.grouped)
+        .toggleStyle(.checkbox)
         .onChange(of: model.url) { _, _ in
             headerQuery = ""
         }
@@ -3809,6 +3816,130 @@ private struct InspectorView: View {
         case "minor_bodies": "Solar system"
         case "field_stars": "Field stars"
         default: key
+        }
+    }
+}
+
+private struct FlatInspectionDetails: View {
+    @ObservedObject var model: ImageDocumentModel
+    private var options: FlatQualityOptions { model.flatInspectionOptions }
+
+    private var isInspecting: Bool {
+        if case .inspecting = model.flatInspectionState { return true }
+        return false
+    }
+
+    var body: some View {
+        Group {
+            Text("Measure the linear source flat before viewer adjustments. Set the saturation level to match the file's sample units.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            DisclosureGroup("Measurement settings") {
+                TextField("Saturation level", value: $model.flatInspectionOptions.fullScale, format: .number)
+                    .help("Usually 65535 for 16-bit ADU, or 1 for normalized samples.")
+                Toggle("Estimate dust distance", isOn: $model.flatInspectionOptions.useOptics)
+                if options.useOptics {
+                    TextField("Focal ratio (f/)", value: $model.flatInspectionOptions.focalRatio, format: .number)
+                    TextField("Binned pixel size (µm)", value: $model.flatInspectionOptions.pixelSizeUm, format: .number)
+                    TextField("Obstruction (%)", value: Binding(get: { options.obstruction * 100 }, set: { model.flatInspectionOptions.obstruction = $0 / 100 }), format: .number)
+                }
+                if let message = options.validationMessage { Text(message).font(.caption).foregroundStyle(.red) }
+            }
+            .disabled(isInspecting)
+            Button("Inspect Flat") { model.inspectFlat(options: options) }
+                .disabled(isInspecting || options.validationMessage != nil)
+            switch model.flatInspectionState {
+            case .idle: EmptyView()
+            case .inspecting: ProgressView("Measuring flat…")
+            case .failed(let message): Text(message).foregroundStyle(.red).textSelection(.enabled)
+            case .inspected(let result):
+                if result.options != options {
+                    Text("Settings changed. Inspect again to update the measurements.").font(.caption).foregroundStyle(.orange)
+                } else {
+                    measurements(result)
+                }
+            }
+        }
+    }
+
+    private func measurements(_ result: FlatInspection) -> some View {
+        let measured = result.measurement
+        return Group {
+            if let verdict = result.verdict {
+                measurementRow("Single-frame grade", value: verdict.grade.capitalized)
+                ForEach(Array(verdict.findings.enumerated()), id: \.offset) { _, finding in
+                    Text(finding.description).font(.caption).textSelection(.enabled)
+                }
+                Text("Uses Seiza's default single-frame screening. Group stability and matching are reviewed in Stack Images.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text("Processed or master flat: exposure grading is unavailable. Levels and clipping describe these stored samples.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            measurementRow("Median level", value: measured.level.formatted(.number.precision(.fractionLength(2))))
+            measurementRow("Saturation level", value: measured.fullScale.formatted())
+            ForEach(Array(measured.channelLevels.enumerated()), id: \.offset) { index, level in
+                measurementRow("Channel \(index + 1) median", value: level.formatted(.number.precision(.fractionLength(2))))
+            }
+            measurementRow("Clipped samples", value: percent(measured.clippedFraction))
+            measurementRow("Response noise", value: percent(measured.noise))
+            measurementRow("Detection depth", value: percent(measured.detectionDepth))
+            measurementRow("Dust features", value: measured.featureCount.formatted())
+            measurementRow("Vignetting regions", value: measured.vignetting.count.formatted())
+            illumination(measured.illumination)
+            DisclosureGroup("Dust locations and geometry") {
+                Text("Steady dust is what flats correct. A single flat cannot show whether dust changed between sessions.")
+                    .font(.caption).foregroundStyle(.secondary)
+                // Keep a large native detection list from expanding the inspector indefinitely.
+                ForEach(Array(measured.features.prefix(50).enumerated()), id: \.offset) { _, feature in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("\(feature.shape.capitalized) · depth \(percent(feature.depth))")
+                        Text(String(format: "(%.1f, %.1f) px · radius %.1f px", feature.x, feature.y, feature.radius))
+                        if let distance = feature.distanceMm { Text(String(format: "About %.2f mm from the sensor", distance)) }
+                    }.font(.caption).textSelection(.enabled)
+                }
+                if measured.features.count > 50 { Text("Showing the first 50 of \(measured.features.count) recorded features.").font(.caption).foregroundStyle(.secondary) }
+            }
+            if !measured.vignetting.isEmpty {
+                DisclosureGroup("Vignetting details") {
+                    ForEach(Array(measured.vignetting.enumerated()), id: \.offset) { _, region in
+                        Text("\(region.edge.capitalized) · area \(percent(region.area)) · depth \(percent(region.depth))")
+                            .font(.caption).textSelection(.enabled)
+                    }
+                }
+            }
+        }
+    }
+
+    private func measurementRow(_ title: String, value: String) -> some View {
+        LabeledContent(title, value: value)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(title)
+            .accessibilityValue(value)
+            .accessibilityAddTraits(.isStaticText)
+    }
+
+    private func percent(_ value: Double) -> String { value.formatted(.percent.precision(.fractionLength(2))) }
+
+    private func illumination(_ map: FlatQualityMeasurement.Illumination) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Illumination response").font(.caption.weight(.semibold))
+            if map.columns > 0, map.rows > 0, map.response.count == map.columns * map.rows {
+                let low = map.response.min() ?? 0, high = map.response.max() ?? 1
+                Canvas { context, size in
+                    let width = size.width / Double(map.columns), height = size.height / Double(map.rows)
+                    for (index, response) in map.response.enumerated() {
+                        let level = high > low ? min(1, max(0, (response - low) / (high - low))) : 0.5
+                        let rect = CGRect(x: Double(index % map.columns) * width, y: Double(index / map.columns) * height, width: width, height: height)
+                        context.fill(Path(rect), with: .color(Color(white: level)))
+                    }
+                }
+                .aspectRatio(Double(map.columns) / Double(map.rows), contentMode: .fit)
+                .frame(maxHeight: 180)
+                .accessibilityLabel("Coarse flat illumination response, scaled from \(low) to \(high)")
+                Text(String(format: "Relative response %.3f–%.3f · top-left image origin", low, high))
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
         }
     }
 }

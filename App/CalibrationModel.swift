@@ -497,6 +497,44 @@ enum LiveStackCalibrationIdentity {
     }
 }
 
+// MARK: - Native calibration quality
+
+/// The small, lossless native record shared by bias, dark and dark-flat
+/// screening. Values remain in the source image's sample units.
+struct DarkQualityMeasurement: Codable, Equatable, Sendable {
+    var algorithmVersion: Int
+    var width: Int
+    var height: Int
+    var level: Double
+    var sigma: Double
+    var noise: Double
+    var rowBanding: Double
+    var columnBanding: Double
+    var hotPixels: UInt64
+    var hotThreshold: Double
+}
+
+struct DarkQualityMeasureRequest: Encodable, Sendable {
+    var path: String
+    /// Nil asks the core for its default; do not duplicate it in the host.
+    var hotSigma: Double? = nil
+}
+
+struct CalibrationQualityReport: Codable, Equatable, Sendable {
+    struct Verdict: Codable, Equatable, Sendable {
+        struct Finding: Codable, Equatable, Sendable {
+            var code: String
+            var grade: String
+            var value: Double
+            var limit: Double
+        }
+        var grade: String
+        var findings: [Finding]
+    }
+    var schemaVersion: Int
+    var frames: [Verdict]
+}
+
 // MARK: - Native flat quality review
 
 struct FlatQualityOptions: Equatable, Sendable {

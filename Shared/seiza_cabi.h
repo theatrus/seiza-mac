@@ -177,6 +177,13 @@
 #define SEIZA_TOLERANCE_HAS_EXPOSURE_FRACTION (1 << 6)
 
 /*
+ Opt in to gain/offset differences between lights and dark-calibrated
+ flats. This bit is the value, not a presence flag; clear means strict.
+ Dark/light and flat/dark-flat comparisons remain strict.
+ */
+#define SEIZA_TOLERANCE_ALLOW_FLAT_GAIN_OFFSET_MISMATCH (1 << 7)
+
+/*
  The light's recorded rotator angle is compared, as for any frame.
  */
 #define SEIZA_LIGHT_ROTATION_RECORDED 0
@@ -241,6 +248,11 @@ typedef struct SeizaCancelSignal SeizaCancelSignal;
  [`seiza_drizzle_result_free`] is called.
  */
 typedef struct SeizaDrizzleResult SeizaDrizzleResult;
+
+/*
+ Immutable measured grouping book. Safe for concurrent read-only planning.
+ */
+typedef struct SeizaFlatGroups SeizaFlatGroups;
 
 /*
  An opaque incremental stacker. Release it with
@@ -365,7 +377,8 @@ typedef struct {
  */
 typedef struct {
   /*
-   Bitwise OR of the `SEIZA_TOLERANCE_HAS_*` flags this struct overrides.
+   Bitwise OR of the `SEIZA_TOLERANCE_HAS_*` flags this struct overrides,
+   optionally with `SEIZA_TOLERANCE_ALLOW_FLAT_GAIN_OFFSET_MISMATCH`.
    */
   uint32_t known;
   /*
@@ -468,6 +481,28 @@ typedef struct {
  pointer. Called on the thread that made the call.
  */
 typedef void (*SeizaRcAstroProgressCallback)(float, void*);
+
+/*
+ Synchronous phase progress, called on the coordinating thread. `phase` is
+ borrowed UTF-8 for this callback only; total zero denotes discovery. Callback
+ and context are never retained. Do not unwind or reenter the same cache.
+ */
+typedef void (*SeizaCalibrationProgressCallback)(const char *phase,
+                                                 size_t completed,
+                                                 size_t total,
+                                                 void *context);
+
+/*
+ Borrowed, row-major float image. RGB channels are interleaved. Samples use
+ the same units as the other images in this measurement. No pointer is retained.
+ */
+typedef struct {
+  const float *data;
+  size_t length;
+  size_t width;
+  size_t height;
+  size_t channels;
+} SeizaFlatStabilityImage;
 
 /*
  Progress for the parallax functions: one event as JSON, valid only for
@@ -1420,6 +1455,52 @@ SeizaLiveStacker *seiza_live_stacker_open_fits_expanding(const char *paths_json,
                                                          char **error_out);
 
 /*
+ Plan the union of calibrated filter groups and start the selected channel
+ (zero-based). `channels_json` is an array of objects with `paths`, optional
+ `bias`, `dark`, `flat`, and `darkExposureSeconds`. Paths must be unique
+ across groups. The first group's first light anchors the geometry.
+ Push every selected-channel light; other groups contribute no pixels or
+ normalization. Reuse this handle with `open_fits_on_canvas` for other filters.
+ Zero `max_canvas_megasamples` uses 256. Cancellation covers both passes.
+
+ # Safety
+ Required strings must be valid NUL-terminated strings; optional strings
+ may be null. `cancel` must be null or live until return. `error_out` must
+ be null or writable storage for one pointer.
+ */
+SeizaLiveStacker *seiza_live_stacker_open_fits_joint_canvas(const char *channels_json,
+                                                            size_t channel,
+                                                            const char *options_json,
+                                                            size_t max_canvas_megasamples,
+                                                            const SeizaCancelSignal *cancel,
+                                                            char **error_out);
+
+/*
+ Start an empty channel stack on an existing expanded canvas, keeping its
+ dimensions, panel geometry and WCS. Only the supplied channel lights build
+ its normalization reference; push every light explicitly. The bin factor
+ must match the source. Samples outside the canvas are cropped. The source
+ may be a reopened expanded context and is never modified.
+ Paths, calibration, options and cancellation follow
+ [`seiza_live_stacker_open_fits_expanding`].
+
+ # Safety
+ `canvas` must be a live handle retained, without concurrent mutation, until
+ this call returns. String pointers must be NUL-terminated (optional strings
+ may be null). `cancel` must be null or a live signal. `error_out` must be null
+ or point to writable storage for one pointer.
+ */
+SeizaLiveStacker *seiza_live_stacker_open_fits_on_canvas(const SeizaLiveStacker *canvas,
+                                                         const char *paths_json,
+                                                         const char *bias_path,
+                                                         const char *dark_path,
+                                                         const char *flat_path,
+                                                         double dark_exposure_seconds,
+                                                         const char *options_json,
+                                                         const SeizaCancelSignal *cancel,
+                                                         char **error_out);
+
+/*
  The lens distortion a canvas from
  [`seiza_live_stacker_open_fits_expanding`] was planned through, as owned
  JSON, or the JSON text `null` when planning measured none, as for any
@@ -1459,6 +1540,30 @@ char *seiza_live_stacker_expanded_lens_json(const SeizaLiveStacker *stacker, cha
  */
 char *seiza_live_stacker_expansion_planning_notes_json(const SeizaLiveStacker *stacker,
                                                        char **error_out);
+
+/*
+ What preparing a live stack's frames needs, frame by frame, for a host
+ planning its memory, as owned JSON. The object is schema 1:
+ `workerBytes` for each worker, which prepares one frame while it holds
+ the one it prepared before; `integrationBytes` for the frame being
+ integrated; and `sequentialBytes` for preparing one frame at a time. A
+ host naming `workers` for [`seiza_live_stacker_push_fits_pipelined_json`]
+ can plan on about `workers` times `workerBytes` plus `integrationBytes`,
+ besides the stack itself and its masters; a derived count follows the
+ same frame sizes.
+
+ An ordinary stack's frames are costed at its reference's size. A frame
+ joining a canvas from [`seiza_live_stacker_open_fits_expanding`] is
+ resampled onto only the part of the canvas its footprint covers, so it is
+ costed at the largest frame planning read, at any rotation and scaled as
+ far as the acceptance criteria admit, rather than at the canvas's size;
+ a reopened context costs it by its largest panel. A frame larger than
+ planning read can need more. Free the string with [`seiza_string_free`].
+
+ # Safety
+ As [`seiza_live_stacker_expanded_lens_json`].
+ */
+char *seiza_live_stacker_pipeline_memory_json(const SeizaLiveStacker *stacker, char **error_out);
 
 /*
  Reopens a versioned live-stack context previously written by
@@ -2573,6 +2678,9 @@ void seiza_rendered_image16_free(SeizaRenderedImage16 *image);
 
 /*
  Solves an image and returns a JSON string for the C ABI.
+ `catalog_directory` names the directory directly containing the catalogs
+ (subdirectories are not searched), or a star catalog file. The blind
+ index is opened only when the header/hinted stages cannot solve.
 
  # Safety
  `path` must be a valid NUL-terminated string. `catalog_directory` may be
@@ -2827,7 +2935,7 @@ int32_t seiza_calibration_sensor_matches(const SeizaFrameSignature *reference,
                                          char **error_out);
 
 /*
- Fill `tolerances` with the built-in defaults and every flag set, so a
+ Fill `tolerances` with the built-in defaults and every numeric override flag set, so a
  caller can read them or adjust one and pass the rest through unchanged.
 
  # Safety
@@ -3465,6 +3573,83 @@ bool seiza_live_stacker_light_rotation(const SeizaLiveStacker *stacker,
                                        double *degrees_out);
 
 /*
+ Analyze mono, raw Bayer or RGB FITS/XISF inputs without stacking. Request: inputs (paths,
+ directories or text lists), samples (8192..2097152, default 262144), filter
+ (optional), maxFrames (optional), metricsOnly (default false). Returns the core report with camelCase
+ keys (schema 3). Frames are source/component records with sampling geometry;
+ groups separate filter, imageKind and component. Individual frame failures remain in the report. Free with seiza_string_free.
+
+ # Safety
+ request_json must be NUL-terminated UTF-8. error_out must be null or writable.
+ */
+char *seiza_analyze_project_json(const char *request_json,
+                                 char **error_out);
+
+/*
+ Render the camelCase JSON report returned by seiza_analyze_project_json as
+ self-contained HTML. Returns owned UTF-8; free with seiza_string_free.
+
+ # Safety
+ report_json must be NUL-terminated UTF-8. error_out must be null or writable.
+ */
+char *seiza_analysis_html(const char *report_json, char **error_out);
+
+/*
+ Capture admitted-input history and actual stack settings as camelCase JSON.
+ Free the returned string with seiza_string_free.
+ # Safety
+ stacker must be a live handle; error_out must be null or writable.
+ */
+char *seiza_live_stacker_report_context_json(const SeizaLiveStacker *stacker, char **error_out);
+
+/*
+ Summarize this immutable snapshot as camelCase JSON. Optional context must
+ have been captured with this result. Free with seiza_string_free.
+ # Safety
+ snapshot must be live; context must be null or NUL-terminated UTF-8 JSON;
+ error_out must be null or writable.
+ */
+char *seiza_stack_snapshot_report_json(const SeizaStackSnapshot *snapshot,
+                                       const char *context,
+                                       char **error_out);
+
+/*
+ Summarize drizzle support as drop area times weight, never frame count.
+ Optional context must be captured with this result. Free with seiza_string_free.
+ # Safety
+ result must be live; context must be null or NUL-terminated UTF-8 JSON;
+ error_out must be null or writable.
+ */
+char *seiza_drizzle_result_report_json(const SeizaDrizzleResult *result,
+                                       const char *context,
+                                       char **error_out);
+
+/*
+ Render camelCase post-stack JSON as self-contained HTML. Free with seiza_string_free.
+ # Safety
+ report_json must be NUL-terminated UTF-8; error_out must be null or writable.
+ */
+char *seiza_stack_report_html(const char *report_json, char **error_out);
+
+/*
+ Render a camelCase schema-1 collection with title and stacks [{label, report}].
+ Every nested report is validated. Free the result with seiza_string_free.
+ # Safety
+ report_json must be NUL-terminated UTF-8; error_out must be null or writable.
+ */
+char *seiza_stack_collection_html(const char *report_json, char **error_out);
+
+/*
+ Select none, cheap retained diagnostics, or rich source analysis. Request:
+ {report: optional camelCase stack report, level: string, inputs: source paths}.
+ Returns owned camelCase JSON (JSON null for none), freed with seiza_string_free.
+ Rich reads inputs again; it never changes the completed stack.
+ # Safety
+ request_json must be NUL-terminated UTF-8; error_out null or writable.
+ */
+char *seiza_prepare_stack_report_json(const char *request_json, char **error_out);
+
+/*
  Fit premeasured common stellar fluxes. Request JSON contains sources, stars
  and optional options, as defined by the continuum core. Returns a tagged
  fitted/skipped JSON outcome; free it with seiza_string_free. A skip is not
@@ -3617,6 +3802,31 @@ char *seiza_emission_flux_json(const float *residuals,
                                char **error_out);
 
 /*
+ Grade/group/match provided FITS/XISF files or a recursive library and prepare
+ cached masters through the native file coordinator. Run off the UI thread.
+ camelCase request: operation (analyze/execute/verify/schema), lights, library
+ (optional), provided, cache, settings/rigs, choices/groupOverrides/lightChoices,
+ incomplete (stop/keep/exclude), flatStarMasking/flatStability, flatAssociation/
+ darkAssociation. Analyze builds no masters; execute requires its reviewKey.
+ Verify takes sources; schema returns native settings. Reports retain original
+ order, per-light assignments, evidence and corrected master paths. Refuse
+ changed reviews, missing required corrections and unsafe aliases explicitly.
+ Cooperative cancel also interrupts cache-lock waits. Completed immutable cache
+ entries survive cancellation; no partial master is published. Free result or
+ error with seiza_string_free. Source grants and UI remain host responsibilities.
+ Request/report schemas: seiza_calibration_library_schema_json.
+ # Safety
+ request_json is NUL-terminated UTF-8. cancel is null or a live cancellation
+ handle until return. progress/context remain valid until return; progress may
+ be null. error_out is null or writable pointer storage.
+ */
+char *seiza_calibration_files_json(const char *request_json,
+                                   const SeizaCancelSignal *cancel,
+                                   SeizaCalibrationProgressCallback progress,
+                                   void *context,
+                                   char **error_out);
+
+/*
  Every constellation figure and the stars its lines use, for a host that
  draws figures its own way. Returns JSON, released with
  `seiza_string_free`: `{"attribution", "epoch", "figures": [{"abbr",
@@ -3650,6 +3860,27 @@ char *seiza_constellations_project_json(const char *wcs_json,
                                         uint32_t width,
                                         uint32_t height,
                                         char **error_out);
+
+/*
+ Evaluate measured flat families, groups, changes and light placements.
+ `request_json` is `flat_response::groups::Request` with camelCase field
+ names; omitted collections are empty. Responses, comparisons, evidence,
+ imaging sessions, rig limits, group overrides, night boundaries, epoch
+ samples, family evidence, light choices and light queries are arrays.
+ The returned `Snapshot` uses camelCase too. See the shared flat-group
+ schema documentation for records, units and index meanings.
+
+ This pure stage does not select darks, grade frames, or build masters.
+ Light queries must supply families that passed the host's hard matching
+ gates. Automatic choices and personal overrides are returned separately.
+ Returns null and sets `error_out` on failure. Free either returned string
+ with `seiza_string_free`.
+
+ # Safety
+ `request_json` must be a NUL-terminated UTF-8 string. When non-null,
+ `error_out` must point to writable storage for one pointer.
+ */
+char *seiza_flat_group_plan_json(const char *request_json, char **error_out);
 
 /*
  The block factor that brings a `width × height` frame's long side within
@@ -3744,6 +3975,41 @@ int32_t seiza_flat_change_map(const float *before,
                               float *out,
                               size_t out_length,
                               char **error_out);
+
+/*
+ Remove a response's pedestal using the shared FlatResponse calculation.
+ The normalized input plane and ADU level/pedestal produce width*height samples.
+ # Safety
+ data holds width*height readable floats; out holds out_length writable floats.
+ error_out is null or writable pointer storage.
+ */
+bool seiza_flat_response_without_pedestal(const float *data,
+                                          size_t width,
+                                          size_t height,
+                                          float level,
+                                          float pedestal,
+                                          float *out,
+                                          size_t out_length,
+                                          char **error_out);
+
+/*
+ Dust-only change map for light evidence. Vignetting changes are masked by
+ the core's PSF Guard policy; master corrections use seiza_flat_change_map.
+ changes_json is a camelCase array of VignettingChange, or null for none.
+ Returns 1 (written), 0 (no map), or -1 (error).
+ # Safety
+ before/after hold width*height readable floats, out holds out_length
+ writable floats. JSON is null or NUL-terminated UTF-8; error_out is writable.
+ */
+int32_t seiza_flat_evidence_change_map(const float *before,
+                                       const float *after,
+                                       size_t width,
+                                       size_t height,
+                                       const char *changes_json,
+                                       size_t bin,
+                                       float *out,
+                                       size_t out_length,
+                                       char **error_out);
 
 /*
  Carry a flat across a change in place: divide `data` (`width × height ×
@@ -4001,6 +4267,183 @@ char *seiza_dust_match_features_json(const char *earlier_json,
                                      const char *later_json,
                                      const char *options_json,
                                      char **error_out);
+
+/*
+ Measure cached master/source images without file I/O, using the same core
+ algorithm as seiza_master_flat_stability_json. Nullable options_json is
+ camelCase FlatStabilityImageOptions: inputs (aligned exposureSeconds, bayer,
+ skipped records), bayer {pattern,xOffset,yOffset}, darkExposureSeconds and
+ darkBiasSubtracted. Empty inputs metadata uses defaults for all sources.
+ Bias/dark are optional; pixels are already on the same scale. Buffers are
+ copied for the call and never retained. Free result/error with seiza_string_free.
+ # Safety
+ master is a valid descriptor; inputs points to input_count descriptors (or
+ is null when count is zero). Bias/dark are null or valid descriptors. Every
+ data pointer holds length aligned readable floats. Descriptors and buffers
+ remain immutable for this call. options_json is null or NUL-terminated UTF-8;
+ error_out is null or writable pointer storage.
+ */
+char *seiza_master_flat_stability_images_json(const SeizaFlatStabilityImage *master,
+                                              const SeizaFlatStabilityImage *inputs,
+                                              size_t input_count,
+                                              const SeizaFlatStabilityImage *bias,
+                                              const SeizaFlatStabilityImage *dark,
+                                              const char *options_json,
+                                              char **error_out);
+
+/*
+ Prepare a reusable grouping book from camelCase flat-group request JSON.
+ No file I/O. Free the returned handle with seiza_flat_groups_free.
+ # Safety
+ The request is NUL-terminated UTF-8; error_out is null or writable.
+ */
+SeizaFlatGroups *seiza_flat_groups_prepare_json(const char *request_json, char **error_out);
+
+/*
+ Release an immutable grouping handle; null is allowed.
+ # Safety
+ A non-null pointer must be a live handle returned by prepare and freed once,
+ with no concurrent call still borrowing it.
+ */
+void seiza_flat_groups_free(SeizaFlatGroups *groups);
+
+/*
+ The JSON Schema (draft 2020-12) of the calibration library's JSON calls:
+ `calls` maps each export to the schema of its request and of its answer,
+ and `$defs` holds the types they share. Property names are camelCase, as
+ the calls take and return them; enum values are as given. Rust hosts call
+ the native API instead, and Python binds it. Free the result or error
+ with seiza_string_free.
+
+ # Safety
+ When non-null, `error_out` must point to writable storage for one pointer.
+ */
+char *seiza_calibration_library_schema_json(char **error_out);
+
+/*
+ The calibration settings a library request takes, in the order a settings
+ panel shows them: each key, group, label, help, effect, kind with its range
+ and default. camelCase JSON array. Free the result or error with
+ seiza_string_free.
+
+ # Safety
+ When non-null, `error_out` must point to writable storage for one pointer.
+ */
+char *seiza_calibration_settings_schema_json(char **error_out);
+
+/*
+ Judge one setting value as a settings panel saves it. `request_json` is
+ camelCase `{key, value}`; the value stays as given. Returns camelCase
+ `{key, valid, error, text, default}`: whether it can be saved, why not, the
+ value in words, and whether it means the default. Free the result or
+ error with seiza_string_free.
+
+ # Safety
+ `request_json` must point to NUL-terminated UTF-8. When non-null,
+ `error_out` must point to writable storage for one pointer.
+ */
+char *seiza_calibration_setting_check_json(const char *request_json, char **error_out);
+
+/*
+ Grade and select a calibration library using PSF Guard's shared policy.
+ `request_json` is a camelCase library::json::Request: frames, lights, quality,
+ globalSettings, rigs, grouping, availableResponses, nightShifts, regrade, masterFailures, pedestalEvidence,
+ forceFlatWithoutPedestal, flatStarMasking, flatStability, flatAssociation and darkAssociation.
+ Missing collections are empty. Settings are {key,value} records; identifiers,
+ enum values and arbitrary setting values are preserved. The returned snapshot
+ contains grades, selections, complete gates, sessions, assignments and master
+ dependency recipes. This pure call opens no files and builds no master pixels.
+ Hosts verify sources and execute recipes through the native master builders.
+ See docs/calibration-library.md for provenance, units and execution contracts.
+ Free the result or error with seiza_string_free.
+
+ # Safety
+ `request_json` must point to NUL-terminated UTF-8. When non-null, `error_out`
+ must point to writable storage for one pointer.
+ */
+char *seiza_calibration_library_plan_json(const char *request_json,
+                                          char **error_out);
+
+/*
+ Plan using a reusable grouping handle, or null to build from request rows.
+ Non-null handles require empty grouping rows and matching grouping limits.
+ # Safety
+ The request/error pointers follow seiza_calibration_library_plan_json's
+ contract; a non-null groups pointer must remain valid throughout this call.
+ */
+char *seiza_calibration_library_plan_with_groups_json(const char *request_json,
+                                                      const SeizaFlatGroups *groups,
+                                                      char **error_out);
+
+/*
+ Resolve verified selected candidates, build options and session identity from camelCase JSON. No I/O.
+ Free the result/error with seiza_string_free.
+ # Safety
+ request_json is NUL-terminated UTF-8; error_out is null or writable.
+ */
+char *seiza_calibration_master_plan_json(const char *request_json,
+                                         char **error_out);
+
+/*
+ Light choices may use exact full paths; these take precedence over basename
+ entries, preserving existing catalog lookup for other lights.
+ Plan raw-flat response sessions and bounded samples from a camelCase
+ library::json::Request. Returns plans, resolved limits/night boundaries, grades
+ and unplanned frame IDs. Pure metadata/measurement policy; no pixel I/O.
+ flatAssociation/darkAssociation accept automatic (default) or one_set in
+ library and master requests. OneSet keeps all eligible compatible inputs;
+ incompatible supplied sets return an error instead of silently splitting.
+ Free the result/error with seiza_string_free.
+ # Safety
+ request_json is NUL-terminated UTF-8; error_out is null or writable.
+ */
+char *seiza_calibration_flat_response_plan_json(const char *request_json, char **error_out);
+
+/*
+ Plan light evidence, correction inputs and manual choice resolution from
+ camelCase FlatWorkRequest {library,lightContext}. Pure cached-record policy;
+ no file/header/pixel I/O. Results identify bounded samples and response keys.
+ Free result/error with seiza_string_free.
+ # Safety
+ request_json is NUL-terminated UTF-8; error_out is null or writable.
+ */
+char *seiza_calibration_flat_work_plan_json(const char *request_json, char **error_out);
+
+/*
+ Finalize native family-choice/change-fit feedback as a cached evidence row.
+ camelCase FlatWorkAnswer is kind=family {question,choice,lights} or
+ kind=change {question,fits}; the core resolves ties and aggregate verdicts.
+ # Safety
+ request_json is NUL-terminated UTF-8; error_out is null or writable.
+ */
+char *seiza_calibration_flat_work_finish_json(const char *request_json, char **error_out);
+
+/*
+ Resolve a coherent master cohort from camelCase JSON. No I/O.
+ Free the result/error with seiza_string_free.
+ # Safety
+ request_json is NUL-terminated UTF-8; error_out is null or writable.
+ */
+char *seiza_calibration_master_cohort_json(const char *request_json, char **error_out);
+
+/*
+ Decide flat trimming, alternate-session retry and publication from camelCase JSON. No I/O.
+ Free the result/error with seiza_string_free.
+ # Safety
+ request_json is NUL-terminated UTF-8; error_out is null or writable.
+ */
+char *seiza_calibration_flat_retry_json(const char *request_json, char **error_out);
+
+/*
+ Measure master-flat feature stability from files, one source at a time.
+ camelCase JSON: master, inputs [{path,exposureSeconds,skipped}], optional
+ bias/dark/darkExposureSeconds and normalizedFullScale. Missing/unreadable or
+ incompatible inputs count as drifting; skipped inputs have zero disagreement.
+ Free the returned JSON/error with seiza_string_free.
+ # Safety
+ request_json is NUL-terminated UTF-8; error_out is null or writable.
+ */
+char *seiza_master_flat_stability_json(const char *request_json, char **error_out);
 
 /*
  Prepare a parallax video from a JSON request (see the fields below) and
@@ -4614,6 +5057,35 @@ char *seiza_satellite_catalog_tracks_json(const SeizaSatelliteCatalog *catalog,
  still running.
  */
 void seiza_satellite_catalog_free(SeizaSatelliteCatalog *catalog);
+
+/*
+ Plan an empty expanded stack with per-light calibration sessions.
+ `paths_json` is an array of original file paths, `assignments_json` an
+ equally long array of session indices, and `sessions_json` an array of
+ `{bias, dark, flat, darkExposureSeconds, pedestal, normalizedFullScale,
+ tolerances}` records (paths may
+ be omitted/null). Tolerances use camelCase and include the lightRotation
+ basis. Omitted tolerances use the complete native default gate.
+
+ Assignments apply automatically when pushing these files, including after
+ context restore. Manual master/gate changes and anonymous pixel pushes
+ are refused. Pipelines process assigned inputs in order with one active
+ master set. Sources and historical masters remain protected from output
+ overwrite and are checked for changes before use/replay. The canvas limit,
+ cancellation, ownership and options follow the ordinary expanded opener.
+
+ # Safety
+ The three required JSON pointers must name NUL-terminated UTF-8 strings.
+ `options_json` may be null. `cancel` must be null or a live cancel signal.
+ When non-null, `error_out` must point to writable storage for one pointer.
+ */
+SeizaLiveStacker *seiza_live_stacker_open_fits_expanding_sessions(const char *paths_json,
+                                                                  const char *sessions_json,
+                                                                  const char *assignments_json,
+                                                                  const char *options_json,
+                                                                  size_t max_canvas_megasamples,
+                                                                  const SeizaCancelSignal *cancel,
+                                                                  char **error_out);
 
 #ifdef __cplusplus
 }  // extern "C"

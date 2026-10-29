@@ -88,7 +88,7 @@ enum StackCalibrationSource: String, CaseIterable, Identifiable, Sendable {
     var title: String {
         switch self {
         case .masters: "None or existing masters"
-        case .automatic: "Build from calibration frames"
+        case .automatic: "Graded calibration files or library"
         }
     }
 }
@@ -514,7 +514,8 @@ struct StackChannelReferenceSelection: Decodable, Sendable {
 enum StackNativeOpener {
     static func openExpanded(
         paths: [String], optionsJSON: String, calibration: ImageStackCalibration,
-        maximumMegasamples: Int, cancellation: ImageStackCancellation
+        maximumMegasamples: Int, cancellation: ImageStackCancellation,
+        libraryPlan: LibraryPreparedPlan? = nil
     ) throws -> (handle: OpaquePointer, note: String) {
         guard paths.count >= 2, (1...4096).contains(maximumMegasamples) else {
             throw ImageStackError.invalidRequest("Choose at least two lights and a valid canvas sample limit.")
@@ -525,7 +526,19 @@ enum StackNativeOpener {
         let pathsJSON = String(decoding: try JSONEncoder().encode(paths), as: UTF8.self)
         var error: UnsafeMutablePointer<CChar>?
         defer { if let error { seiza_string_free(error) } }
-        let handle = withOptionalCString(calibration.bias?.path) { bias in
+        let handle: OpaquePointer?
+        if let libraryPlan {
+            let sessionsJSON = String(decoding: try JSONEncoder().encode(libraryPlan.review.fileSessions), as: UTF8.self)
+            let assignments = try paths.map { libraryPlan.review.assignments[try libraryPlan.index($0)] }
+            let assignmentsJSON = String(decoding: try JSONEncoder().encode(assignments), as: UTF8.self)
+            handle = pathsJSON.withCString { paths in sessionsJSON.withCString { sessions in
+                assignmentsJSON.withCString { assignments in optionsJSON.withCString { options in
+                    seiza_live_stacker_open_fits_expanding_sessions(paths, sessions, assignments, options,
+                        maximumMegasamples, cancellation.nativeSignal?.pointer, &error)
+                } }
+            } }
+        } else {
+        handle = withOptionalCString(calibration.bias?.path) { bias in
             withOptionalCString(calibration.dark?.path) { dark in
                 withOptionalCString(calibration.flat?.path) { flat in
                     pathsJSON.withCString { paths in
@@ -537,6 +550,7 @@ enum StackNativeOpener {
                     }
                 }
             }
+        }
         }
         // Take ownership before observing cancellation: even cancelled opens may return a handle.
         guard let handle else {
@@ -722,9 +736,10 @@ struct ImageStackRequest: Sendable {
     let referenceImage: URL?
     let choosesReferenceAutomatically: Bool
     let additionalProtectedSources: [URL]
+    let libraryPlan: LibraryPreparedPlan?
 
     var protectedSources: [URL] {
-        inputs + additionalProtectedSources + [calibration.bias, calibration.dark, calibration.flat, referenceImage].compactMap { $0 }
+        inputs + additionalProtectedSources + (libraryPlan?.review.sources.map { URL(fileURLWithPath: $0.path) } ?? []) + [calibration.bias, calibration.dark, calibration.flat, referenceImage].compactMap { $0 }
     }
 
     init(
@@ -735,7 +750,8 @@ struct ImageStackRequest: Sendable {
         calibration: ImageStackCalibration,
         referenceImage: URL? = nil,
         choosesReferenceAutomatically: Bool = false,
-        additionalProtectedSources: [URL] = []
+        additionalProtectedSources: [URL] = [],
+        libraryPlan: LibraryPreparedPlan? = nil
     ) {
         self.inputs = inputs
         self.output = output
@@ -745,6 +761,7 @@ struct ImageStackRequest: Sendable {
         self.referenceImage = referenceImage
         self.choosesReferenceAutomatically = choosesReferenceAutomatically
         self.additionalProtectedSources = additionalProtectedSources
+        self.libraryPlan = libraryPlan
     }
 }
 
@@ -932,10 +949,9 @@ enum ImageStackEngine {
             ?? request.calibration.validationMessage(for: request.inputs) {
             throw ImageStackError.invalidRequest(message)
         }
-        try StackInputProtection.validate(output: request.output, sources: request.protectedSources)
 
         let accessURLs = Set(
-            request.inputs + [
+            request.protectedSources + (request.libraryPlan?.accessURLs ?? []) + [
                 request.calibration.bias,
                 request.calibration.dark,
                 request.calibration.flat,
@@ -946,6 +962,7 @@ enum ImageStackEngine {
         )
         let accessedURLs = accessURLs.filter { $0.startAccessingSecurityScopedResource() }
         defer { accessedURLs.forEach { $0.stopAccessingSecurityScopedResource() } }
+        try StackInputProtection.validate(output: request.output, sources: request.protectedSources)
 
         if cancellation.isCancelled { throw CancellationError() }
         progress(ImageStackProgress(
@@ -957,6 +974,7 @@ enum ImageStackEngine {
             rejectedFrames: 0
         ))
 
+        if let plan = request.libraryPlan { try CalibrationLibraryService.verify(plan.review.sources) }
         let optionsJSON = String(decoding: try request.options.jsonData, as: UTF8.self)
         var errorPointer: UnsafeMutablePointer<CChar>?
         var candidates = [request.inputs[0]]
@@ -980,9 +998,40 @@ enum ImageStackEngine {
             let paths = ([anchor] + request.inputs.filter { $0 != anchor }).map(\.path)
             let plan = try StackNativeOpener.openExpanded(paths: paths, optionsJSON: optionsJSON,
                 calibration: request.calibration, maximumMegasamples: request.options.maximumCanvasMegasamples,
-                cancellation: cancellation)
+                cancellation: cancellation, libraryPlan: request.libraryPlan)
             opened = (plan.handle, nil)
             canvasNote = plan.note
+        } else if let plan = request.libraryPlan {
+            // Each ranked candidate must open with its own complete calibration
+            // gate. A failed open owns no state and cannot leak the previous set.
+            var selected: (handle: OpaquePointer, selection: StackChannelReferenceSelection?)?
+            var failures: [String] = []
+            for candidate in candidates {
+                let session = try plan.session(for: candidate.path)
+                var options = try JSONSerialization.jsonObject(with: request.options.jsonData) as! [String: Any]
+                // This existing StackOptions subdocument uses native snake_case;
+                // file-coordinator reports use the C ABI's camelCase fields.
+                let fields = ["allow_flat_gain_offset_mismatch", "exposure_seconds", "exposure_fraction", "dark_temperature_c", "rotation_deg", "focal_length_mm", "light_rotation"]
+                let values = Dictionary(uniqueKeysWithValues: fields.compactMap { key -> (String, LibraryJSON)? in
+                    let value = session.tolerances[key]
+                    if case .null = value { return nil }
+                    return (key, value)
+                })
+                let gate = try JSONSerialization.jsonObject(with: JSONEncoder().encode(values)) as! [String: Any]
+                // StackOptions accepts application gates only; master cohort
+                // temperature/session windows belong to file-session policy.
+                options["match_tolerances"] = gate
+                let json = String(decoding: try JSONSerialization.data(withJSONObject: options), as: UTF8.self)
+                do {
+                    selected = try StackNativeOpener.open(candidates: [candidate.path],
+                        referenceImagePath: request.referenceImage?.path, optionsJSON: json,
+                        calibration: session.calibration)
+                    candidates = [candidate]
+                    break
+                } catch { failures.append("\(candidate.lastPathComponent): \(error.localizedDescription)") }
+            }
+            guard let selected else { throw ImageStackError.core(failures.joined(separator: "\n")) }
+            opened = selected
         } else {
             opened = try StackNativeOpener.open(candidates: candidates.map(\.path),
                 referenceImagePath: request.referenceImage?.path, optionsJSON: optionsJSON,
@@ -1027,6 +1076,10 @@ enum ImageStackEngine {
 
         for (offset, url) in orderedInputs.dropFirst(initialCount).enumerated() {
             if cancellation.isCancelled { throw CancellationError() }
+            if let plan = request.libraryPlan {
+                try plan.verifyActiveSources(for: url.path)
+                if !expanded, let liveStacker { try plan.session(for: url.path).apply(to: liveStacker) }
+            }
             errorPointer = nil
             let responsePointer = url.path.withCString { path in
                 seiza_live_stacker_push_fits_json(liveStacker, path, &errorPointer)
@@ -1074,6 +1127,7 @@ enum ImageStackEngine {
         }
 
         if cancellation.isCancelled { throw CancellationError() }
+        if let plan = request.libraryPlan { try CalibrationLibraryService.verify(plan.review.sources) }
         guard seiza_live_stacker_accepted_frames(liveStacker) > 1 else {
             throw ImageStackError.noAdditionalFrames(dispositions)
         }
@@ -1392,12 +1446,79 @@ final class ImageStackCoordinator: ObservableObject {
     }
 }
 
+enum StackSetupTab: Hashable { case inputs, calibration, processing, review }
+
+struct FolderPathControl: NSViewRepresentable {
+    let url: URL?
+    let label: String
+    func makeNSView(context: Context) -> NSPathControl {
+        let view = NSPathControl()
+        view.pathStyle = .popUp
+        view.placeholderString = "No folder selected"
+        view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return view
+    }
+    func updateNSView(_ view: NSPathControl, context: Context) {
+        view.url = url
+        view.setAccessibilityLabel(label)
+        view.toolTip = url?.path
+    }
+}
+
+@MainActor final class ImageStackWindowController: NSObject, NSWindowDelegate {
+    private static var windows: [UUID: ImageStackWindowController] = [:]
+    private let id: UUID
+    private var window: NSWindow!
+    private var busy = false
+    private var accessed: [URL] = []
+
+    static func present(id: UUID, urls: [URL], sourceAccessURLs: [URL], onComplete: @escaping (ImageStackBatchResult) -> Void) {
+        if let existing = windows[id] { existing.window.makeKeyAndOrderFront(nil); return }
+        let controller = ImageStackWindowController(id: id, urls: urls, sourceAccessURLs: sourceAccessURLs, onComplete: onComplete)
+        windows[id] = controller
+        controller.window.makeKeyAndOrderFront(nil)
+    }
+    private init(id: UUID, urls: [URL], sourceAccessURLs: [URL], onComplete: @escaping (ImageStackBatchResult) -> Void) {
+        self.id = id
+        super.init()
+        accessed = (sourceAccessURLs + urls).filter { $0.startAccessingSecurityScopedResource() }
+        let root = ImageStackWorkflowView(urls: urls, sourceAccessURLs: sourceAccessURLs,
+            onClose: { [weak self] in self?.window.close() },
+            onBusyChange: { [weak self] busy in
+                self?.busy = busy
+                self?.window.standardWindowButton(.closeButton)?.isEnabled = !busy
+            }, onComplete: onComplete)
+        window = NSWindow(contentViewController: NSHostingController(rootView: root))
+        window.title = "Stack Images"
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.setContentSize(NSSize(width: 940, height: 780))
+        window.minSize = NSSize(width: 800, height: 640)
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.center()
+        ImageRenderQueue.suspendThumbnailWork()
+    }
+    func windowShouldClose(_ sender: NSWindow) -> Bool { !busy }
+    func windowWillClose(_ notification: Notification) {
+        ImageRenderQueue.resumeThumbnailWork()
+        accessed.forEach { $0.stopAccessingSecurityScopedResource() }
+        accessed.removeAll()
+        Self.windows[id] = nil
+    }
+}
+
 struct ImageStackWorkflowView: View {
     let urls: [URL]
+    let sourceAccessURLs: [URL]
+    @State private var importedFrames: StackInputSelection?
+    private var lightURLs: [URL] { importedFrames?.lights ?? [] }
     let onComplete: (ImageStackBatchResult) -> Void
 
-    @Environment(\.dismiss) private var dismiss
+    let onClose: () -> Void
+    let onBusyChange: (Bool) -> Void
+    @State private var setupTab = StackSetupTab.inputs
     @StateObject private var coordinator = ImageStackCoordinator()
+    @StateObject private var libraryModel = CalibrationLibraryModel()
     @State private var selectedURLs: Set<URL>
     @State private var referenceURLs: [String: URL] = [:]
     @State private var automaticReferenceGroups: Set<String> = []
@@ -1406,14 +1527,13 @@ struct ImageStackWorkflowView: View {
     @State private var calibration = ImageStackCalibration()
     @State private var calibrationSource = StackCalibrationSource.masters
     @State private var calibrationLibrary: URL?
-    @State private var flatQualityOptions = FlatQualityOptions()
+    @State private var providedCalibration: [URL] = []
     @State private var splitByFilenameFilter = true
     @State private var outputBaseName = "stacked"
     @State private var groupsPanelsAutomatically = false
     @State private var panelAnalysis: SkyPanelAnalysis?
     @State private var overlapWasEdited = false
     @State private var showsAdvancedOptions = false
-    @State private var showsCalibration = false
     @State private var isChoosingFile = false
     @State private var isPreparingCalibration = false
     @State private var preparationMessage = ""
@@ -1421,26 +1541,35 @@ struct ImageStackWorkflowView: View {
     @State private var pendingWarnings: [String]?
     @State private var pendingFlatReviews: [FlatQualityReview] = []
     @State private var pendingJobs: [ImageStackJob]?
-    @State private var preparedResults: [CalibrationPreparationResult] = []
     @State private var preparationTask: Task<Void, Never>?
 
-    init(urls: [URL], onComplete: @escaping (ImageStackBatchResult) -> Void) {
+    init(urls: [URL], sourceAccessURLs: [URL] = [], onClose: @escaping () -> Void = {}, onBusyChange: @escaping (Bool) -> Void = { _ in }, onComplete: @escaping (ImageStackBatchResult) -> Void) {
         precondition(!urls.isEmpty)
         self.urls = urls
+        self.sourceAccessURLs = sourceAccessURLs
         self.onComplete = onComplete
-        _selectedURLs = State(initialValue: Set(urls))
+        self.onClose = onClose
+        self.onBusyChange = onBusyChange
+        _selectedURLs = State(initialValue: [])
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            if coordinator.isRunning || isPreparingCalibration {
+            if importedFrames == nil {
+                VStack(spacing: 16) {
+                    ProgressView("Reading frame types…")
+                    Text("Separating lights and calibration frames using FITS/XISF headers.").foregroundStyle(.secondary)
+                    Button("Cancel") { onClose() }.keyboardShortcut(.cancelAction)
+                }
+            } else if coordinator.isRunning || isPreparingCalibration {
                 progressView
             } else {
                 configurationView
             }
         }
-        .frame(width: 620, height: 640)
+        .frame(minWidth: 780, idealWidth: 920, minHeight: 600, idealHeight: 760)
         .interactiveDismissDisabled(coordinator.isRunning || isPreparingCalibration)
+        .task { await importFrames() }
         .sheet(isPresented: warningSheetBinding) {
             CalibrationWarningsSheet(
                 warnings: pendingWarnings ?? [],
@@ -1461,12 +1590,17 @@ struct ImageStackWorkflowView: View {
                     pendingJobs = nil
                     preparationNotice = "Stacking was cancelled before any light "
                         + "frames were processed."
-                    releasePreparedResults()
                 })
         }
+        .onChange(of: coordinator.isRunning || isPreparingCalibration || isChoosingFile) { _, busy in onBusyChange(busy) }
+        .onChange(of: libraryLights) { _, _ in analyzeCalibration() }
+        .onChange(of: calibrationLibrary) { _, _ in analyzeCalibration() }
+        .onChange(of: providedCalibration) { _, _ in analyzeCalibration() }
+        .onChange(of: libraryModel.preferences.reviewInputs) { _, _ in analyzeCalibration() }
+        .onChange(of: calibrationSource) { _, _ in analyzeCalibration() }
         .onDisappear {
+            libraryModel.task?.cancel()
             preparationTask?.cancel()
-            releasePreparedResults()
         }
     }
 
@@ -1547,14 +1681,8 @@ struct ImageStackWorkflowView: View {
                     pendingWarnings = nil
                     pendingFlatReviews = []
                     pendingJobs = nil
-                    releasePreparedResults()
                 }
             })
-    }
-
-    private func releasePreparedResults() {
-        preparedResults.forEach { $0.release() }
-        preparedResults = []
     }
 
     private var configurationView: some View {
@@ -1572,98 +1700,217 @@ struct ImageStackWorkflowView: View {
 
             Divider()
 
-            Form {
-                Section("Stacking mode") {
-                    Picker("Mode", selection: $options.canvasMode) {
-                        ForEach(StackCanvasMode.allCases) { mode in Text(mode.title).tag(mode) }
-                    }
-                    .pickerStyle(.segmented)
-                    .onChange(of: options.canvasMode) { _, mode in
-                        if !overlapWasEdited { options.minimumOverlap = mode == .expanded ? 0.05 : 0.60 }
-                    }
-                    Text(options.canvasMode == .expanded
-                        ? "Register the selected lights onto one expanding canvas per output, including images from different folders. Overlapping panels can connect through other panels. Sky-panel analysis is optional."
-                        : "Align and combine the selected lights within a fixed reference frame. Choose Expanded mosaic to retain the edges of overlapping panels.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    if options.canvasMode == .expanded {
-                        TextField("Maximum canvas (million samples)", value: $options.maximumCanvasMegasamples, format: .number)
-                        Text("Samples are pixels × channels. Peak working memory is approximately 40 bytes per sample (256 million ≈ 10 GB). Native registration decides which lights join. Shared fixed alignment and Bayer drizzle are unavailable.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                Section("Frames") {
-                    HStack {
-                        Text("\(selectedURLs.count) of \(urls.count) selected")
+            TabView(selection: $setupTab) {
+                Form {
+                    Section("Light sources") {
+                        ForEach(Array(Set(lightURLs.map { $0.deletingLastPathComponent() })).sorted(by: { $0.path < $1.path }), id: \.self) { folder in
+                            FolderPathControl(url: folder, label: "Light folder")
+                        }
+                        Text("\(lightURLs.count) lights · \(providedCalibration.count) calibration files\(calibrationLibrary == nil ? "" : " + calibration folder")")
                             .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("All") {
-                            selectedURLs = Set(groupsPanelsAutomatically ? (panelAnalysis?.solved.map(\.url) ?? urls) : urls)
+                        Button("Configure Calibration…") { setupTab = .calibration }
+                    }
+                    Section("Stacking mode") {
+                        Picker("Mode", selection: $options.canvasMode) {
+                            ForEach(StackCanvasMode.allCases) { mode in Text(mode.title).tag(mode) }
                         }
-                        Button("None") {
-                            selectedURLs.removeAll()
+                        .pickerStyle(.segmented)
+                        .onChange(of: options.canvasMode) { _, mode in
+                            if !overlapWasEdited { options.minimumOverlap = mode == .expanded ? 0.05 : 0.60 }
+                        }
+                        Text(options.canvasMode == .expanded
+                            ? "Register the selected lights onto one expanding canvas per output, including images from different folders. Overlapping panels can connect through other panels. Sky-panel analysis is optional."
+                            : "Align and combine the selected lights within a fixed reference frame. Choose Expanded mosaic to retain the edges of overlapping panels.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if options.canvasMode == .expanded {
+                            TextField("Maximum canvas (million samples)", value: $options.maximumCanvasMegasamples, format: .number)
+                            Text("Samples are pixels × channels. Peak working memory is approximately 40 bytes per sample (256 million ≈ 10 GB). Native registration decides which lights join. Shared fixed alignment and Bayer drizzle are unavailable.")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
                     }
-
-                    if !groupsPanelsAutomatically || panelAnalysis == nil {
-                        List(urls, id: \.self) { url in
-                            Toggle(isOn: selectedBinding(for: url)) {
-                                Text(url.lastPathComponent).lineLimit(1)
+                    Section("Frames") {
+                        HStack {
+                            Text("\(selectedURLs.count) of \(lightURLs.count) lights selected")
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("All") {
+                                selectedURLs = Set(groupsPanelsAutomatically ? (panelAnalysis?.solved.map(\.url) ?? lightURLs) : lightURLs)
+                            }
+                            Button("None") {
+                                selectedURLs.removeAll()
                             }
                         }
-                        .frame(height: 150)
-                    }
 
-                    DisclosureGroup("Optional sky-panel analysis") {
-                        Toggle("Group lights by solved sky position", isOn: $groupsPanelsAutomatically)
-                        Text("Plate-solve selected lights to review repeated pointings and split disconnected fields into separate outputs. Expanded mosaic works without this step. Installed solving catalogs are required for this analysis.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        if groupsPanelsAutomatically {
-                            Button("Solve and group selected lights", action: analyzePanels)
-                                .disabled(selectedFrames.count < 2)
-                            if let analysis = panelAnalysis {
-                                panelSelection(analysis)
+                        if !groupsPanelsAutomatically || panelAnalysis == nil {
+                            List(lightURLs, id: \.self) { url in
+                                Toggle(isOn: selectedBinding(for: url)) {
+                                    Text(url.lastPathComponent).lineLimit(1)
+                                }
+                            }
+                            .frame(height: min(150, max(60, CGFloat(lightURLs.count) * 26)))
+                        }
+
+                        if let importedFrames {
+                            if !importedFrames.calibration.isEmpty {
+                                Text("\(importedFrames.calibration.count) calibration frames found in this collection.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            if !importedFrames.notes.isEmpty {
+                                DisclosureGroup("Import notes (\(importedFrames.notes.count))") {
+                                    ForEach(importedFrames.notes, id: \.self) { Text($0).font(.caption).textSelection(.enabled) }
+                                }
                             }
                         }
-                    }
+                        DisclosureGroup("Optional sky-panel analysis") {
+                            Toggle("Group lights by solved sky position", isOn: $groupsPanelsAutomatically)
+                            Text("Plate-solve selected lights to review repeated pointings and split disconnected fields into separate outputs. Expanded mosaic works without this step. Installed solving catalogs are required for this analysis.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            if groupsPanelsAutomatically {
+                                Button("Solve and group selected lights", action: analyzePanels)
+                                    .disabled(selectedFrames.count < 2)
+                                if let analysis = panelAnalysis {
+                                    panelSelection(analysis)
+                                }
+                            }
+                        }
 
-                    if hasMultipleDetectedFilters {
-                        Toggle("Split by filename filter", isOn: $splitByFilenameFilter)
-                        Text("Recognizes L, R, G, B, Ha, OIII, S/SII, and H-beta; other filter names stay unchanged.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        if stackGroups.count > 1 {
+                        if hasMultipleDetectedFilters {
+                            Toggle("Split by filename filter", isOn: $splitByFilenameFilter)
+                            Text("Recognizes L, R, G, B, Ha, OIII, S/SII, and H-beta; other filter names stay unchanged.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if stackGroups.count > 1 {
+                                TextField("Output base name", text: $outputBaseName)
+                            }
+                        }
+
+                        if !hasMultipleDetectedFilters && stackGroups.count > 1 {
                             TextField("Output base name", text: $outputBaseName)
                         }
                     }
 
-                    if !hasMultipleDetectedFilters && stackGroups.count > 1 {
-                        TextField("Output base name", text: $outputBaseName)
-                    }
-                    ForEach(stackGroups) { group in
-                        Picker(
-                            stackGroups.count == 1 ? "Channel reference" : "\(group.title) channel reference",
-                            selection: referenceBinding(for: group)
-                        ) {
-                            ForEach(group.inputs, id: \.self) { url in
-                                Text(url.lastPathComponent).tag(url)
+                }
+                .formStyle(.grouped)
+                .tabItem { Text("Inputs") }.tag(StackSetupTab.inputs)
+                Form {
+                    Section("Calibration sources") {
+                        Picker("Source", selection: $calibrationSource) {
+                            ForEach(StackCalibrationSource.allCases) { source in
+                                Text(source.title).tag(source)
                             }
                         }
-                        .disabled(group.inputs.isEmpty || automaticReferenceGroups.contains(group.id))
-                        Toggle("Choose \(group.title) channel reference automatically", isOn: Binding(
-                            get: { automaticReferenceGroups.contains(group.id) },
-                            set: { enabled in
-                                if enabled { automaticReferenceGroups.insert(group.id) }
-                                else { automaticReferenceGroups.remove(group.id) }
-                            }))
+                        if calibrationSource == .masters {
+                            calibrationRow("Bias", selection: $calibration.bias)
+                            calibrationRow("Dark", selection: $calibration.dark)
+                            calibrationRow("Flat", selection: $calibration.flat)
+                            Toggle(
+                                "Override dark exposure",
+                                isOn: $calibration.overridesDarkExposure
+                            )
+                            .disabled(calibration.dark == nil)
+                            if calibration.overridesDarkExposure {
+                                TextField(
+                                    "Dark exposure (seconds)",
+                                    value: $calibration.darkExposureSeconds,
+                                    format: .number
+                                )
+                            }
+                        } else {
+                            Text("Provide calibration files or a library folder. Frames are graded, grouped and matched automatically; masters are built when stacking. Mosaics can use several calibration sessions in one output.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            HStack {
+                                Text("Calibration folder")
+                                FolderPathControl(url: calibrationLibrary, label: "Calibration folder")
+                                Button("Choose Folder…") { chooseCalibrationLibrary() }
+                                    .accessibilityIdentifier("calibration.chooseFolder")
+                                Button("Remove") { calibrationLibrary = nil }
+                                    .disabled(calibrationLibrary == nil)
+                                    .accessibilityLabel("Remove calibration folder")
+                            }
+                            HStack {
+                                Text("\(providedCalibration.count) calibration files")
+                                Spacer()
+                                Button("Add Files…") { chooseCalibrationFiles() }
+                                    .accessibilityIdentifier("calibration.addFiles")
+                                Button("Remove All") { providedCalibration = [] }
+                                    .disabled(providedCalibration.isEmpty)
+                                    .accessibilityLabel("Remove all provided calibration files")
+                            }
+                            if !providedCalibration.isEmpty {
+                                DisclosureGroup("Included calibration files") {
+                                    ForEach(providedCalibration, id: \.self) { url in
+                                        HStack {
+                                            Text(url.lastPathComponent).lineLimit(1).truncationMode(.middle).help(url.path)
+                                            Spacer()
+                                            Button { providedCalibration.removeAll { $0 == url } } label: { Image(systemName: "minus.circle") }
+                                                .buttonStyle(.borderless)
+                                                .accessibilityLabel("Remove \(url.lastPathComponent) from calibration")
+                                        }
+                                    }
+                                }
+                            }
+                            Picker("Flats", selection: $libraryModel.preferences.flatAssociation) {
+                                ForEach(LibraryAssociation.allCases) { Text($0.title).tag($0) }
+                            }
+                            Picker("Darks", selection: $libraryModel.preferences.darkAssociation) {
+                                ForEach(LibraryAssociation.allCases) { Text($0.title).tag($0) }
+                            }
+                            HStack {
+                                Button(libraryModel.busy ? "Analyzing…" : "Analyze Calibration") {
+                                    libraryModel.analyze(library: calibrationLibrary, lights: libraryLights, provided: providedCalibration, accessURLs: sourceAccessURLs)
+                                }.disabled((calibrationLibrary == nil && providedCalibration.isEmpty) || libraryModel.busy)
+                                Button("Review Grades and Matches…") { setupTab = .review }
+                                    .disabled(libraryModel.review == nil)
+                            }
+                            if libraryModel.busy { ProgressView("Measuring and matching…") }
+                            if let review = libraryModel.review {
+                                Text("\(review.frames.count) calibration frames · \(review.sessionCount) sessions · \(review.missing.filter { $0 }.count) incomplete lights")
+                                    .font(.caption)
+                            }
+                            if let error = libraryModel.error { Text(error).foregroundStyle(.red) }
+                            Picker("Incomplete lights", selection: $libraryModel.preferences.incomplete) {
+                                Text("Stop and review").tag("stop")
+                                Text("Exclude from stack").tag("exclude")
+                                Text("Keep with available calibration").tag("keep")
+                            }
+                            Text("Changes apply to this stack. They become saved defaults when stacking starts.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            CalibrationLibrarySettingsView(model: libraryModel)
+
+                        }
                     }
 
-                    Text("Automatic selection scores the selected lights when stacking starts. With a shared alignment image, it tries up to five ranked lights until one aligns.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Text(groupSummary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    LabeledContent("Shared alignment image") {
+                }
+                .formStyle(.grouped)
+                .tabItem { Text("Calibration") }.tag(StackSetupTab.calibration)
+                Form {
+                    Section("Registration reference") {
+                        ForEach(stackGroups) { group in
+                            Picker(
+                                stackGroups.count == 1 ? "Channel reference" : "\(group.title) channel reference",
+                                selection: referenceBinding(for: group)
+                            ) {
+                                ForEach(group.inputs, id: \.self) { url in
+                                    Text(url.lastPathComponent).tag(url)
+                                }
+                            }
+                            .disabled(group.inputs.isEmpty || automaticReferenceGroups.contains(group.id))
+                            Toggle("Choose \(group.title) channel reference automatically", isOn: Binding(
+                                get: { automaticReferenceGroups.contains(group.id) },
+                                set: { enabled in
+                                    if enabled { automaticReferenceGroups.insert(group.id) }
+                                    else { automaticReferenceGroups.remove(group.id) }
+                                }))
+                        }
+
+                        Text("Automatic selection scores the selected lights when stacking starts. With a shared alignment image, it tries up to five ranked lights until one aligns.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text(groupSummary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         HStack {
+                            Text("Shared alignment image")
+                            Spacer()
                             Button(referenceImage?.lastPathComponent ?? "Choose…") {
                                 isChoosingFile = true
                                 Task { @MainActor in
@@ -1676,168 +1923,118 @@ struct ImageStackWorkflowView: View {
                                 }
                             }
                             .lineLimit(1)
+                            .accessibilityLabel("Choose shared alignment image")
                             .disabled(options.canvasMode == .expanded)
                             if referenceImage != nil {
                                 Button("Clear") { referenceImage = nil }
                             }
                         }
-                    }
-                    Text(referenceImage == nil
-                        ? (options.canvasMode == .expanded
-                            ? "Each channel reference anchors its expanding canvas and normalization."
-                            : "Each channel reference sets its stack's grid and normalization. Choose a shared alignment image to put every filter on the same grid.")
-                        : "The alignment image supplies bounds and coordinates; each channel light supplies its own brightness and noise scale. The alignment image contributes no pixels unless it is also selected as a light. Use matching mono or color data at the same image scale.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section("Stack") {
-                    StackProcessingOptionsView(options: $options)
-                    Picker("Normalization", selection: $options.normalization) {
-                        ForEach(StackNormalizationMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
-                    }
-                    if options.usesLocalTiles {
-                        Picker("Tile size", selection: $options.localTileSize) {
-                            ForEach([64, 128, 256, 512], id: \.self) { size in
-                                Text("\(size) px").tag(size)
-                            }
-                        }
-                    }
-
-                    Picker("Sample rejection", selection: $options.rejection) {
-                        ForEach(StackRejectionMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
-                    }
-                    if options.rejection == .deltaSigma {
-                        LabeledContent("Sigma limits") {
-                            HStack {
-                                TextField("Low", value: $options.sigmaLow, format: .number)
-                                    .frame(width: 70)
-                                Text("low")
-                                    .foregroundStyle(.secondary)
-                                TextField("High", value: $options.sigmaHigh, format: .number)
-                                    .frame(width: 70)
-                                Text("high")
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        Stepper(
-                            "Warmup frames: \(options.rejectionWarmup)",
-                            value: $options.rejectionWarmup,
-                            in: 2...100
-                        )
-                    }
-
-                    Toggle("Remove transients after stacking", isOn: $options.removesTransients)
-                    Text("Runs three passes over accepted frames to reject satellite "
-                        + "trails that live rejection kept in the first frames.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                DisclosureGroup("Calibration", isExpanded: $showsCalibration) {
-                    Picker("Source", selection: $calibrationSource) {
-                        ForEach(StackCalibrationSource.allCases) { source in
-                            Text(source.title).tag(source)
-                        }
-                    }
-                    if calibrationSource == .masters {
-                        calibrationRow("Bias", selection: $calibration.bias)
-                        calibrationRow("Dark", selection: $calibration.dark)
-                        calibrationRow("Flat", selection: $calibration.flat)
-                        Toggle(
-                            "Override dark exposure",
-                            isOn: $calibration.overridesDarkExposure
-                        )
-                        .disabled(calibration.dark == nil)
-                        if calibration.overridesDarkExposure {
-                            TextField(
-                                "Dark exposure (seconds)",
-                                value: $calibration.darkExposureSeconds,
-                                format: .number
-                            )
-                        }
-                    } else {
-                        Text("Seiza prepares one compatible calibration set per output "
-                            + "across that output's selected lights, builds bias, dark, dark-flat, "
-                            + "and flat masters in dependency order, and caches "
-                            + "them for reuse.")
+                        Text(referenceImage == nil
+                            ? (options.canvasMode == .expanded
+                                ? "Each channel reference anchors its expanding canvas and normalization."
+                                : "Each channel reference sets its stack's grid and normalization. Choose a shared alignment image to put every filter on the same grid.")
+                            : "The alignment image supplies bounds and coordinates; each channel light supplies its own brightness and noise scale. The alignment image contributes no pixels unless it is also selected as a light. Use matching mono or color data at the same image scale.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        LabeledContent("Library") {
-                            HStack {
-                                Text(calibrationLibrary?.path
-                                    ?? "Calibration library folder")
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                    .foregroundStyle(
-                                        calibrationLibrary == nil
-                                            ? .secondary : .primary)
-                                Button("Choose…") { chooseCalibrationLibrary() }
+                    }
+
+                    Section("Stack") {
+                        StackProcessingOptionsView(options: $options)
+                        Picker("Normalization", selection: $options.normalization) {
+                            ForEach(StackNormalizationMode.allCases) { mode in
+                                Text(mode.title).tag(mode)
                             }
                         }
-                        FlatQualityControls(options: $flatQualityOptions)
-                            .disabled(isPreparingCalibration || coordinator.isRunning)
-                        if calibrationLibrary != nil {
-                            Text("Masters are matched independently for each output "
-                                + "and cached for reuse. Panels and folders within "
-                                + "one output share the same calibration set.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        if options.usesLocalTiles {
+                            Picker("Tile size", selection: $options.localTileSize) {
+                                ForEach([64, 128, 256, 512], id: \.self) { size in
+                                    Text("\(size) px").tag(size)
+                                }
+                            }
                         }
+
+                        Picker("Sample rejection", selection: $options.rejection) {
+                            ForEach(StackRejectionMode.allCases) { mode in
+                                Text(mode.title).tag(mode)
+                            }
+                        }
+                        if options.rejection == .deltaSigma {
+                            LabeledContent("Sigma limits") {
+                                HStack {
+                                    TextField("Low", value: $options.sigmaLow, format: .number)
+                                        .frame(width: 70)
+                                    Text("low")
+                                        .foregroundStyle(.secondary)
+                                    TextField("High", value: $options.sigmaHigh, format: .number)
+                                        .frame(width: 70)
+                                    Text("high")
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Stepper(
+                                "Warmup frames: \(options.rejectionWarmup)",
+                                value: $options.rejectionWarmup,
+                                in: 2...100
+                            )
+                        }
+
+                        Toggle("Remove transients after stacking", isOn: $options.removesTransients)
+                        Text("Runs three passes over accepted frames to reject satellite "
+                            + "trails that live rejection kept in the first frames.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    DisclosureGroup("Registration Limits", isExpanded: $showsAdvancedOptions) {
+                        TextField(
+                            "Maximum RMS (pixels)",
+                            value: $options.maximumRegistrationRMS,
+                            format: .number
+                        )
+                        TextField(
+                            "Drift floor (pixels)",
+                            value: $options.maximumDriftPixels,
+                            format: .number
+                        )
+                        TextField(
+                            "Maximum drift fraction",
+                            value: $options.maximumDriftFraction,
+                            format: .number
+                        )
+                        TextField(
+                            "Minimum overlap",
+                            value: Binding(get: { options.minimumOverlap }, set: { options.minimumOverlap = $0; overlapWasEdited = true }),
+                            format: .number
+                        )
+                    }
+
+                }
+                .formStyle(.grouped)
+                .tabItem { Text("Processing") }.tag(StackSetupTab.processing)
+                Group {
+                    if libraryModel.review != nil {
+                        CalibrationLibraryReviewView(model: libraryModel, library: calibrationLibrary, lights: libraryLights,
+                            provided: providedCalibration, accessURLs: sourceAccessURLs, onDone: { setupTab = .calibration })
+                    } else {
+                        ContentUnavailableView("No Calibration Review", systemImage: "checklist",
+                            description: Text("Choose calibration files or a folder in Calibration to review their grades and matches."))
                     }
                 }
-
-                DisclosureGroup("Registration Limits", isExpanded: $showsAdvancedOptions) {
-                    TextField(
-                        "Maximum RMS (pixels)",
-                        value: $options.maximumRegistrationRMS,
-                        format: .number
-                    )
-                    TextField(
-                        "Drift floor (pixels)",
-                        value: $options.maximumDriftPixels,
-                        format: .number
-                    )
-                    TextField(
-                        "Maximum drift fraction",
-                        value: $options.maximumDriftFraction,
-                        format: .number
-                    )
-                    TextField(
-                        "Minimum overlap",
-                        value: Binding(get: { options.minimumOverlap }, set: { options.minimumOverlap = $0; overlapWasEdited = true }),
-                        format: .number
-                    )
-                }
-
-                if let message = setupValidationMessage {
-                    Text(message)
-                        .foregroundStyle(.red)
-                        .font(.callout)
-                } else if let message = coordinator.errorMessage {
-                    Text(message)
-                        .foregroundStyle(.red)
-                        .font(.callout)
-                } else if let message = preparationNotice {
-                    Text(message)
-                        .foregroundStyle(.secondary)
-                        .font(.callout)
-                } else if let message = coordinator.cancellationMessage {
-                    Text(message)
-                        .foregroundStyle(.secondary)
-                        .font(.callout)
-                }
+                .tabItem { Text("Review") }.tag(StackSetupTab.review)
             }
-            .formStyle(.grouped)
+            .padding(.horizontal, 12)
+            .toggleStyle(.checkbox)
+            if let message = setupValidationMessage ?? coordinator.errorMessage ?? preparationNotice ?? coordinator.cancellationMessage {
+                Label(message, systemImage: setupValidationMessage == nil ? "info.circle" : "exclamationmark.circle")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.vertical, 8)
+            }
 
             Divider()
 
             HStack {
-                Button("Cancel", role: .cancel) { dismiss() }
+                Button("Cancel", role: .cancel) { onClose() }
+                    .disabled(isChoosingFile)
                     .keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("Choose Output and Stack…") {
@@ -1907,14 +2104,15 @@ struct ImageStackWorkflowView: View {
     }
 
     private var selectedFrames: [URL] {
-        urls.filter(selectedURLs.contains)
+        lightURLs.filter(selectedURLs.contains)
     }
 
     private var hasMultipleDetectedFilters: Bool {
-        ImageStackGrouping.hasMultipleDetectedFilters(in: urls)
+        ImageStackGrouping.hasMultipleDetectedFilters(in: lightURLs)
     }
 
     private var stackGroups: [ImageStackGroup] {
+        guard !selectedFrames.isEmpty else { return [] }
         if groupsPanelsAutomatically {
             return panelAnalysis?.selectedGroups(selectedFrames, splitByFilter: splitByFilenameFilter) ?? []
         }
@@ -1952,12 +2150,20 @@ struct ImageStackWorkflowView: View {
             }
         }
         if calibrationSource == .automatic {
-            guard let calibrationLibrary,
-                FileManager.default.fileExists(atPath: calibrationLibrary.path)
-            else {
-                return "Choose a calibration library folder."
+            if calibrationLibrary == nil && providedCalibration.isEmpty { return "Choose calibration files or a library folder." }
+            if libraryModel.busy { return "Wait for calibration analysis to finish." }
+            guard let review = libraryModel.review, !libraryModel.stale else { return "Analyze and review calibration before stacking." }
+            if libraryModel.preferences.incomplete == "stop", review.missing.contains(true) { return "Some lights have incomplete calibration. Review their matches or change Incomplete lights." }
+            if libraryModel.preferences.incomplete == "exclude" {
+                for group in stackGroups {
+                    let count = group.inputs.filter { url in
+                        guard let index = libraryLights.firstIndex(of: url) else { return false }
+                        return !review.missing[index]
+                    }.count
+                    if count < 2 { return "\(group.title) needs at least two lights with complete calibration." }
+                }
             }
-            return options.validationMessage ?? flatQualityOptions.validationMessage
+            return options.validationMessage
         }
         return options.validationMessage ?? calibration.validationMessage(for: selectedFrames)
     }
@@ -1994,21 +2200,23 @@ struct ImageStackWorkflowView: View {
 
     @ViewBuilder
     private func calibrationRow(_ title: String, selection: Binding<URL?>) -> some View {
-        LabeledContent(title) {
-            HStack {
-                Button(selection.wrappedValue?.lastPathComponent ?? "Choose…") {
-                    chooseCalibration(selection: selection)
+        HStack {
+            Text(title)
+            Spacer()
+            Button(selection.wrappedValue?.lastPathComponent ?? "Choose…") {
+                chooseCalibration(selection: selection)
+            }
+            .lineLimit(1)
+            .accessibilityLabel("Choose \(title.lowercased()) master")
+            if selection.wrappedValue != nil {
+                Button {
+                    selection.wrappedValue = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
                 }
-                .lineLimit(1)
-                if selection.wrappedValue != nil {
-                    Button {
-                        selection.wrappedValue = nil
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Remove \(title.lowercased()) master")
-                }
+                .buttonStyle(.borderless)
+                .help("Remove \(title.lowercased()) master")
+                .accessibilityLabel("Remove \(title.lowercased()) master")
             }
         }
     }
@@ -2019,6 +2227,43 @@ struct ImageStackWorkflowView: View {
             selection.wrappedValue = await StackFilePanels.chooseCalibration(
                 directory: urls.first?.deletingLastPathComponent()
             )
+            isChoosingFile = false
+        }
+    }
+
+    private func importFrames() async {
+        guard importedFrames == nil else { return }
+        let urls = urls, accessURLs = sourceAccessURLs
+        let worker = Task.detached(priority: .userInitiated) { try StackInputService.classify(urls, accessURLs: accessURLs) }
+        do {
+            let frames = try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
+            try Task.checkCancellation()
+            importedFrames = frames
+            selectedURLs = Set(frames.lights)
+            providedCalibration = frames.calibration
+            if !frames.calibration.isEmpty { calibrationSource = .automatic }
+        } catch is CancellationError { }
+        catch { importedFrames = .init(notes: [error.localizedDescription]) }
+    }
+
+    private func analyzeCalibration() {
+        guard calibrationSource == .automatic, !libraryLights.isEmpty,
+              calibrationLibrary != nil || !providedCalibration.isEmpty else { libraryModel.invalidate(); return }
+        libraryModel.analyze(library: calibrationLibrary, lights: libraryLights, provided: providedCalibration, accessURLs: sourceAccessURLs, debounce: true)
+    }
+
+    private func chooseCalibrationFiles() {
+        isChoosingFile = true
+        Task { @MainActor in
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = true
+            panel.canChooseDirectories = false
+            panel.allowsMultipleSelection = true
+            panel.message = "Choose raw calibration frames or masters. FITS/XISF headers identify bias, dark, dark-flat and flat frames."
+            let chosen: [URL] = await withCheckedContinuation { continuation in
+                panel.begin { response in continuation.resume(returning: response == .OK ? panel.urls : []) }
+            }
+            for url in chosen where !providedCalibration.contains(url) { providedCalibration.append(url) }
             isChoosingFile = false
         }
     }
@@ -2071,7 +2316,7 @@ struct ImageStackWorkflowView: View {
             guard let outputSelection else { return }
             preparationNotice = nil
 
-            guard calibrationSource == .automatic, let library = calibrationLibrary
+            guard calibrationSource == .automatic
             else {
                 startBatch(makeJobs(
                     groups: groups,
@@ -2084,30 +2329,50 @@ struct ImageStackWorkflowView: View {
             preparationMessage = "Inspecting target light headers…"
             preparationTask = Task { @MainActor in
                 do {
-                    let prepared = try await prepareCalibrations(
-                        groups: groups, library: library)
+                    guard let reviewed = libraryModel.review, !libraryModel.stale else {
+                        throw ImageStackError.invalidRequest("Analyze calibration again before stacking.")
+                    }
+                    let lights = libraryLights
+                    let preferences = libraryModel.preferences
+                    preparationMessage = "Building reviewed calibration masters…"
+                    var execution = LibraryRequest(operation: "execute", library: calibrationLibrary, lights: lights,
+                        provided: providedCalibration, preferences: preferences, reviewKey: reviewed.reviewKey)
+                    execution.accessURLs += sourceAccessURLs
+                    let prepared = try await CalibrationLibraryService.perform(execution)
+                    let plan = LibraryPreparedPlan(review: prepared, originalPaths: lights.map(\.path), accessURLs: execution.accessURLs)
+                    let jobs = try makeLibraryJobs(groups: groups, outputSelection: outputSelection, plan: plan,
+                        excludeIncomplete: preferences.incomplete == "exclude")
                     isPreparingCalibration = false
-                    let jobs = makeJobs(
-                        groups: groups,
-                        outputSelection: outputSelection,
-                        calibrationsByGroup: prepared.byGroup)
-                    if prepared.warnings.isEmpty && prepared.reviews.isEmpty {
+                    let newWarnings = prepared.warnings.filter { !reviewed.warnings.contains($0) }
+                    if newWarnings.isEmpty {
                         startBatch(jobs)
                     } else {
                         pendingJobs = jobs
-                        pendingFlatReviews = prepared.reviews
-                        pendingWarnings = prepared.warnings
+                        pendingFlatReviews = []
+                        pendingWarnings = newWarnings
                     }
                 } catch is CancellationError {
                     isPreparingCalibration = false
                     preparationNotice = "Calibration preparation was cancelled."
-                    releasePreparedResults()
                 } catch {
                     isPreparingCalibration = false
                     preparationNotice = error.localizedDescription
-                    releasePreparedResults()
                 }
             }
+        }
+    }
+
+    private var libraryLights: [URL] { stackGroups.flatMap { orderedInputs(for: $0) } }
+
+    private func makeLibraryJobs(groups: [ImageStackGroup], outputSelection: StackFilePanels.OutputSelection,
+        plan: LibraryPreparedPlan, excludeIncomplete: Bool) throws -> [ImageStackJob] {
+        try zip(groups, outputSelection.outputs).map { group, output in
+            let inputs = try plan.preparedInputs(orderedInputs(for: group), excludeIncomplete: excludeIncomplete)
+            guard inputs.count >= 2 else { throw ImageStackError.invalidRequest("\(group.title) needs two usable lights after calibration exclusions.") }
+            return ImageStackJob(group: group, request: ImageStackRequest(inputs: inputs, output: output,
+                outputAccessURL: outputSelection.accessURL, options: stackOptions, calibration: ImageStackCalibration(),
+                referenceImage: referenceImage, choosesReferenceAutomatically: automaticReferenceGroups.contains(group.id),
+                additionalProtectedSources: urls + sourceAccessURLs, libraryPlan: plan))
         }
     }
 
@@ -2137,7 +2402,7 @@ struct ImageStackWorkflowView: View {
                             : calibration),
                     referenceImage: referenceImage,
                     choosesReferenceAutomatically: automaticReferenceGroups.contains(group.id),
-                    additionalProtectedSources: urls
+                    additionalProtectedSources: urls + sourceAccessURLs
                 )
             )
         }
@@ -2145,140 +2410,21 @@ struct ImageStackWorkflowView: View {
 
     private func startBatch(_ jobs: [ImageStackJob]) {
         if groupsPanelsAutomatically,
-            panelAnalysis?.sourcesUnchanged(jobs.flatMap { $0.request.inputs }) != true {
+            panelAnalysis?.sourcesUnchanged(selectedFrames) != true {
             preparationNotice = "A selected source changed. Solve and group it again."
-            releasePreparedResults()
             return
         }
+        if calibrationSource == .automatic { libraryModel.commitPreferences() }
         coordinator.start(
             request: ImageStackBatchRequest(jobs: jobs),
             onSuccess: { result in
-                dismiss()
+                onClose()
                 onComplete(result)
             }
         )
     }
 
-    private struct BatchPreparation {
-        var byGroup: [String: ImageStackCalibration] = [:]
-        var warnings: [String] = []
-        var reviews: [FlatQualityReview] = []
-    }
 
-    /// Probes every group's lights and prepares one master set per filter
-    /// group, protecting masters produced for earlier groups from pruning.
-    private func prepareCalibrations(
-        groups: [ImageStackGroup],
-        library: URL
-    ) async throws -> BatchPreparation {
-        var preparation = BatchPreparation()
-        var protectedMasters: [String] = []
-        let cacheDirectory = CalibrationCachePaths.forLibrary(library.path)
-        let service = CalibrationPreparationService()
-
-        for (index, group) in groups.enumerated() {
-            preparationMessage = "\(group.title): inspecting target light headers…"
-            let title = group.title
-            let inputs = orderedInputs(for: group).map(\.path)
-            let probed = try await probeLights(inputs)
-            preparation.warnings.append(
-                contentsOf: probed.warnings.map { "\(title): \($0)" })
-            let selection = CalibrationTargetSelection.partition(probed.probes)
-            preparation.warnings.append(
-                contentsOf: selection.warnings.map { "\(title): \($0)" })
-            guard let reference = selection.eligible.first else {
-                preparation.warnings.append(
-                    "\(title): no raw light frame could be inspected; the stack "
-                        + "runs without automatic calibration.")
-                continue
-            }
-
-            let request = CalibrationPreparationRequest(
-                reference: reference,
-                targetLights: Array(selection.eligible.dropFirst()),
-                sourcePaths: [library.path],
-                cacheDirectory: cacheDirectory,
-                protectedMasterPaths: protectedMasters,
-                options: CalibrationPreparationOptions(flatQuality: flatQualityOptions))
-            let count = groups.count
-            let position = index + 1
-            let result = try await service.prepare(request) { update in
-                Task { @MainActor in
-                    preparationMessage =
-                        "\(title) (\(position) of \(count)): \(update.message)"
-                }
-            }
-            preparedResults.append(result)
-            preparation.byGroup[group.id] = result.calibration
-            preparation.warnings.append(
-                contentsOf: result.warnings.map { "\(title): \($0)" })
-            preparation.reviews.append(contentsOf: result.flatQualityReviews.map { review in
-                var grouped = review
-                grouped.groupTitle = title
-                return grouped
-            })
-            protectedMasters.append(
-                contentsOf: result.summaries.compactMap(\.masterPath))
-        }
-        return preparation
-    }
-
-    /// Probes a group's lights, tolerating unreadable files: an overnight
-    /// batch is not refused because one frame's header cannot be read. The
-    /// frame is still offered to the stacker, whose native admission decides
-    /// its fate.
-    private func probeLights(
-        _ paths: [String]
-    ) async throws -> (probes: [CalibrationFrameProbe], warnings: [String]) {
-        enum ProbeResult: Sendable {
-            case probed(index: Int, probe: CalibrationFrameProbe)
-            case failed(index: Int, path: String, message: String)
-        }
-
-        var probesByIndex: [Int: CalibrationFrameProbe] = [:]
-        var failures: [(index: Int, path: String, message: String)] = []
-        try await withThrowingTaskGroup(of: ProbeResult.self) { group in
-            var iterator = paths.enumerated().makeIterator()
-            var inFlight = 0
-            func enqueueNext() {
-                guard let (index, path) = iterator.next() else { return }
-                inFlight += 1
-                group.addTask {
-                    do {
-                        let probe = try await runBlocking {
-                            try CalibrationService.probe(path: path)
-                        }
-                        return .probed(index: index, probe: probe)
-                    } catch is CancellationError {
-                        throw CancellationError()
-                    } catch {
-                        return .failed(
-                            index: index, path: path,
-                            message: error.localizedDescription)
-                    }
-                }
-            }
-            for _ in 0..<4 {
-                enqueueNext()
-            }
-            while inFlight > 0, let result = try await group.next() {
-                inFlight -= 1
-                switch result {
-                case .probed(let index, let probe):
-                    probesByIndex[index] = probe
-                case .failed(let index, let path, let message):
-                    failures.append((index, path, message))
-                }
-                enqueueNext()
-            }
-        }
-        let probes = paths.indices.compactMap { probesByIndex[$0] }
-        let warnings = failures.sorted { $0.index < $1.index }.map { failure in
-            let name = URL(fileURLWithPath: failure.path).lastPathComponent
-            return "Could not inspect \(name): \(failure.message)"
-        }
-        return (probes, warnings)
-    }
 }
 
 @MainActor

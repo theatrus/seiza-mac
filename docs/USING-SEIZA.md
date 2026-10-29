@@ -56,8 +56,17 @@ Open a directory with at least two FITS or XISF files, then click **Stack
 Images** in the toolbar. Raster files may stay in the directory, but Seiza does
 not include them in the stack.
 
-The frame list includes FITS and XISF images throughout the opened folder tree,
-across all sidebar groups, including collapsed groups.
+Stack Images opens a resizable window. Use **Inputs** to select lights and a
+canvas mode, **Calibration** to supply masters or graded files, **Processing**
+for alignment and integration, and **Review** for calibration evidence.
+
+The collection includes FITS and XISF images throughout the opened folder tree,
+across all sidebar groups, including collapsed groups. It may contain calibration
+frames alongside lights. Stack Images reads their header roles, offers only
+lights in the frame list, and sends bias/dark/dark-flat/flat files to automatic
+graded matching. Existing calibration masters are included under the native
+master policy. Unknown frame types are offered as lights with an import note;
+unreadable images and non-calibration masters are set aside with explanations.
 
 Choose which frames to use and pick the reference frame. The reference sets the
 output bounds and alignment coordinates. When filenames show two or more common
@@ -103,18 +112,19 @@ VNG demosaicing, normal Bayer integration, and no hot/dead pixel suppression.
 all three rejection passes. The core caches prepared frames on disk where
 supported; Bayer drizzle still rereads the sources. Allow space for that cache.
 
-For calibration, either pick integrated bias, dark, and flat masters, or set
-the source to **Build from calibration frames** and choose a library folder of
-raw bias, dark, dark-flat, and flat frames. Seiza inspects each frame's
-headers, matches camera and optics metadata against every selected light, and
-builds masters in dependency order into a cache it reuses on later runs. Seiza
-withholds a flat unless a bias, or an uncalibrated dark-flat with a matching
-known exposure, proves a safe pedestal-removal path. A selected frame that
-cannot be inspected, or that is not a raw light — a master, or an already
-calibrated file — is set aside from matching with a warning; the stack still
-runs, and the native per-frame admission decides that frame's fate. If
-preparation raises warnings, Seiza shows them before it processes any light
-frame so you can cancel.
+For calibration, either pick integrated bias, dark and flat masters, or use
+**Graded calibration files or library**. A mixed folder prepopulates its
+calibration files; you can add more files or a separate library. Seiza grades,
+groups and matches them to each light. Review grades and matches before stacking;
+masters are built in dependency order and cached for reuse. Flats and darks can
+each use automatic grouping or all compatible inputs as one set. Incomplete
+lights follow your **Stop**, **Keep** or **Exclude** choice. Fixed and expanded
+canvases use the per-light assignments, including during transient removal.
+See [graded calibration setup](STACKING-CALIBRATION.md) for the controls and
+source/cache guarantees.
+
+Calibration settings and review choices become saved defaults when stacking
+starts. Cancel or close the setup to discard edits.
 
 For a filter split, enter a base name, click **Choose Output and Stack**, and
 choose an output folder. Seiza adds suffixes such as `-Ha` and `-OIII`. Without
@@ -256,6 +266,24 @@ Image headers can be filtered by keyword or value. **Copy Visible** writes the
 filtered rows to the clipboard as plain `KEY = value` lines. After a solve, the
 same inspector shows elapsed time, detected and matched star counts, WCS
 quality, and overlay diagnostics.
+
+## Inspect a flat
+
+Select a flat in the browser and click the toolbar's **Inspect Flat** action to
+open the right-hand **Inspector** and measure it. The inspector can also be
+toggled with **⌥⌘I**. Flat inspection appears before image metadata and histograms.
+Click **Inspect Flat** in the sidebar to measure the linear
+source, independently of its display stretch. The sidebar reports median/channel
+levels, clipped samples, response noise, detection depth, dust and vignetting
+counts, and a coarse illumination map. Expand dust details for locations, shapes,
+radii and depths; optional optical geometry adds distance estimates.
+
+**Measurement settings** controls saturation (usually 65535 for 16-bit ADU or
+1 for normalized samples), focal ratio, binned pixel size and obstruction.
+Changing settings requires **Inspect Flat** again. A raw flat receives Seiza's
+default single-frame grade and findings. Masters and preprocessed flats show
+measurements without a raw-exposure grade. Group stability and association with
+lights are reviewed separately in Stack Images.
 
 ## Solve only when you ask
 

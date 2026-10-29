@@ -1,9 +1,12 @@
 # Shared stacking references
 
-Seiza for Mac uses published `seiza-cabi` and `seiza` **0.39.0**,
-`seiza-stacking` **0.42.0**, and `seiza-download` **0.9.0**. The registry
-checksums are locked in `Cargo.lock`; `Shared/seiza_cabi.h` matches the
-published C ABI header. These replace the tested upstream Git pin.
+This branch targets `seiza-cabi`/`seiza` **0.47.0**, `seiza-stacking` **0.54.0**
+and calibration **0.11.0**. Cargo pins the shared file coordinator
+commit from [Seiza #406](https://github.com/theatrus/seiza/pull/406) and `Shared/seiza_cabi.h` matches its generated header. The graded setup
+calls the shared C ABI directly; the native library/session/evidence orchestration
+lives in Seiza. Its fixed and expanded
+executors and replay tests are enabled. See the
+[calibration setup guide](STACKING-CALIBRATION.md) for supported inputs and limits.
 
 ## Upstream coverage
 
@@ -73,6 +76,12 @@ selection/resume. Existing stack recipes and parallax tests run against the
 same pinned core. See the pull request for the completed check results.
 
 ## Flat quality review
+
+The proposed [calibration workspace in stacking setup](STACKING-CALIBRATION.md)
+extends this foundation to PSF Guard-style frame grades, measured flat groups,
+per-light matching and multiple calibration sessions on one fixed or expanded
+canvas. That feature is planned; the current output-level calibration remains
+the behavior described in the existing guides.
 
 Both directory and live stacking offer **Review flat quality** when building
 masters from calibration frames. It measures the selected raw flats and shows

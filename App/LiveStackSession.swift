@@ -470,8 +470,9 @@ actor LiveStackNativeSession {
     }
 
     /// Atomically replaces the active masters. The complete set is validated
-    /// against the immutable registration reference before anything changes;
-    /// a failure leaves the stacker untouched.
+    /// for geometry/layout before anything changes; each pushed light is then
+    /// checked against the active masters' sensor and optical metadata. A
+    /// failed replacement leaves the stacker untouched.
     func setCalibration(_ calibration: ImageStackCalibration) throws {
         let handle = try requireHandle()
         var errorPointer: UnsafeMutablePointer<CChar>?
