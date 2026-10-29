@@ -56,6 +56,10 @@ Open a directory with at least two FITS or XISF files, then click **Stack
 Images** in the toolbar. Raster files may stay in the directory, but Seiza does
 not include them in the stack.
 
+Stack Images opens a resizable window. Use **Inputs** to select lights and a
+canvas mode, **Calibration** to supply masters or graded files, **Processing**
+for alignment and integration, and **Review** for calibration evidence.
+
 The collection includes FITS and XISF images throughout the opened folder tree,
 across all sidebar groups, including collapsed groups. It may contain calibration
 frames alongside lights. Stack Images reads their header roles, offers only
@@ -118,6 +122,9 @@ lights follow your **Stop**, **Keep** or **Exclude** choice. Fixed and expanded
 canvases use the per-light assignments, including during transient removal.
 See [graded calibration setup](STACKING-CALIBRATION.md) for the controls and
 source/cache guarantees.
+
+Calibration settings and review choices become saved defaults when stacking
+starts. Cancel or close the setup to discard edits.
 
 For a filter split, enter a base name, click **Choose Output and Stack**, and
 choose an output folder. Seiza adds suffixes such as `-Ha` and `-OIII`. Without
@@ -262,8 +269,10 @@ quality, and overlay diagnostics.
 
 ## Inspect a flat
 
-Select a flat in the browser and open the right-hand **Inspector**. Its header
-role selects **Flat inspection**. Click **Inspect Flat** to measure the linear
+Select a flat in the browser and click the toolbar's **Inspect Flat** action to
+open the right-hand **Inspector** and measure it. The inspector can also be
+toggled with **⌥⌘I**. Flat inspection appears before image metadata and histograms.
+Click **Inspect Flat** in the sidebar to measure the linear
 source, independently of its display stretch. The sidebar reports median/channel
 levels, clipped samples, response noise, detection depth, dust and vignetting
 counts, and a coarse illumination map. Expand dust details for locations, shapes,

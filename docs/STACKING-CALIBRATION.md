@@ -17,7 +17,7 @@ acquisition retains its existing preparation workflow.
    files to **Graded calibration files or library** automatically. The browser
    keeps all images available for inspection. Import notes explain unreadable or
    set-aside files; images without a recorded type are offered as lights for review.
-   You can also expand **Calibration** and add files or a library separately.
+   You can also open the **Calibration** tab and add files or a library separately.
 3. Set **Calibration matching and grading settings**, globally or for a rig.
    Per-rig controls become available after the first analysis. A rig is identified
    by the camera and telescope metadata; gain, offset and other sensor fields
@@ -35,10 +35,35 @@ acquisition retains its existing preparation workflow.
    output retains at least two usable lights when excluding incomplete ones.
    Changing this policy keeps the current review and does not restart analysis;
    matching, grading and source changes still require a fresh review.
-7. Choose the output and stack. The app verifies the reviewed plan, builds or
+7. Adjust alignment, reference and integration options in **Processing**, then
+   choose the output and stack. The app verifies the reviewed plan, builds or
    reuses masters in dependency order, and carries each light's assignment into
    planning, integration and transient-removal replay. New execution warnings,
    such as an unstable-flat retry, are shown before processing lights.
+
+Stack Images opens a resizable window with **Inputs**, **Calibration**,
+**Processing** and **Review** tabs. Review stays in that window. Light sources
+and the optional calibration folder have native path controls; **Choose Folder**,
+**Remove**, **Add Files** and individual file removal keep the two sources
+independent. Removing a source only removes it from this setup.
+
+Settings and review choices are drafts until stacking starts. **Cancel**, closing
+the window or cancelling the output picker leaves saved defaults unchanged.
+Numeric controls stay editable while analysis is delayed or running; changing a
+matching setting cancels the old request and queues the latest values.
+
+## Screenshots
+
+These app captures use a synthetic night with two lights, three bias frames and
+three flats. The flat contains a dust shadow for inspection.
+
+![Inputs show the light folder and separate calibration-file count](images/stacking-calibration/inputs.png)
+
+![Calibration sources, independent flat and dark modes, and incomplete-light policy](images/stacking-calibration/calibration.png)
+
+![Calibration grades reviewed in the same resizable stacking window](images/stacking-calibration/review.png)
+
+![Flat inspection at the top of the image inspector](images/stacking-calibration/flat-inspector.png)
 
 Poor raw calibration frames stay out unless explicitly allowed. Suspect frames
 remain eligible and retain their reasons in review. Existing masters are adopted

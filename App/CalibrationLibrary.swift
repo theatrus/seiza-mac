@@ -289,10 +289,20 @@ struct LibraryPreparedPlan: Sendable {
 }
 
 @MainActor final class CalibrationLibraryModel: ObservableObject {
-    @Published var preferences = LibraryPreferences.load() {
+    private let defaults: UserDefaults
+    @Published var preferences: LibraryPreferences {
         didSet {
             if preferences.reviewInputs != oldValue.reviewInputs { invalidate() }
-            if let data = try? JSONEncoder().encode(preferences) { UserDefaults.standard.set(data, forKey: "gradedCalibrationPreferences.v1") }
+        }
+    }
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        preferences = LibraryPreferences.load(defaults)
+    }
+    /// A workflow draft becomes the next run's defaults only after Start.
+    func commitPreferences() {
+        if let data = try? JSONEncoder().encode(preferences) {
+            defaults.set(data, forKey: "gradedCalibrationPreferences.v1")
         }
     }
     @Published var fields: [LibraryField] = []
@@ -310,7 +320,7 @@ struct LibraryPreparedPlan: Sendable {
         } catch { self.error = error.localizedDescription }
     }
     func analyze(library: URL?, lights: [URL], provided: [URL] = [], accessURLs: [URL] = [], debounce: Bool = false) {
-        invalidate(); busy = true; error = nil
+        invalidate(); error = nil
         let current = generation
         var request = LibraryRequest(operation: "analyze", library: library, lights: lights, provided: provided, preferences: preferences)
         request.accessURLs += accessURLs
@@ -318,6 +328,8 @@ struct LibraryPreparedPlan: Sendable {
             do {
                 if debounce { try await Task.sleep(for: .milliseconds(350)) }
                 try Task.checkCancellation()
+                guard current == generation else { return }
+                busy = true
                 let result = try await CalibrationLibraryService.perform(request)
                 guard current == generation else { return }
                 review = result; stale = false
@@ -444,6 +456,7 @@ struct CalibrationLibraryReviewView: View {
     let lights: [URL]
     var provided: [URL] = []
     var accessURLs: [URL] = []
+    var onDone: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -451,7 +464,9 @@ struct CalibrationLibraryReviewView: View {
                 Text("Calibration library").font(.title2)
                 Spacer()
                 Button("Analyze again") { model.analyze(library: library, lights: lights, provided: provided, accessURLs: accessURLs) }.disabled(model.busy)
-                Button("Done") { dismiss() }
+                Button(onDone == nil ? "Done" : "Back to Calibration") {
+                    if let onDone { onDone() } else { dismiss() }
+                }
             }
             if model.busy { ProgressView("Measuring and matching calibration…") }
             if model.stale { Text("The plan needs analysis before it can be used.").foregroundStyle(.orange) }
@@ -554,7 +569,7 @@ struct CalibrationLibraryReviewView: View {
                 Form { CalibrationLibrarySettingsView(model: model) }.tabItem { Text("Settings") }
             }
             ScrollView { VStack(alignment: .leading) { ForEach(model.review?.warnings ?? [], id: \.self) { Text($0).font(.caption) } } }.frame(maxHeight: 85)
-        }.padding().frame(minWidth: 820, idealWidth: 1000, minHeight: 540, idealHeight: 650)
+        }.padding().frame(minWidth: 720, idealWidth: 1000, minHeight: 440, idealHeight: 650)
     }
     @ViewBuilder private func lightChoices(_ options: LibraryJSON) -> some View {
         Menu("Flat choices") {

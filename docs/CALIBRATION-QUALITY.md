@@ -7,7 +7,9 @@ setup calls the shared C ABI described in the [setup guide](STACKING-CALIBRATION
 
 ## Inspect one flat in the sidebar
 
-Open a flat image, show the right-hand Inspector and click **Inspect Flat**.
+Open a flat image and click the toolbar's **Inspect Flat** action, or show the
+right-hand Inspector (**⌥⌘I**) and click **Inspect Flat** there. Flat inspection
+appears first, before general image information and histograms.
 The source file is measured off the main thread with the existing native flat
 measurement and screening calls. The sidebar includes raw levels, clipping,
 noise, dust geometry, vignetting and an illumination map. Saturation and optional

@@ -297,6 +297,49 @@ final class CalibrationSessionBoundaryTests: XCTestCase {
 /// End-to-end desktop orchestration, using the released policy and the same
 /// batch engine invoked by Stack Images. Calibration is deliberately interleaved.
 final class GradedCalibrationWorkflowTests: XCTestCase {
+    @MainActor func testCalibrationPreferencesRemainDraftUntilStackingStarts() throws {
+        let suite = "CalibrationDraftTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let saved = LibraryPreferences()
+        defaults.set(try JSONEncoder().encode(saved), forKey: "gradedCalibrationPreferences.v1")
+        let model = CalibrationLibraryModel(defaults: defaults)
+        XCTAssertEqual(model.preferences, saved)
+        model.preferences.flatAssociation = .oneSet
+        model.preferences.incomplete = "keep"
+        model.preferences.settings["rotation_tolerance_deg"] = .number(12)
+        model.preferences.rigs["camera"] = ["rotation_tolerance_deg": .number(8)]
+        model.preferences.choices = [.init(path: "/flat.fits", fingerprint: "source", choice: "exclude")]
+        XCTAssertEqual(CalibrationLibraryModel(defaults: defaults).preferences, saved,
+            "Closing or cancelling a setup must leave saved defaults untouched")
+        model.commitPreferences()
+        XCTAssertEqual(CalibrationLibraryModel(defaults: defaults).preferences, model.preferences,
+            "Starting a stack saves all of the draft settings and choices")
+    }
+
+    @MainActor func testDebouncedAnalysisDoesNotMarkNumericEditsBusy() async throws {
+        let suite = "CalibrationDebounceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = CalibrationLibraryModel(defaults: defaults)
+        defer { model.invalidate() }
+        model.analyze(library: nil, lights: [], debounce: true)
+        let first = model.task
+        XCTAssertFalse(model.busy)
+        model.preferences.settings["rotation_tolerance_deg"] = .number(12)
+        model.analyze(library: nil, lights: [], debounce: true)
+        let latest = model.task
+        XCTAssertFalse(model.busy)
+        XCTAssertTrue(model.stale)
+        XCTAssertNil(model.error)
+        XCTAssertNil(model.review)
+        model.invalidate()
+        await first?.value
+        await latest?.value
+        XCTAssertFalse(model.busy)
+        XCTAssertNil(model.review)
+    }
+
     private struct Fixture {
         let root: URL
         let library: URL

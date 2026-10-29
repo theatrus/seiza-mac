@@ -130,6 +130,13 @@ final class ImageDocumentModel: ObservableObject {
     let url: URL
     @Published private(set) var frameProbe: CalibrationFrameProbe?
     @Published private(set) var flatInspectionState: FlatInspectionState = .idle
+    @Published var flatInspectionOptions: FlatQualityOptions = {
+        var options = FlatQualityOptions(); options.enabled = true; return options
+    }()
+    var flatIsInspecting: Bool {
+        if case .inspecting = flatInspectionState { return true }
+        return false
+    }
     private var flatInspectionGeneration = 0
     @Published private(set) var loadState: LoadState = .loading
     @Published private(set) var solveState: SolveState = .idle
