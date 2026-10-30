@@ -12,11 +12,11 @@ extension UTType {
         .tiff,
     ]
 
-    static let seizaSupportedImageExtensions: Set<String> = [
-        "fits", "fit", "fts",
-        "xisf",
+    static let seizaAstronomyImageExtensions = SeizaCore.astronomyImageExtensions
+
+    static let seizaSupportedImageExtensions: Set<String> = seizaAstronomyImageExtensions.union([
         "jpg", "jpeg", "jfif",
         "png",
         "tif", "tiff",
-    ]
+    ])
 }

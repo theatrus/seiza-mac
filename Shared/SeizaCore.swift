@@ -118,6 +118,12 @@ private let catalogSetupProgressCallback: @convention(c) (
     sink.handler(progress)
 }
 
+struct AstronomyImageHeader: Decodable {
+    let headers: [String: JSONValue]
+    let history: [String]
+    let comments: [String]
+}
+
 struct ImageMetadata: Decodable {
     let width: Int
     let height: Int
@@ -1383,9 +1389,8 @@ enum SeizaCoreError: LocalizedError {
 }
 
 enum SeizaCore {
-    private static let astronomyImageExtensions: Set<String> = [
-        "fits", "fit", "fts", "xisf",
-    ]
+    /// The Mac astronomy pipeline and its file selectors enable the same formats.
+    static let astronomyImageExtensions: Set<String> = ["fits", "fit", "fts", "xisf"]
 
     static var version: String {
         guard let pointer = seiza_core_version() else { return "unknown" }
@@ -1476,13 +1481,22 @@ enum SeizaCore {
         return try JSONDecoder().decode(DistanceCatalogStatus.self, from: Data(String(cString: result).utf8))
     }
 
-    /// Header-only transfer lookup; display products already occupy the 0…1 domain.
-    static func isDisplayProduct(_ url: URL) -> Bool {
-        guard ["fits", "fit", "fts", "xisf"].contains(url.pathExtension.lowercased()) else { return false }
+    /// Native header I/O preserves commentary and XISF/PixInsight WCS without decoding pixels.
+    static func readHeader(url: URL) throws -> AstronomyImageHeader {
         var error: UnsafeMutablePointer<CChar>?
-        let result = url.path.withCString { seiza_mac_color_is_display($0, &error) }
-        if let error { seiza_string_free(error) }
-        return result == 1
+        let result = url.path.withCString { seiza_read_image_header_json($0, &error) }
+        guard let result else { throw cabiError(&error) }
+        defer { seiza_string_free(result) }
+        return try JSONDecoder().decode(AstronomyImageHeader.self,
+            from: Data(bytes: result, count: strlen(result)))
+    }
+
+    /// Display products already occupy the 0…1 domain. Container dispatch belongs to Seiza.
+    static func isDisplayProduct(_ url: URL) -> Bool {
+        guard astronomyImageExtensions.contains(url.pathExtension.lowercased()),
+              let header = try? readHeader(url: url),
+              case .string("DISPLAY") = header.headers["SEIZATRF"] else { return false }
+        return true
     }
 
     static func initialProcessing(for url: URL) -> FITSImageProcessingConfiguration {

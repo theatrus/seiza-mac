@@ -9,7 +9,7 @@ planning policy and expanded raw-file planning under per-light calibration.
 
 The current setup uses the file coordinator from
 [Seiza #406](https://github.com/theatrus/seiza/pull/406), based on core/C ABI
-0.47.0. Swift calls `seiza_calibration_files_json` directly. The upstream Rust
+0.48.0. Swift calls `seiza_calibration_files_json` directly. The upstream Rust
 coordinator holds `RuleBook`, `QualityIndex` and `Library`, drives native evidence,
 master generation, retries and corrections, and returns prepared file sessions.
 The app-owned Rust coordinator and its custom C export are removed. Swift keeps

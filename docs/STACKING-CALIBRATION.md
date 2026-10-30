@@ -2,8 +2,9 @@
 
 Stack Images calls `seiza_calibration_files_json`, the shared file coordinator
 in [Seiza #406](https://github.com/theatrus/seiza/pull/406), based on Seiza/C ABI
-**0.47.0**, calibration **0.11.0** and stacking **0.54.0**. Cargo pins the exact
-upstream review commit `d11b570` until it ships. The generated C header matches it.
+**0.48.0**, calibration **0.11.0** and stacking **0.55.0**. Cargo pins exact
+published crate versions from [Seiza 0.48](https://github.com/theatrus/seiza/releases/tag/v0.48.0),
+with registry checksums in Cargo.lock. The generated C header matches the published package.
 Swift owns setup, access grants and review; the app has no calibration
 orchestrator in Rust. Both canvas modes support per-light sessions. Live
 acquisition retains its existing preparation workflow.
@@ -42,7 +43,10 @@ acquisition retains its existing preparation workflow.
    such as an unstable-flat retry, are shown before processing lights.
 
 Stack Images opens a resizable window with **Inputs**, **Calibration**,
-**Processing** and **Review** tabs. Review stays in that window. Light sources
+**Processing** and **Review** tabs. Review stays in that window, with an
+unbordered segmented control for Frames, Light Matches, Master Plan and Flat
+Groups. Matching settings live in Calibration. Browser thumbnails remain active
+while setup is idle; only master preparation and stacking pause them. Light sources
 and the optional calibration folder have native path controls; **Choose Folder**,
 **Remove**, **Add Files** and individual file removal keep the two sources
 independent. Removing a source only removes it from this setup.
@@ -98,7 +102,7 @@ Flats and darks each have an independent **Group and match automatically** /
 **Use all as one set** choice, defaulting to automatic. Automatic flats use
 Seiza's raw-response preparation, bounded sample selection, pixel measurements
 and requested pair comparisons to establish response groups and change windows.
-The Flat groups review tab shows measured sessions, families and changes. Darks
+The Flat Groups review section shows measured sessions, families and changes. Darks
 use the existing shared sensor/exposure/temperature and temporal selection.
 One-set mode includes every eligible compatible input of that kind across
 nights, without the automatic 64-input cap. It retains grading/exclusions and
@@ -181,8 +185,8 @@ stacker, including transient-removal replay. A required correction that cannot
 be produced aborts preparation. Corrected masters retain their acquisition and
 calibration metadata and have separate cache identities.
 
-In **Flat groups**, split an edge, join it to the previous group, or restore
-measured grouping. In **Light matches**, choose a measured group or put a light
+In **Flat Groups**, split an edge, join it to the previous group, or restore
+measured grouping. In **Light Matches**, choose a measured group or put a light
 before/after an applicable change. Seiza resolves these commands and reports
 applied/orphaned choices. Preferences retain them across runs; personal choices
 are bound to the exact source path and fingerprint, so an identical basename
@@ -202,10 +206,10 @@ choice preference migration/round trips, per-rig gates overriding global default
 master reuse, Keep/Exclude/Stop changes against the same reviewed key, linked
 calibration files, and protected/stale sources.
 
-The [upstream coordinator tests](https://github.com/theatrus/seiza/blob/d11b570f06305dc1638c5bbe86894ebcf667c64f/seiza-stacking/src/calibration_files/mod.rs)
+The [upstream coordinator tests](https://github.com/theatrus/seiza/blob/350a5e79700e6997047adecd35c0939cbf9a4234/seiza-stacking/src/calibration_files/mod.rs)
 were moved with the implementation. They cover family/change evidence, unknown
 fits, path-scoped choices, split/join, correction pixels/cache reuse, poor grades,
 stability trim/rebuild, pedestal acceptance, normalized XISF staging, aliases,
 settings/source review invalidation and cancellation. C and Python exercise the
-same native coordinator; the [guide](https://github.com/theatrus/seiza/blob/d11b570f06305dc1638c5bbe86894ebcf667c64f/docs/calibration-files.md)
+same native coordinator; the [guide](https://github.com/theatrus/seiza/blob/350a5e79700e6997047adecd35c0939cbf9a4234/docs/calibration-files.md)
 describes its Rust/C/Python interfaces and cache/source contracts.
