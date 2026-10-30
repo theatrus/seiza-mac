@@ -3090,11 +3090,26 @@ final class StackingGPUOptionsTests: XCTestCase {
     }
 }
 
+final class StackSetupStatusTests: XCTestCase {
+    func testProcessingFailureIsNotMaskedByValidationOrCancellation() throws {
+        let failure = try XCTUnwrap(StackSetupStatus(error: "Cannot write output.", validation: "Select two lights.", notice: "Cancelled."))
+        XCTAssertTrue(failure.isFailure)
+        XCTAssertTrue(failure.message.contains("Cannot write output."))
+        XCTAssertNotEqual(failure.symbol, "info.circle")
+    }
+    func testCancellationAndValidationAreNotProcessingFailures() throws {
+        XCTAssertFalse(try XCTUnwrap(StackSetupStatus(error: nil, validation: nil, notice: "Cancelled.")).isFailure)
+        XCTAssertFalse(try XCTUnwrap(StackSetupStatus(error: nil, validation: "Select two lights.", notice: nil)).isFailure)
+        XCTAssertNil(StackSetupStatus(error: nil, validation: nil, notice: nil))
+    }
+}
+
 final class ColorToolsIntegrationTests: XCTestCase {
-    private func fixture(_ directory: URL, name: String, width: Int = 16, channels: Int = 1, values: [Float], display: Bool = false) throws -> URL {
+    private func fixture(_ directory: URL, name: String, width: Int = 16, channels: Int = 1, values: [Float], display: Bool = false, headerCards: [String] = []) throws -> URL {
         var cards = ["SIMPLE  =                    T", "BITPIX  =                  -32", "NAXIS   =                    \(channels == 1 ? 2 : 3)", "NAXIS1  =                    \(width)", "NAXIS2  =                    4"]
         if channels > 1 { cards.append("NAXIS3  =                    \(channels)") }
         if display { cards.append("SEIZATRF= 'DISPLAY'") }
+        cards += headerCards
         cards.append("END")
         var data = Data(cards.map { $0.padding(toLength: 80, withPad: " ", startingAt: 0) }.joined().utf8)
         data.append(Data(repeating: 32, count: (2880 - data.count % 2880) % 2880))
@@ -3110,6 +3125,88 @@ final class ColorToolsIntegrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
     }
+    func testSharedHeaderReadKeepsCommentaryWithoutDecodingSamples() throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let file = try fixture(root, name: "header-only.FTS", values: [0.3], display: true, headerCards: [
+            "FILTER  = 'Ha'", "HISTORY Calibrated with a master dark", "COMMENT Header-only fixture"])
+        // A valid header but missing samples: rendering must fail, header inspection must succeed.
+        try Data(contentsOf: file).prefix(2880).write(to: file)
+        let header = try SeizaCore.readHeader(url: file)
+        XCTAssertEqual(header.headers["FILTER"]?.description, "Ha")
+        XCTAssertEqual(header.history, ["Calibrated with a master dark"])
+        XCTAssertEqual(header.comments, ["Header-only fixture"])
+        XCTAssertTrue(SeizaCore.isDisplayProduct(file))
+        XCTAssertEqual(SeizaCore.initialProcessing(for: file).stretchStack.stages, [.identity])
+        XCTAssertThrowsError(try SeizaCore.render(url: file))
+    }
+
+    func testSharedXISFHeaderIncludesPixInsightSolutionAndTransferMarker() throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        func vector(_ name: String, _ dimensions: String, _ values: [Double]) -> String {
+            let bytes = values.flatMap { value -> [UInt8] in
+                var bits = value.bitPattern.littleEndian
+                return withUnsafeBytes(of: &bits) { Array($0) }
+            }
+            let hex = bytes.map { String(format: "%02x", $0) }.joined()
+            let kind = dimensions.hasPrefix("rows") ? "F64Matrix" : "F64Vector"
+            return "<Property id=\"AstrometricSolution:\(name)\" type=\"\(kind)\" \(dimensions) location=\"inline:hex\">\(hex)</Property>"
+        }
+        let properties = """
+        <Property id="AstrometricSolution:Version" type="String">1.3</Property>
+        <Property id="AstrometricSolution:ProjectionSystem" type="String">Gnomonic</Property>
+        """ + vector("ReferenceCelestialCoordinates", "length=\"2\"", [83.8, -5.4])
+            + vector("ReferenceImageCoordinates", "length=\"2\"", [100.5, 80.5])
+            + vector("LinearTransformationMatrix", "rows=\"2\" columns=\"2\"", [-0.0002, 0, 0, 0.0002])
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?><xisf version="1.0" xmlns="http://www.pixinsight.com/xisf">
+        <Image geometry="16:4:1" sampleFormat="Float32" colorSpace="Gray" location="attachment:4096:256">
+        <FITSKeyword name="SEIZATRF" value="'DISPLAY'"/><FITSKeyword name="FILTER" value="'OIII'"/>
+        \(properties)</Image></xisf>
+        """
+        var data = Data("XISF0100".utf8)
+        var length = UInt32(xml.utf8.count).littleEndian
+        withUnsafeBytes(of: &length) { data.append(contentsOf: $0) }
+        data.append(Data(repeating: 0, count: 4)); data.append(Data(xml.utf8))
+        XCTAssertLessThan(data.count, 4096)
+        data.append(Data(repeating: 0, count: max(0, 4352 - data.count)))
+        let file = root.appendingPathComponent("pixinsight.XISF"); try data.write(to: file)
+        let header = try SeizaCore.readHeader(url: file)
+        XCTAssertEqual(header.headers["FILTER"]?.description, "OIII")
+        guard case .number(let ra) = header.headers["CRVAL1"], case .number(let x) = header.headers["CRPIX1"] else {
+            return XCTFail("PixInsight properties must be translated to WCS by the shared reader")
+        }
+        XCTAssertEqual(ra, 83.8, accuracy: 1e-8)
+        XCTAssertEqual(x, 101, accuracy: 1e-8)
+        XCTAssertTrue(header.history.isEmpty)
+        XCTAssertTrue(header.comments.isEmpty)
+        XCTAssertTrue(SeizaCore.isDisplayProduct(file))
+    }
+
+    func testSharedHeaderReadReportsNativeFailure() throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let missing = root.appendingPathComponent("missing.fits")
+        XCTAssertThrowsError(try SeizaCore.readHeader(url: missing)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("missing.fits"))
+        }
+        XCTAssertFalse(SeizaCore.isDisplayProduct(missing))
+    }
+
+    @MainActor func testIdleStackSetupDoesNotBlockOtherViewerThumbnails() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let a = try fixture(root, name: "light-a.fits", values: [0.2, 0.3])
+        let b = try fixture(root, name: "light-b.fits", values: [0.4, 0.5])
+        let windows = Set(NSApp.windows.map(ObjectIdentifier.init))
+        ImageStackWindowController.present(id: UUID(), urls: [a, b], sourceAccessURLs: [root], onComplete: { _ in })
+        let window = try XCTUnwrap(NSApp.windows.first { !windows.contains(ObjectIdentifier($0)) && $0.title == "Stack Images" })
+        defer { window.close() }
+        let rendered = expectation(description: "A viewer can render thumbnails while setup is idle")
+        ImageRenderQueue.renderThumbnail(url: a) { image in
+            XCTAssertNotNil(image)
+            rendered.fulfill()
+        }
+        await fulfillment(of: [rendered], timeout: 5)
+    }
+
     func testPreviewSaveUsesBuiltSamplesAndPreservesDisplayTransferAcrossXISF() async throws {
         let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
         let ha = try fixture(root, name: "ha.fits", values: [0.2, 0.3])

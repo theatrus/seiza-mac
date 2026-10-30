@@ -281,7 +281,7 @@ enum ImageCollection {
     }
 
     static func isStackableImage(_ url: URL) -> Bool {
-        ["fits", "fit", "fts", "xisf"].contains(url.pathExtension.lowercased())
+        UTType.seizaAstronomyImageExtensions.contains(url.pathExtension.lowercased())
     }
 }
 

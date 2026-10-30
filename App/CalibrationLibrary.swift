@@ -450,6 +450,11 @@ struct CalibrationLibrarySettingsView: View {
     }
 }
 
+enum CalibrationReviewPane: String, CaseIterable, Identifiable {
+    case frames = "Frames", lights = "Light Matches", masters = "Master Plan", flats = "Flat Groups"
+    var id: Self { self }
+}
+
 struct CalibrationLibraryReviewView: View {
     @ObservedObject var model: CalibrationLibraryModel
     let library: URL?
@@ -458,10 +463,11 @@ struct CalibrationLibraryReviewView: View {
     var accessURLs: [URL] = []
     var onDone: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
+    @State private var pane = CalibrationReviewPane.frames
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Calibration library").font(.title2)
+                Text("Calibration Review").font(.title2)
                 Spacer()
                 Button("Analyze again") { model.analyze(library: library, lights: lights, provided: provided, accessURLs: accessURLs) }.disabled(model.busy)
                 Button(onDone == nil ? "Done" : "Back to Calibration") {
@@ -471,104 +477,123 @@ struct CalibrationLibraryReviewView: View {
             if model.busy { ProgressView("Measuring and matching calibration…") }
             if model.stale { Text("The plan needs analysis before it can be used.").foregroundStyle(.orange) }
             if let error = model.error { Text(error).foregroundStyle(.red) }
-            TabView {
-                Table(model.review?.frames ?? []) {
-                    TableColumn("Frame") { Text(URL(fileURLWithPath: $0.path).lastPathComponent).help($0.path) }
-                    TableColumn("Kind", value: \.kind)
-                    TableColumn("Grade") { Text($0.isMaster ? "Existing master" : $0.grade?.capitalized ?? "Ungraded") }
-                    TableColumn("Reason") { Text($0.error ?? $0.reason ?? $0.measurementState) }
-                    TableColumn("Choice") { frame in
-                        Menu(model.preferences.choices.first { $0.path == frame.path && $0.fingerprint == frame.fingerprint }.map { $0.choice == "use" ? "Use anyway" : "Keep out" } ?? "Automatic") {
-                            Button("Keep out") { model.choose(frame, "exclude") }
-                            Button("Use anyway") { model.choose(frame, "use") }
-                            Button("Clear choice") { model.choose(frame, nil) }
+            Picker("Review section", selection: $pane) {
+                ForEach(CalibrationReviewPane.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            Group {
+                switch pane {
+                case .frames:
+                    Table(model.review?.frames ?? []) {
+                        TableColumn("Frame") { Text(URL(fileURLWithPath: $0.path).lastPathComponent).help($0.path) }
+                        TableColumn("Kind", value: \.kind)
+                        TableColumn("Grade") { Text($0.isMaster ? "Existing master" : $0.grade?.capitalized ?? "Ungraded") }
+                        TableColumn("Reason") { Text($0.error ?? $0.reason ?? $0.measurementState) }
+                        TableColumn("Choice") { frame in
+                            Menu(model.preferences.choices.first { $0.path == frame.path && $0.fingerprint == frame.fingerprint }.map { $0.choice == "use" ? "Use anyway" : "Keep out" } ?? "Automatic") {
+                                Button("Keep out") { model.choose(frame, "exclude") }
+                                Button("Use anyway") { model.choose(frame, "use") }
+                                Button("Clear choice") { model.choose(frame, nil) }
+                            }
                         }
                     }
-                }.tabItem { Text("Calibration frames") }
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        if let review = model.review {
-                            ForEach(Array(review.lightPaths.enumerated()), id: \.offset) { index, path in
-                                Text(URL(fileURLWithPath: path).lastPathComponent).font(.headline).help(path)
-                                Text(review.missing[index] ? "Incomplete calibration" : "Matched session \(review.assignments[index] + 1)")
-                                let selection = review.snapshot["selections"].array[index]
-                                Text("Flat association: \(selection["flat_basis"]["basis"].text.replacingOccurrences(of: "_", with: " "))").font(.caption)
-                                if !selection["flat_family"]["by"].text.isEmpty {
-                                    Text("Flat family: \(selection["flat_family"]["by"].text.capitalized)").font(.caption)
+                case .lights:
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 10) {
+                            if let review = model.review {
+                                ForEach(Array(review.lightPaths.enumerated()), id: \.offset) { index, path in
+                                    Text(URL(fileURLWithPath: path).lastPathComponent).font(.headline).help(path)
+                                    Text(review.missing[index] ? "Incomplete calibration" : "Matched session \(review.assignments[index] + 1)")
+                                    let selection = review.snapshot["selections"].array[index]
+                                    Text("Flat association: \(selection["flat_basis"]["basis"].text.replacingOccurrences(of: "_", with: " "))").font(.caption)
+                                    if !selection["flat_family"]["by"].text.isEmpty {
+                                        Text("Flat family: \(selection["flat_family"]["by"].text.capitalized)").font(.caption)
+                                    }
+                                    lightChoices(review.lightOptions[index])
+                                    ForEach(selection["flat_choices"].array, id: \.self) { choice in
+                                        Text(choice["orphaned"].text.isEmpty ? choice["label"].text : choice["orphaned"].text).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    ForEach(["bias", "dark", "dark_flat", "flat"], id: \.self) { kind in
+                                        let names = selection[kind].array.compactMap { id in review.frames.first { $0.id == id.text } }.map { URL(fileURLWithPath: $0.path).lastPathComponent }
+                                        Text("\(kind.replacingOccurrences(of: "_", with: " ").capitalized): \(names.isEmpty ? "None" : names.joined(separator: ", "))").font(.caption)
+                                    }
+                                    Divider()
                                 }
-                                lightChoices(review.lightOptions[index])
-                                ForEach(selection["flat_choices"].array, id: \.self) { choice in
-                                    Text(choice["orphaned"].text.isEmpty ? choice["label"].text : choice["orphaned"].text).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding()
+                    }
+                case .masters:
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(Array((model.review?.snapshot["sessions"].array ?? []).enumerated()), id: \.offset) { index, session in
+                                Text("Session \(index + 1)").font(.headline)
+                                ForEach(Array(session["recipes"].array.enumerated()), id: \.offset) { _, recipe in
+                                    Text("\(recipe["kind"].text.capitalized): \(recipe["action"].text), \(recipe["inputs"].array.count) input(s)")
+                                    if !recipe["failure"].text.isEmpty { Text(recipe["failure"].text).font(.caption).foregroundStyle(.orange) }
                                 }
-                                ForEach(["bias", "dark", "dark_flat", "flat"], id: \.self) { kind in
-                                    let names = selection[kind].array.compactMap { id in review.frames.first { $0.id == id.text } }.map { URL(fileURLWithPath: $0.path).lastPathComponent }
-                                    Text("\(kind.replacingOccurrences(of: "_", with: " ").capitalized): \(names.isEmpty ? "None" : names.joined(separator: ", "))").font(.caption)
-                                }
+                                Text("Flat application: \(session["application"]["flat_use"].text.replacingOccurrences(of: "_", with: " "))").font(.caption)
                                 Divider()
                             }
-                        }
-                    }.frame(maxWidth: .infinity, alignment: .leading).padding()
-                }.tabItem { Text("Light matches") }
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        ForEach(Array((model.review?.snapshot["sessions"].array ?? []).enumerated()), id: \.offset) { index, session in
-                            Text("Session \(index + 1)").font(.headline)
-                            ForEach(Array(session["recipes"].array.enumerated()), id: \.offset) { _, recipe in
-                                Text("\(recipe["kind"].text.capitalized): \(recipe["action"].text), \(recipe["inputs"].array.count) input(s)")
-                                if !recipe["failure"].text.isEmpty { Text(recipe["failure"].text).font(.caption).foregroundStyle(.orange) }
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding()
+                    }
+                case .flats:
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            if model.preferences.flatAssociation == .oneSet {
+                                Text("All eligible compatible flats use one set.")
                             }
-                            Text("Flat application: \(session["application"]["flat_use"].text.replacingOccurrences(of: "_", with: " "))").font(.caption)
-                            Divider()
-                        }
-                    }.frame(maxWidth: .infinity, alignment: .leading).padding()
-                }.tabItem { Text("Master plan") }
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        if model.preferences.flatAssociation == .oneSet {
-                            Text("All eligible compatible flats use one set.")
-                        }
-                        if let grouping = model.review?.grouping {
-                            Text("\(model.review?.flatWork["corrections"].array.count ?? 0) planned flat corrections").font(.headline)
-                            ForEach(model.review?.flatWork["corrections"].array ?? [], id: \.self) { correction in
-                                Text("Carry flats to the \(correction["correction"]["light_side"].text) side of a measured change for \(correction["light_indices"].array.count) lights.").font(.caption)
-                            }
-                            ForEach(model.review?.flatWork["grouping"]["evidence"].array ?? [], id: \.self) { evidence in
-                                Text("Light evidence: \(evidence["verdict"].text.capitalized)").font(.headline)
-                                ForEach(evidence["fits"].array, id: \.self) { fit in
-                                    Text("\(fit["filter"].text): \(fit["verdict"].text), \(Int(fit["lights"].number ?? 0)) sampled lights").font(.caption)
+                            if let grouping = model.review?.grouping {
+                                Text("\(model.review?.flatWork["corrections"].array.count ?? 0) planned flat corrections").font(.headline)
+                                ForEach(model.review?.flatWork["corrections"].array ?? [], id: \.self) { correction in
+                                    Text("Carry flats to the \(correction["correction"]["light_side"].text) side of a measured change for \(correction["light_indices"].array.count) lights.").font(.caption)
+                                }
+                                ForEach(model.review?.flatWork["grouping"]["evidence"].array ?? [], id: \.self) { evidence in
+                                    Text("Light evidence: \(evidence["verdict"].text.capitalized)").font(.headline)
+                                    ForEach(evidence["fits"].array, id: \.self) { fit in
+                                        Text("\(fit["filter"].text): \(fit["verdict"].text), \(Int(fit["lights"].number ?? 0)) sampled lights").font(.caption)
+                                    }
+                                }
+                                ForEach(model.review?.flatWork["group_edges"].array ?? [], id: \.self) { edge in
+                                    HStack {
+                                        Text(edge["label"].text).font(.caption)
+                                        Menu("Group edge") {
+                                            Button("Split here") { model.chooseGroupEdge(edge, choice: "split") }
+                                            Button("Join with previous group") { model.chooseGroupEdge(edge, choice: "join") }
+                                            Button("Use measured grouping") { model.chooseGroupEdge(edge, choice: nil) }
+                                        }.disabled(model.busy || model.stale)
+                                    }
+                                }
+                                ForEach(model.review?.flatWork["overrides"].array ?? [], id: \.self) { state in
+                                    HStack {
+                                        Text(state["row"]["label"].text).font(.caption)
+                                        Text(state["status"]["status"].text.capitalized).font(.caption)
+                                        if !state["status"]["reason"].text.isEmpty { Text(state["status"]["reason"].text).font(.caption) }
+                                        Button("Clear") { model.clearGroupChoice(state["row"]) }.disabled(model.busy)
+                                    }
+                                }
+                                Text("\(grouping["sessions"].array.count) measured flat sessions · \(grouping["families"].array.count) response families · \(grouping["events"].array.count) changes").font(.headline)
+                                ForEach(Array(grouping["sessions"].array.enumerated()), id: \.offset) { index, session in
+                                    Text("Flat session \(index + 1): \(session["frame_uuids"].array.count) frames").font(.headline)
+                                    Text(session["night"].text)
+                                    Text(session["frame_uuids"].array.compactMap { id in model.review?.frames.first { $0.id == id.text } }.map { URL(fileURLWithPath: $0.path).lastPathComponent }.joined(separator: ", ")).font(.caption)
+                                    Divider()
                                 }
                             }
-                            ForEach(model.review?.flatWork["group_edges"].array ?? [], id: \.self) { edge in
-                                HStack {
-                                    Text(edge["label"].text).font(.caption)
-                                    Menu("Group edge") {
-                                        Button("Split here") { model.chooseGroupEdge(edge, choice: "split") }
-                                        Button("Join with previous group") { model.chooseGroupEdge(edge, choice: "join") }
-                                        Button("Use measured grouping") { model.chooseGroupEdge(edge, choice: nil) }
-                                    }.disabled(model.busy || model.stale)
-                                }
-                            }
-                            ForEach(model.review?.flatWork["overrides"].array ?? [], id: \.self) { state in
-                                HStack {
-                                    Text(state["row"]["label"].text).font(.caption)
-                                    Text(state["status"]["status"].text.capitalized).font(.caption)
-                                    if !state["status"]["reason"].text.isEmpty { Text(state["status"]["reason"].text).font(.caption) }
-                                    Button("Clear") { model.clearGroupChoice(state["row"]) }.disabled(model.busy)
-                                }
-                            }
-                            Text("\(grouping["sessions"].array.count) measured flat sessions · \(grouping["families"].array.count) response families · \(grouping["events"].array.count) changes").font(.headline)
-                            ForEach(Array(grouping["sessions"].array.enumerated()), id: \.offset) { index, session in
-                                Text("Flat session \(index + 1): \(session["frame_uuids"].array.count) frames").font(.headline)
-                                Text(session["night"].text)
-                                Text(session["frame_uuids"].array.compactMap { id in model.review?.frames.first { $0.id == id.text } }.map { URL(fileURLWithPath: $0.path).lastPathComponent }.joined(separator: ", ")).font(.caption)
-                                Divider()
-                            }
-                        }
-                    }.frame(maxWidth: .infinity, alignment: .leading).padding()
-                }.tabItem { Text("Flat groups") }
-                Form { CalibrationLibrarySettingsView(model: model) }.tabItem { Text("Settings") }
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding()
+                    }
+                }
             }
-            ScrollView { VStack(alignment: .leading) { ForEach(model.review?.warnings ?? [], id: \.self) { Text($0).font(.caption) } } }.frame(maxHeight: 85)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if let warnings = model.review?.warnings, !warnings.isEmpty {
+                GroupBox("Warnings (\(warnings.count))") {
+                    ScrollView {
+                        VStack(alignment: .leading) {
+                            ForEach(warnings, id: \.self) { Text($0).font(.caption) }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(maxHeight: 85)
+                }
+            }
         }.padding().frame(minWidth: 720, idealWidth: 1000, minHeight: 440, idealHeight: 650)
     }
     @ViewBuilder private func lightChoices(_ options: LibraryJSON) -> some View {

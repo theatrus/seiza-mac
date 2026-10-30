@@ -1389,6 +1389,8 @@ final class ImageStackCoordinator: ObservableObject {
         )
 
         task = Task { [weak self] in
+            ImageRenderQueue.suspendThumbnailWork()
+            defer { ImageRenderQueue.resumeThumbnailWork() }
             let (updates, continuation) = AsyncStream.makeStream(of: ImageStackProgress.self)
             let progressTask = Task { @MainActor [weak self] in
                 for await update in updates {
@@ -1446,6 +1448,28 @@ final class ImageStackCoordinator: ObservableObject {
     }
 }
 
+/// Processing failures stay visible even when configuration also needs attention.
+struct StackSetupStatus {
+    let message: String
+    let symbol: String
+    let isFailure: Bool
+    init?(error: String?, validation: String?, notice: String?) {
+        if let error {
+            message = "Stacking failed: " + error
+            symbol = "exclamationmark.triangle.fill"
+            isFailure = true
+        } else if let validation {
+            message = validation
+            symbol = "exclamationmark.circle"
+            isFailure = false
+        } else if let notice {
+            message = notice
+            symbol = "info.circle"
+            isFailure = false
+        } else { return nil }
+    }
+}
+
 enum StackSetupTab: Hashable { case inputs, calibration, processing, review }
 
 struct FolderPathControl: NSViewRepresentable {
@@ -1496,11 +1520,9 @@ struct FolderPathControl: NSViewRepresentable {
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.center()
-        ImageRenderQueue.suspendThumbnailWork()
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { !busy }
     func windowWillClose(_ notification: Notification) {
-        ImageRenderQueue.resumeThumbnailWork()
         accessed.forEach { $0.stopAccessingSecurityScopedResource() }
         accessed.removeAll()
         Self.windows[id] = nil
@@ -2024,9 +2046,10 @@ struct ImageStackWorkflowView: View {
             }
             .padding(.horizontal, 12)
             .toggleStyle(.checkbox)
-            if let message = setupValidationMessage ?? coordinator.errorMessage ?? preparationNotice ?? coordinator.cancellationMessage {
-                Label(message, systemImage: setupValidationMessage == nil ? "info.circle" : "exclamationmark.circle")
-                    .font(.callout).foregroundStyle(.secondary)
+            if let status = StackSetupStatus(error: coordinator.errorMessage, validation: setupValidationMessage,
+                notice: preparationNotice ?? coordinator.cancellationMessage) {
+                Label(status.message, systemImage: status.symbol)
+                    .font(.callout).foregroundStyle(status.isFailure ? Color.red : Color.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.vertical, 8)
             }
 
@@ -2328,6 +2351,8 @@ struct ImageStackWorkflowView: View {
             isPreparingCalibration = true
             preparationMessage = "Inspecting target light headers…"
             preparationTask = Task { @MainActor in
+                ImageRenderQueue.suspendThumbnailWork()
+                defer { ImageRenderQueue.resumeThumbnailWork() }
                 do {
                     guard let reviewed = libraryModel.review, !libraryModel.stale else {
                         throw ImageStackError.invalidRequest("Analyze calibration again before stacking.")

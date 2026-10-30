@@ -1,6 +1,6 @@
 # Shared stacking references
 
-This branch targets `seiza-cabi`/`seiza` **0.47.0**, `seiza-stacking` **0.54.0**
+This branch targets `seiza-cabi`/`seiza` **0.48.0**, `seiza-stacking` **0.55.0**
 and calibration **0.11.0**. Cargo pins the shared file coordinator
 commit from [Seiza #406](https://github.com/theatrus/seiza/pull/406) and `Shared/seiza_cabi.h` matches its generated header. The graded setup
 calls the shared C ABI directly; the native library/session/evidence orchestration
