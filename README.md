@@ -461,8 +461,8 @@ must be updated together. About reports the linked release version and source
 commit. [Graded calibration setup](docs/STACKING-CALIBRATION.md) uses the shared library
 policy and master builders. Live acquisition retains its existing optional
 [flat-quality review](docs/CALIBRATION-QUALITY.md).
-The prepared 0.48 release is pinned at `723fb70` until it is published. Shared
-header I/O now replaces the Mac-only FITS/XISF transfer-marker dispatcher; see
+Cargo uses exact published crate versions and records their registry checksums.
+Shared header I/O now replaces the Mac-only FITS/XISF transfer-marker dispatcher; see
 [the image I/O boundary](docs/IMAGE-IO.md).
 
 **File → Color Tools…** opens preview-first narrowband, continuum subtraction,

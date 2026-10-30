@@ -1,8 +1,9 @@
 # Image I/O boundary
 
-The Mac app pins the prepared [Seiza 0.48 release](https://github.com/theatrus/seiza/pull/409)
-commit `723fb702eb01283ddf0343a7217f7a987f0d709a` until publication. The complete
-C header matches that revision. It includes the shared file-calibration coordinator,
+The Mac app uses the published [Seiza 0.48 release](https://github.com/theatrus/seiza/releases/tag/v0.48.0)
+from crates.io, with exact direct-dependency versions and registry checksums in
+Cargo.lock. The complete C header matches the published `seiza-cabi` package.
+It includes the shared file-calibration coordinator,
 header reads (#408) and small pixel-window reads (#407).
 
 `SeizaCore.readHeader` calls `seiza_read_image_header_json` and returns the native

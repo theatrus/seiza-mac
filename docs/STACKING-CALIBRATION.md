@@ -2,9 +2,9 @@
 
 Stack Images calls `seiza_calibration_files_json`, the shared file coordinator
 in [Seiza #406](https://github.com/theatrus/seiza/pull/406), based on Seiza/C ABI
-**0.48.0**, calibration **0.11.0** and stacking **0.55.0**. Cargo pins the exact
-prepared 0.48 release commit `723fb70` from [Seiza #409](https://github.com/theatrus/seiza/pull/409)
-until publication. The generated C header matches it.
+**0.48.0**, calibration **0.11.0** and stacking **0.55.0**. Cargo pins exact
+published crate versions from [Seiza 0.48](https://github.com/theatrus/seiza/releases/tag/v0.48.0),
+with registry checksums in Cargo.lock. The generated C header matches the published package.
 Swift owns setup, access grants and review; the app has no calibration
 orchestrator in Rust. Both canvas modes support per-light sessions. Live
 acquisition retains its existing preparation workflow.
@@ -206,10 +206,10 @@ choice preference migration/round trips, per-rig gates overriding global default
 master reuse, Keep/Exclude/Stop changes against the same reviewed key, linked
 calibration files, and protected/stale sources.
 
-The [upstream coordinator tests](https://github.com/theatrus/seiza/blob/723fb702eb01283ddf0343a7217f7a987f0d709a/seiza-stacking/src/calibration_files/mod.rs)
+The [upstream coordinator tests](https://github.com/theatrus/seiza/blob/350a5e79700e6997047adecd35c0939cbf9a4234/seiza-stacking/src/calibration_files/mod.rs)
 were moved with the implementation. They cover family/change evidence, unknown
 fits, path-scoped choices, split/join, correction pixels/cache reuse, poor grades,
 stability trim/rebuild, pedestal acceptance, normalized XISF staging, aliases,
 settings/source review invalidation and cancellation. C and Python exercise the
-same native coordinator; the [guide](https://github.com/theatrus/seiza/blob/723fb702eb01283ddf0343a7217f7a987f0d709a/docs/calibration-files.md)
+same native coordinator; the [guide](https://github.com/theatrus/seiza/blob/350a5e79700e6997047adecd35c0939cbf9a4234/docs/calibration-files.md)
 describes its Rust/C/Python interfaces and cache/source contracts.
