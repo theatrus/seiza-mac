@@ -8,33 +8,42 @@ objects in it. Turn a finished image into a camera tour with depth, motion, and
 titles. Image processing and video encoding run locally; optional online
 stellar-distance lookup sends sky coordinates to astronomical catalogues.
 
-[**Download Seiza for Mac 0.8.9**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.9-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
+[**Download Seiza for Mac 0.9.0**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.9.0-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
 **Also from Seiza:** [Core, CLI, and libraries](https://github.com/theatrus/seiza) ·
 [Seiza for Windows](https://github.com/theatrus/seiza-win) ·
 [FITS and XISF for Photoshop](https://github.com/theatrus/xisf-photoshop)
 
-## New in 0.8.9
+## New in 0.9.0
 
-Open images from TXT or CSV file lists and stack selected lights directly onto
-an expanded mosaic canvas.
+Build calibrated stacks from a whole night of captures, with shared Seiza grading,
+automatic grouping and per-light matching in fixed-reference and expanded mosaics.
 
-- Choose **File → Open Image List…** (⇧⌘O), use the welcome-window button, or
-  drop a TXT/CSV list onto Seiza. Paths can span folders; SubframeSelector CSVs,
-  relative paths and quoted filenames are supported. Skipped entries include
-  their source list and line number.
-- List imports start with separate **source-directory groups**, so captures from
-  different folders remain easy to browse.
-- Choose **Fixed reference** or **Expanded mosaic** at the top of Stack Images.
-  Expanded stacking uses all selected lights on one canvas; solved sky-panel
-  grouping is optional and keeps your chosen canvas mode.
-- Select more than **512 lights** for stacking and optional sky-panel analysis.
-  Canvas memory limits still apply; optional panel analysis uses more time and
-  memory as the number of solved lights grows.
+- Open a folder containing lights and calibration frames. Stack Images reads
+  their FITS/XISF frame types and puts calibration files into the library. You
+  can still choose separate light and calibration folders or add individual files.
+- **Group and match automatically** for flats and darks, or independently choose
+  **Use all as one set** for eligible compatible frames. Review grades, light
+  matches, flat groups and master recipes before stacking; masters are built or
+  reused when processing starts.
+- Tune matching and grading globally or per rig. Review exclusions and overrides,
+  and choose how to handle lights with incomplete calibration. Settings remain
+  drafts until stacking starts.
+- Inspect a flat in the sidebar for channel levels, clipping, noise, dust and
+  vignetting, using linear source measurements.
+- Use the resizable **Inputs / Calibration / Processing / Review** setup window.
+  Review sections use a segmented control; thumbnails stay active while setup is
+  idle, and processing failures remain visible.
+- Uses published **Seiza/C ABI 0.48.0**, including shared header I/O that preserves
+  FITS commentary and native XISF/PixInsight WCS.
 
-![All in-progress filters in Live Stack](docs/images/multi-filter-live/all-filters.png)
+See the [graded calibration guide](docs/STACKING-CALIBRATION.md) for the settings,
+matching rules and current limits. Live folder stacking retains its existing
+calibration workflow.
 
-![Flat calibration review](docs/images/calibration-quality/flat-review.jpg)
+![Review calibration grades and per-light matches before stacking](docs/images/stacking-calibration/review.png)
+
+![Inspect a flat from the image sidebar](docs/images/stacking-calibration/flat-inspector.png)
 
 ## Features
 
@@ -376,7 +385,7 @@ and refits the whole frame as its window changes size.
 
 ## Download
 
-[**Download Seiza for Mac 0.8.9**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.8.9-universal.dmg), open it, and drag Seiza to Applications.
+[**Download Seiza for Mac 0.9.0**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.9.0-universal.dmg), open it, and drag Seiza to Applications.
 
 Or install with [Homebrew](https://brew.sh) from the
 [theatrus/homebrew-seiza tap](https://github.com/theatrus/homebrew-seiza):
