@@ -1,15 +1,17 @@
 # Mosaic stacking and GPU performance
 
-The Mac workflow ports [seiza-win PR #70](https://github.com/theatrus/seiza-win/pull/70)
-and PR #73 using published Seiza/C ABI 0.44.2 and stacking 0.51.2. It does not change the app
-version or publish a release.
+Expanded mosaics use Seiza's shared native stacking implementation. The normal
+path needs no plate-solving or sky-panel analysis.
 
 ## Stack selected lights on an expanding canvas
 
-1. Open images, a directory, or a TXT/CSV image list and choose **Stack Images**.
-2. At the top of the dialog, choose **Stacking mode → Expanded mosaic**.
-3. Select the lights to include, review filter splitting, calibration, and the
-   canvas memory ceiling, then choose **Choose Output and Stack…**.
+1. Open images, a directory, or a TXT/CSV image list and choose **File → Stack Images…**.
+2. On **Stack**, choose **Stacking mode → Expanded mosaic**. All lights are
+   selected, and included calibration is matched automatically.
+3. Choose **Stack…** and an output destination. Frame selection, filter splitting
+   and calibration settings are optional adjustments. The canvas memory ceiling
+   is under **Processing → Registration and canvas limits** if it needs changing.
+
 
 Each output registers its selected lights onto one expanding canvas. Inputs can
 come from different folders; overlapping panels can connect through other panels.
@@ -33,7 +35,7 @@ fields before stacking. It is independent of the chosen stacking mode.
    other fields are available but unchecked. Calibration frames, masters,
    failed solves and unconfirmed coordinates appear under **Excluded**.
 4. Review the selected-light/output summary, filter splitting, calibration and
-   stack options, then choose **Choose Output and Stack…**. Every output needs
+   stack options, then choose **Stack…**. Every output needs
    at least two lights. Multiple outputs use a folder and base name with unique
    field/region/filter suffixes.
 

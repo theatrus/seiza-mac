@@ -1,8 +1,13 @@
 # Shared stacking references
 
-This branch targets `seiza-cabi`/`seiza` **0.48.0**, `seiza-stacking` **0.55.0**
-and calibration **0.11.0**. Cargo pins the shared file coordinator
-commit from [Seiza #406](https://github.com/theatrus/seiza/pull/406) and `Shared/seiza_cabi.h` matches its generated header. The graded setup
+These reference controls are optional. For a normal stack, open a capture folder,
+choose **File → Stack Images…**, then **Stack…** and an output destination. All
+lights are selected initially; included calibration is matched automatically.
+See the [short stacking guide](../README.md#stack-a-night-of-captures).
+
+The app uses `seiza-cabi`/`seiza` **0.48.0**, `seiza-stacking` **0.55.0**
+and calibration **0.11.0**. Cargo pins exact published registry crates with
+checksums. The shared file coordinator comes from [Seiza #406](https://github.com/theatrus/seiza/pull/406) and `Shared/seiza_cabi.h` matches its generated header. The graded setup
 calls the shared C ABI directly; the native library/session/evidence orchestration
 lives in Seiza. Its fixed and expanded
 executors and replay tests are enabled. See the
@@ -77,11 +82,11 @@ same pinned core. See the pull request for the completed check results.
 
 ## Flat quality review
 
-The proposed [calibration workspace in stacking setup](STACKING-CALIBRATION.md)
-extends this foundation to PSF Guard-style frame grades, measured flat groups,
-per-light matching and multiple calibration sessions on one fixed or expanded
-canvas. That feature is planned; the current output-level calibration remains
-the behavior described in the existing guides.
+The [calibration workspace in stacking setup](STACKING-CALIBRATION.md)
+provides frame grades, measured flat groups, per-light matching and multiple
+calibration sessions on one fixed or expanded canvas. Analysis and matching run
+automatically; masters are built when stacking starts. Review is optional when
+calibration is complete.
 
 Both directory and live stacking offer **Review flat quality** when building
 masters from calibration frames. It measures the selected raw flats and shows

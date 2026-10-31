@@ -52,13 +52,27 @@ pointer to zoom, drag or scroll to pan, and press **Command-0** to fit again.
 
 ## Stack a directory
 
-Open a directory with at least two FITS or XISF files, then click **Stack
-Images** in the toolbar. Raster files may stay in the directory, but Seiza does
-not include them in the stack.
+1. Open the folder with **File → Open…**, then choose **File → Stack Images…**
+   or the toolbar's stack icon. TXT/CSV image lists work too. At least two
+   FITS/XISF lights are needed; raster images stay in the browser.
+2. On **Stack**, keep **Fixed reference** for repeated exposures of one field,
+   or choose **Expanded mosaic** for overlapping fields. All lights are already
+   selected. Included calibration files are analyzed and matched automatically.
+3. Choose **Stack…** and select an output. Calibration masters are built or
+   reused automatically, then the lights are aligned and integrated. The saved
+   linear FITS result opens in the viewer.
 
-Stack Images opens a resizable window. Use **Inputs** to select lights and a
-canvas mode, **Calibration** to supply masters or graded files, **Processing**
-for alignment and integration, and **Review** for calibration evidence.
+You do not need to visit every tab, start calibration analysis, build masters
+separately, or approve the review. Wait for automatic matching to finish. If
+calibration is incomplete, the default stops with an explanation; use Calibration
+or Review to resolve it, or explicitly choose a different incomplete-light policy.
+
+### Optional adjustments
+
+**Stack** contains **Choose lights** if you want to exclude frames. **Calibration**
+contains sources and matching settings; **Processing** contains alignment and
+integration options; **Review** shows calibration evidence. These are settings
+pages, not steps that must be completed in order.
 
 The collection includes FITS and XISF images throughout the opened folder tree,
 across all sidebar groups, including collapsed groups. It may contain calibration
@@ -68,18 +82,16 @@ graded matching. Existing calibration masters are included under the native
 master policy. Unknown frame types are offered as lights with an import note;
 unreadable images and non-calibration masters are set aside with explanations.
 
-Choose which frames to use and pick the reference frame. The reference sets the
-output bounds and alignment coordinates. When filenames show two or more common
-filters such as L, R, G, B, Ha, OIII, S/SII, or H-beta, Seiza offers to split
-them into separate stacks. Each group gets its own reference and output file;
-files with no filter token stay in an Other group. You can turn this split off
-if the filename guess is wrong. Names after a `filter` token, along with
-unknown single-letter or uppercase tokens, keep their original label.
-Click **Choose reference automatically…** for a group to score its selected
-frames with the native core. Seiza favors clear, sharp stars and shows the
-chosen file in the reference picker. You can choose another file afterward.
-Scoring runs off the main thread, one image at a time. Cancel discards the result
-when the current native scoring call ends; it cannot stop that call mid-frame.
+The first selected light supplies the reference by default. Change it in
+**Processing → Registration reference**, or enable automatic reference selection
+to score the current inputs when stacking starts. You do not need to choose a
+reference to use the default path.
+
+When filenames show two or more common filters such as L, R, G, B, Ha, OIII,
+S/SII, or H-beta, Seiza splits them into separate outputs. Each group gets its
+own reference and output file; files with no filter token stay in an Other group.
+Turn **Split by filename filter** off on Stack if the guess is wrong. Names after
+a `filter` token and unknown single-letter or uppercase tokens keep their label.
 
 You can also choose:
 
@@ -88,8 +100,8 @@ You can also choose:
 - registration error, drift, and overlap limits; and
 - calibration from existing masters or built automatically.
 
-Expand **Registration and processing** for the new options. The defaults stay
-unchanged: similarity registration, equal frame weights, bilinear interpolation,
+In Processing, expand **Registration and processing** for additional controls.
+The defaults are: similarity registration, equal frame weights, bilinear interpolation,
 VNG demosaicing, normal Bayer integration, and no hot/dead pixel suppression.
 
 - **Affine** registration adds shear and unequal scale. **Quadratic** can fit
@@ -115,8 +127,8 @@ supported; Bayer drizzle still rereads the sources. Allow space for that cache.
 For calibration, either pick integrated bias, dark and flat masters, or use
 **Graded calibration files or library**. A mixed folder prepopulates its
 calibration files; you can add more files or a separate library. Seiza grades,
-groups and matches them to each light. Review grades and matches before stacking;
-masters are built in dependency order and cached for reuse. Flats and darks can
+groups and matches them to each light. You can inspect grades and matches in
+Review, but no approval is required when calibration is complete. Masters are built in dependency order and cached for reuse. Flats and darks can
 each use automatic grouping or all compatible inputs as one set. Incomplete
 lights follow your **Stop**, **Keep** or **Exclude** choice. Fixed and expanded
 canvases use the per-light assignments, including during transient removal.
@@ -126,7 +138,7 @@ source/cache guarantees.
 Calibration settings and review choices become saved defaults when stacking
 starts. Cancel or close the setup to discard edits.
 
-For a filter split, enter a base name, click **Choose Output and Stack**, and
+For a filter split, enter a base name, choose **Stack…**, and
 choose an output folder. Seiza adds suffixes such as `-Ha` and `-OIII`. Without
 a split, choose one FITS output file. Seiza shows the current frame and the
 accepted and rejected counts while it works. You can cancel between frames.

@@ -3,6 +3,7 @@ import CoreGraphics
 import Foundation
 import ImageIO
 import Sparkle
+import SwiftUI
 import UniformTypeIdentifiers
 import XCTest
 @testable import Seiza
@@ -2688,6 +2689,43 @@ final class DocumentWindowLifecycleTests: XCTestCase {
         }
 
         func release() { proceed.signal() }
+    }
+
+    func testStackCommandRoutesOnlyToTheRequestedNativeDocumentWindow() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let delegate = AppDelegate()
+        let item = NSMenuItem(title: "Stack Images…", action: #selector(AppDelegate.stackImages(_:)), keyEquivalent: "")
+        XCTAssertFalse(delegate.validateMenuItem(item))
+        let images = ["a.fits", "b.fits", "raster.png"].map { root.appendingPathComponent($0) }
+        let cards = ["SIMPLE  =                    T", "BITPIX  =                   16", "NAXIS   =                    2", "NAXIS1  =                    2", "NAXIS2  =                    2", "IMAGETYP= 'LIGHT'", "END"]
+        var fits = Data(cards.map { $0.padding(toLength: 80, withPad: " ", startingAt: 0) }.joined().utf8)
+        fits.append(Data(repeating: 32, count: 2880 - fits.count))
+        fits.append(Data(repeating: 0, count: 2880))
+        for url in images.prefix(2) { try fits.write(to: url) }
+        try Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")!.write(to: images[2])
+        delegate.open(Array(images.prefix(2)))
+        let lightsWindow = try XCTUnwrap(delegate.documentWindow(for: images[0]))
+        defer { lightsWindow.close() }
+        let host = try XCTUnwrap(lightsWindow.contentViewController as? NSHostingController<ViewerView>)
+        XCTAssertTrue(host.rootView.canStackImages)
+        let coordinator = host.rootView.stackCommandCoordinator
+        let beforeWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
+        defer {
+            for window in NSApp.windows where !beforeWindows.contains(ObjectIdentifier(window)) { window.close() }
+        }
+        delegate.stackImages(in: lightsWindow)
+        XCTAssertEqual(coordinator.requestNumber, 1)
+
+        delegate.open(images[2])
+        let rasterWindow = try XCTUnwrap(delegate.documentWindow(for: images[2]))
+        defer { rasterWindow.close() }
+        let rasterHost = try XCTUnwrap(rasterWindow.contentViewController as? NSHostingController<ViewerView>)
+        XCTAssertFalse(rasterHost.rootView.canStackImages)
+        delegate.stackImages(in: rasterWindow)
+        XCTAssertEqual(rasterHost.rootView.stackCommandCoordinator.requestNumber, 0)
+        XCTAssertEqual(coordinator.requestNumber, 1, "The inactive collection must not receive the command")
     }
 
     func testClosingDirectoryWindowCancelsDiscoveryWorker() async throws {

@@ -469,13 +469,21 @@ struct CalibrationLibraryReviewView: View {
             HStack {
                 Text("Calibration Review").font(.title2)
                 Spacer()
-                Button("Analyze again") { model.analyze(library: library, lights: lights, provided: provided, accessURLs: accessURLs) }.disabled(model.busy)
-                Button(onDone == nil ? "Done" : "Back to Calibration") {
+                Menu {
+                    Button("Refresh from Files") { model.analyze(library: library, lights: lights, provided: provided, accessURLs: accessURLs) }
+                        .disabled(model.busy)
+                } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .accessibilityLabel("Calibration review actions")
+                Button(onDone == nil ? "Done" : "Back to Stack") {
                     if let onDone { onDone() } else { dismiss() }
                 }
             }
             if model.busy { ProgressView("Measuring and matching calibration…") }
-            if model.stale { Text("The plan needs analysis before it can be used.").foregroundStyle(.orange) }
+            Text("Calibration is analyzed automatically. Inspect grades or change matches here; no separate approval is needed to start.")
+                .font(.caption).foregroundStyle(.secondary)
+            if model.stale, model.error == nil { Text("Updating calibration matches automatically…").foregroundStyle(.secondary) }
             if let error = model.error { Text(error).foregroundStyle(.red) }
             Picker("Review section", selection: $pane) {
                 ForEach(CalibrationReviewPane.allCases) { Text($0.rawValue).tag($0) }

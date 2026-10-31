@@ -149,6 +149,11 @@ private extension DeepSkyCatalog {
     }
 }
 
+final class StackImagesCommandCoordinator: ObservableObject {
+    @Published private(set) var requestNumber = 0
+    func requestStack() { requestNumber &+= 1 }
+}
+
 struct ViewerView: View {
     let urls: [URL]
     let initialImageURL: URL
@@ -160,6 +165,7 @@ struct ViewerView: View {
     let exportCoordinator: ImageExportCoordinator
     let editCoordinator: ImageEditCommandCoordinator
     let processingClipboardCoordinator: ImageProcessingClipboardCoordinator
+    let stackCommandCoordinator: StackImagesCommandCoordinator
     let onSelectionChange: (URL) -> Void
     let onDropURLs: ([URL]) -> Void
     let onStackComplete: (ImageStackBatchResult) -> Void
@@ -183,6 +189,7 @@ struct ViewerView: View {
         exportCoordinator: ImageExportCoordinator,
         editCoordinator: ImageEditCommandCoordinator,
         processingClipboardCoordinator: ImageProcessingClipboardCoordinator,
+        stackCommandCoordinator: StackImagesCommandCoordinator,
         onSelectionChange: @escaping (URL) -> Void = { _ in },
         onDropURLs: @escaping ([URL]) -> Void = { _ in },
         onStackComplete: @escaping (ImageStackBatchResult) -> Void = { _ in }
@@ -203,6 +210,7 @@ struct ViewerView: View {
         self.exportCoordinator = exportCoordinator
         self.editCoordinator = editCoordinator
         self.processingClipboardCoordinator = processingClipboardCoordinator
+        self.stackCommandCoordinator = stackCommandCoordinator
         self.onSelectionChange = onSelectionChange
         self.onDropURLs = onDropURLs
         self.onStackComplete = onStackComplete
@@ -264,6 +272,9 @@ struct ViewerView: View {
         .onChange(of: browserGrouping) { _, grouping in
             preferredBrowserGrouping = grouping
         }
+        .onReceive(stackCommandCoordinator.$requestNumber.dropFirst()) { _ in
+            if canStackImages { presentStack() }
+        }
         .toolbar {
             if showsImageBrowser {
                 ToolbarItem(placement: .navigation) {
@@ -277,8 +288,7 @@ struct ViewerView: View {
 
                 ToolbarItem {
                     Button {
-                        ImageStackWindowController.present(id: stackWindowID, urls: stackableURLs,
-                            sourceAccessURLs: sourceAccessURLs, onComplete: onStackComplete)
+                        presentStack()
                     } label: {
                         Label("Stack Images", systemImage: "square.stack.3d.up")
                     }
@@ -291,6 +301,13 @@ struct ViewerView: View {
                 }
             }
         }
+    }
+
+    var canStackImages: Bool { stackableURLs.count >= 2 }
+
+    private func presentStack() {
+        ImageStackWindowController.present(id: stackWindowID, urls: stackableURLs,
+            sourceAccessURLs: sourceAccessURLs, onComplete: onStackComplete)
     }
 
     private var currentURL: URL {

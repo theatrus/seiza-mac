@@ -1713,7 +1713,7 @@ struct ImageStackWorkflowView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Stack Images")
                         .font(.title2.weight(.semibold))
-                    Text("Align and combine linear FITS or XISF frames.")
+                    Text("Choose Stack… to save and begin. The other tabs contain optional settings.")
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -1724,13 +1724,24 @@ struct ImageStackWorkflowView: View {
 
             TabView(selection: $setupTab) {
                 Form {
-                    Section("Light sources") {
-                        ForEach(Array(Set(lightURLs.map { $0.deletingLastPathComponent() })).sorted(by: { $0.path < $1.path }), id: \.self) { folder in
-                            FolderPathControl(url: folder, label: "Light folder")
+                    Section(setupValidationMessage == nil ? "Ready to stack" : "Stack summary") {
+                        Text("\(selectedFrames.count) lights → \(stackGroups.count) FITS \(stackGroups.count == 1 ? "stack" : "stacks")")
+                            .font(.headline)
+                        if stackGroups.count > 1 {
+                            Text(groupSummary).font(.caption).foregroundStyle(.secondary)
                         }
-                        Text("\(lightURLs.count) lights · \(providedCalibration.count) calibration files\(calibrationLibrary == nil ? "" : " + calibration folder")")
-                            .foregroundStyle(.secondary)
-                        Button("Configure Calibration…") { setupTab = .calibration }
+                        DisclosureGroup("Light folders") {
+                            ForEach(Array(Set(lightURLs.map { $0.deletingLastPathComponent() })).sorted(by: { $0.path < $1.path }), id: \.self) { folder in
+                                FolderPathControl(url: folder, label: "Light folder")
+                            }
+                        }
+                    }
+                    Section("Calibration") {
+                        calibrationStatus
+                        if calibrationSource == .masters, calibration.bias == nil, calibration.dark == nil, calibration.flat == nil {
+                            Button("Add calibration…") { setupTab = .calibration }
+                                .buttonStyle(.borderless)
+                        }
                     }
                     Section("Stacking mode") {
                         Picker("Mode", selection: $options.canvasMode) {
@@ -1741,42 +1752,38 @@ struct ImageStackWorkflowView: View {
                             if !overlapWasEdited { options.minimumOverlap = mode == .expanded ? 0.05 : 0.60 }
                         }
                         Text(options.canvasMode == .expanded
-                            ? "Register the selected lights onto one expanding canvas per output, including images from different folders. Overlapping panels can connect through other panels. Sky-panel analysis is optional."
-                            : "Align and combine the selected lights within a fixed reference frame. Choose Expanded mosaic to retain the edges of overlapping panels.")
+                            ? "Combine overlapping fields on one expanding canvas. Plate solving and sky-panel analysis are optional."
+                            : "Use for repeated exposures of the same field. Choose Expanded mosaic to keep the edges of overlapping panels.")
                             .font(.caption).foregroundStyle(.secondary)
-                        if options.canvasMode == .expanded {
-                            TextField("Maximum canvas (million samples)", value: $options.maximumCanvasMegasamples, format: .number)
-                            Text("Samples are pixels × channels. Peak working memory is approximately 40 bytes per sample (256 million ≈ 10 GB). Native registration decides which lights join. Shared fixed alignment and Bayer drizzle are unavailable.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
                     }
                     Section("Frames") {
-                        HStack {
-                            Text("\(selectedURLs.count) of \(lightURLs.count) lights selected")
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Button("All") {
-                                selectedURLs = Set(groupsPanelsAutomatically ? (panelAnalysis?.solved.map(\.url) ?? lightURLs) : lightURLs)
-                            }
-                            Button("None") {
-                                selectedURLs.removeAll()
-                            }
-                        }
-
-                        if !groupsPanelsAutomatically || panelAnalysis == nil {
-                            List(lightURLs, id: \.self) { url in
-                                Toggle(isOn: selectedBinding(for: url)) {
-                                    Text(url.lastPathComponent).lineLimit(1)
+                        Text("All lights are selected initially. Change the selection only if you want to leave frames out.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        DisclosureGroup("Choose lights (\(selectedURLs.count) of \(lightURLs.count) selected)") {
+                            HStack {
+                                Text("\(selectedURLs.count) of \(lightURLs.count) lights selected")
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Button("All") {
+                                    selectedURLs = Set(groupsPanelsAutomatically ? (panelAnalysis?.solved.map(\.url) ?? lightURLs) : lightURLs)
+                                }
+                                Button("None") {
+                                    selectedURLs.removeAll()
                                 }
                             }
-                            .frame(height: min(150, max(60, CGFloat(lightURLs.count) * 26)))
+
+                            if !groupsPanelsAutomatically || panelAnalysis == nil {
+                                List(lightURLs, id: \.self) { url in
+                                    Toggle(isOn: selectedBinding(for: url)) {
+                                        Text(url.lastPathComponent).lineLimit(1)
+                                    }
+                                }
+                                .frame(height: min(150, max(60, CGFloat(lightURLs.count) * 26)))
+                            }
+
                         }
 
                         if let importedFrames {
-                            if !importedFrames.calibration.isEmpty {
-                                Text("\(importedFrames.calibration.count) calibration frames found in this collection.")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
                             if !importedFrames.notes.isEmpty {
                                 DisclosureGroup("Import notes (\(importedFrames.notes.count))") {
                                     ForEach(importedFrames.notes, id: \.self) { Text($0).font(.caption).textSelection(.enabled) }
@@ -1813,7 +1820,7 @@ struct ImageStackWorkflowView: View {
 
                 }
                 .formStyle(.grouped)
-                .tabItem { Text("Inputs") }.tag(StackSetupTab.inputs)
+                .tabItem { Text("Stack") }.tag(StackSetupTab.inputs)
                 Form {
                     Section("Calibration sources") {
                         Picker("Source", selection: $calibrationSource) {
@@ -1877,19 +1884,7 @@ struct ImageStackWorkflowView: View {
                             Picker("Darks", selection: $libraryModel.preferences.darkAssociation) {
                                 ForEach(LibraryAssociation.allCases) { Text($0.title).tag($0) }
                             }
-                            HStack {
-                                Button(libraryModel.busy ? "Analyzing…" : "Analyze Calibration") {
-                                    libraryModel.analyze(library: calibrationLibrary, lights: libraryLights, provided: providedCalibration, accessURLs: sourceAccessURLs)
-                                }.disabled((calibrationLibrary == nil && providedCalibration.isEmpty) || libraryModel.busy)
-                                Button("Review Grades and Matches…") { setupTab = .review }
-                                    .disabled(libraryModel.review == nil)
-                            }
-                            if libraryModel.busy { ProgressView("Measuring and matching…") }
-                            if let review = libraryModel.review {
-                                Text("\(review.frames.count) calibration frames · \(review.sessionCount) sessions · \(review.missing.filter { $0 }.count) incomplete lights")
-                                    .font(.caption)
-                            }
-                            if let error = libraryModel.error { Text(error).foregroundStyle(.red) }
+                            calibrationStatus
                             Picker("Incomplete lights", selection: $libraryModel.preferences.incomplete) {
                                 Text("Stop and review").tag("stop")
                                 Text("Exclude from stack").tag("exclude")
@@ -2007,7 +2002,12 @@ struct ImageStackWorkflowView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    DisclosureGroup("Registration Limits", isExpanded: $showsAdvancedOptions) {
+                    DisclosureGroup("Registration and canvas limits", isExpanded: $showsAdvancedOptions) {
+                        if options.canvasMode == .expanded {
+                            TextField("Maximum canvas (million samples)", value: $options.maximumCanvasMegasamples, format: .number)
+                            Text("Samples are pixels × channels. Peak working memory is approximately 40 bytes per sample (256 million ≈ 10 GB). Native registration decides which lights join. Shared fixed alignment and Bayer drizzle are unavailable.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         TextField(
                             "Maximum RMS (pixels)",
                             value: $options.maximumRegistrationRMS,
@@ -2036,10 +2036,10 @@ struct ImageStackWorkflowView: View {
                 Group {
                     if libraryModel.review != nil {
                         CalibrationLibraryReviewView(model: libraryModel, library: calibrationLibrary, lights: libraryLights,
-                            provided: providedCalibration, accessURLs: sourceAccessURLs, onDone: { setupTab = .calibration })
+                            provided: providedCalibration, accessURLs: sourceAccessURLs, onDone: { setupTab = .inputs })
                     } else {
                         ContentUnavailableView("No Calibration Review", systemImage: "checklist",
-                            description: Text("Choose calibration files or a folder in Calibration to review their grades and matches."))
+                            description: Text("This is optional. Calibration files are analyzed automatically when added in Calibration; you can stack lights without adding calibration."))
                     }
                 }
                 .tabItem { Text("Review") }.tag(StackSetupTab.review)
@@ -2060,13 +2060,58 @@ struct ImageStackWorkflowView: View {
                     .disabled(isChoosingFile)
                     .keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("Choose Output and Stack…") {
+                Button("Stack…") {
                     chooseOutputAndStart()
                 }
                 .keyboardShortcut(.defaultAction)
+                .help("Choose an output file or folder, then start stacking with the current settings.")
+                .accessibilityIdentifier("stack.start")
                 .disabled(setupValidationMessage != nil || isChoosingFile)
             }
             .padding(16)
+        }
+    }
+
+    @ViewBuilder private var calibrationStatus: some View {
+        if calibrationSource == .automatic {
+            if calibrationLibrary == nil && providedCalibration.isEmpty {
+                Text("Add calibration files or a folder in Calibration to match them automatically.")
+                    .foregroundStyle(.secondary)
+            } else if libraryLights.isEmpty {
+                Text("Select at least two lights to match calibration.").foregroundStyle(.secondary)
+            } else if let error = libraryModel.error {
+                Label("Calibration needs attention: " + error, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                Button("Try Again") { analyzeCalibration() }
+                    .disabled(libraryLights.isEmpty || (calibrationLibrary == nil && providedCalibration.isEmpty))
+            } else if libraryModel.busy || libraryModel.stale {
+                ProgressView("Matching calibration automatically…")
+                Text("You do not need to start analysis or build masters yourself.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if let review = libraryModel.review {
+                let incomplete = review.missing.filter { $0 }.count
+                Label("\(review.frames.count) calibration frames analyzed", systemImage: incomplete == 0 ? "checkmark.circle" : "exclamationmark.circle")
+                Text("\(review.missing.count - incomplete) of \(review.missing.count) lights have complete calibration. Masters are built or reused when stacking starts.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if incomplete > 0 {
+                    Text("Incomplete lights: \(incomplete). Change their matches or the incomplete-light policy in Calibration.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if !review.warnings.isEmpty {
+                    Text("\(review.warnings.count) calibration notes are available in Review.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Button(incomplete > 0 ? "Review calibration…" : "View matches (optional)") { setupTab = .review }
+                    .buttonStyle(.borderless)
+            }
+        } else {
+            let count = [calibration.bias, calibration.dark, calibration.flat].compactMap { $0 }.count
+            if count == 0 {
+                Text("No calibration added. You can stack the lights as they are, or add calibration in the Calibration tab.")
+                    .foregroundStyle(.secondary)
+            } else {
+                Label("\(count) selected calibration masters", systemImage: "checkmark.circle")
+            }
         }
     }
 
@@ -2174,8 +2219,9 @@ struct ImageStackWorkflowView: View {
         }
         if calibrationSource == .automatic {
             if calibrationLibrary == nil && providedCalibration.isEmpty { return "Choose calibration files or a library folder." }
-            if libraryModel.busy { return "Wait for calibration analysis to finish." }
-            guard let review = libraryModel.review, !libraryModel.stale else { return "Analyze and review calibration before stacking." }
+            if let error = libraryModel.error { return "Calibration analysis failed: " + error }
+            if libraryModel.busy { return "Calibration is being matched automatically…" }
+            guard let review = libraryModel.review, !libraryModel.stale else { return "Updating calibration matches automatically…" }
             if libraryModel.preferences.incomplete == "stop", review.missing.contains(true) { return "Some lights have incomplete calibration. Review their matches or change Incomplete lights." }
             if libraryModel.preferences.incomplete == "exclude" {
                 for group in stackGroups {
