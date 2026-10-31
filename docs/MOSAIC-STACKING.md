@@ -1,15 +1,17 @@
 # Mosaic stacking and GPU performance
 
-The Mac workflow ports [seiza-win PR #70](https://github.com/theatrus/seiza-win/pull/70)
-and PR #73 using published Seiza/C ABI 0.44.2 and stacking 0.51.2. It does not change the app
-version or publish a release.
+Expanded mosaics use Seiza's shared native stacking implementation. The normal
+path needs no plate-solving or sky-panel analysis.
 
 ## Stack selected lights on an expanding canvas
 
-1. Open images, a directory, or a TXT/CSV image list and choose **Stack Images**.
-2. At the top of the dialog, choose **Stacking mode → Expanded mosaic**.
-3. Select the lights to include, review filter splitting, calibration, and the
-   canvas memory ceiling, then choose **Choose Output and Stack…**.
+1. Open images, a directory, or a TXT/CSV image list and choose **File → Stack Images…**.
+2. On **Stack**, choose **Stacking Mode → Expanded Mosaic**. All lights are
+   selected, and included calibration is matched automatically.
+3. Choose **Stack…** and an output destination. Frame selection, filter splitting
+   and calibration settings are optional adjustments. The canvas memory ceiling
+   is under **Processing → Registration and Canvas Limits** if it needs changing.
+
 
 Each output registers its selected lights onto one expanding canvas. Inputs can
 come from different folders; overlapping panels can connect through other panels.
@@ -24,20 +26,19 @@ bound what can be processed.
 This is a selection aid for reviewing pointings and separating disconnected sky
 fields before stacking. It is independent of the chosen stacking mode.
 
-1. Expand **Optional sky-panel analysis** and turn on **Group lights by solved
-   sky position**.
-2. Select at least two lights and click **Solve and group selected lights**.
+1. Expand **Sky Panels** and turn on **Group by sky position**.
+2. Select at least two lights and click **Analyze Panels**.
    Install the standard solving catalogs in Settings first.
 3. Under **Select panels to include**, select whole panels or expand them to
    select individual exposures. The first sky field is selected initially;
    other fields are available but unchecked. Calibration frames, masters,
    failed solves and unconfirmed coordinates appear under **Excluded**.
 4. Review the selected-light/output summary, filter splitting, calibration and
-   stack options, then choose **Choose Output and Stack…**. Every output needs
+   stack options, then choose **Stack…**. Every output needs
    at least two lights. Multiple outputs use a folder and base name with unique
    field/region/filter suffixes.
 
-**All** selects only successfully analyzed lights once an analysis exists.
+**Select All** selects only successfully analyzed lights once an analysis exists.
 To analyze previously excluded or unselected files, turn automatic grouping off,
 select the files, turn it back on and solve again. A cancelled analysis keeps
 its prior result and selection. Cancellation waits for the current solve to
@@ -73,11 +74,11 @@ correction maps and manual group choices remain outside this setup.
 
 ## Choose canvas and memory
 
-**Fixed reference** retains the reference grid. An optional shared alignment
+**Fixed Reference** retains the reference grid. An optional shared alignment
 image puts filter stacks onto one common fixed grid while each channel retains
 its own brightness scale.
 
-**Expanded mosaic** plans bounds from the full selected light list and retains
+**Expanded Mosaic** plans bounds from the full selected light list and retains
 panel edges. The first ordered light anchors geometry and brightness; automatic
 reference selection can choose the anchor. The planner starts empty, so every
 light, including the anchor, is integrated exactly once. Results report canvas

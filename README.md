@@ -14,6 +14,26 @@ stellar-distance lookup sends sky coordinates to astronomical catalogues.
 [Seiza for Windows](https://github.com/theatrus/seiza-win) ·
 [FITS and XISF for Photoshop](https://github.com/theatrus/xisf-photoshop)
 
+## Stack a night of captures
+
+1. **Open the capture folder** with **File → Open…**. It can contain lights,
+   calibration frames and masters in subfolders; separate calibration folders
+   are also supported.
+2. Choose **File → Stack Images…** or the toolbar's stack icon. All lights are
+   selected, and any included calibration is graded and matched automatically.
+   Keep **Fixed Reference** for one field, or choose **Expanded Mosaic** for
+   overlapping fields.
+3. Choose **Stack…**, pick where to save, and start. Seiza builds or reuses the
+   calibration masters, aligns and combines the lights, and opens the saved
+   linear FITS result. If lights are split by filter, choose an output folder.
+
+You can stay on the **Stack** tab. Frame selection, calibration settings,
+processing controls and match review are optional adjustments, not a checklist.
+If calibration is incomplete, the default stops and explains what needs attention.
+Plate solving and sky-panel analysis are optional, including for mosaics.
+
+![The Stack tab shows selected lights, automatic calibration and the Stack action](docs/images/stacking-calibration/inputs.png)
+
 ## New in 0.9.0
 
 Build calibrated stacks from a whole night of captures, with shared Seiza grading,
@@ -22,8 +42,8 @@ automatic grouping and per-light matching in fixed-reference and expanded mosaic
 - Open a folder containing lights and calibration frames. Stack Images reads
   their FITS/XISF frame types and puts calibration files into the library. You
   can still choose separate light and calibration folders or add individual files.
-- **Group and match automatically** for flats and darks, or independently choose
-  **Use all as one set** for eligible compatible frames. Review grades, light
+- **Automatic** for flats and darks, or independently choose
+  **All Compatible Frames** for eligible compatible frames. Review grades, light
   matches, flat groups and master recipes before stacking; masters are built or
   reused when processing starts.
 - Tune matching and grading globally or per rig. Review exclusions and overrides,
@@ -31,7 +51,7 @@ automatic grouping and per-light matching in fixed-reference and expanded mosaic
   drafts until stacking starts.
 - Inspect a flat in the sidebar for channel levels, clipping, noise, dust and
   vignetting, using linear source measurements.
-- Use the resizable **Inputs / Calibration / Processing / Review** setup window.
+- Use the resizable **Stack / Calibration / Processing / Review** setup window.
   Review sections use a segmented control; thumbnails stay active while setup is
   idle, and processing failures remain visible.
 - Uses published **Seiza/C ABI 0.48.0**, including shared header I/O that preserves
@@ -224,31 +244,36 @@ strength, noise, and ringing.
 
 ## Directory and live stacking
 
-### Stack selected frames
+### Batch stacking options
 
-Combine selected FITS or XISF lights into 32-bit floating-point FITS outputs,
-with optional grouping by filename filter. Choose a channel reference for each group
-or let Seiza rank candidates and retry alignment. An optional **Shared alignment
-image** puts every filter on the same output grid while preserving each
-channel’s own normalization. Calibrate with existing masters or build and
-cache matched masters from raw calibration frames. **Match graded calibration
-library** measures and grades a library, exposes global/per-rig matching and grade
-settings, and lets you review each light's matches before masters are built.
-Fixed and expanded outputs can switch calibration sessions per light. See the
-[calibration setup guide](docs/STACKING-CALIBRATION.md) for choices, coverage policy
-and the current metadata/time flat-grouping limitation. Track progress and SNR,
-cancel a run, and open the saved results.
+The [short stacking path](#stack-a-night-of-captures) uses the current defaults.
+Change options only when the data calls for it:
+
+- **Stack**: leave out individual lights, change filename-filter splitting, or
+  choose an expanded mosaic. All lights are included initially.
+- **Calibration**: add a separate calibration folder or individual files, select
+  existing masters, tune grading/matching per rig, or change the policy for
+  incomplete lights. Included calibration frames are analyzed automatically;
+  matched masters are built when stacking starts.
+- **Processing**: choose a different reference, enable automatic reference ranking,
+  set a shared alignment image, or tune registration and integration. A shared
+  alignment image puts fixed filter outputs on the same grid.
+- **Review**: optionally inspect grades, light matches, master recipes and flat
+  groups. There is no separate approval or master-building button to press.
+
+Fixed and expanded outputs support per-light calibration sessions. See the
+[calibration setup guide](docs/STACKING-CALIBRATION.md) for settings and limits.
 
 ### Stack a mosaic from selected lights
 
 Open images, folders, or a TXT/CSV image list, choose **Stack Images**, then select
-**Stacking mode → Expanded mosaic** at the top of the dialog. The selected lights
+**Stacking Mode → Expanded Mosaic** on the Stack tab. The selected lights
 are registered onto one expanding canvas per output, retaining overlapping panel
 edges. This works without sky-panel analysis or pre-solving catalogs and has no
-512-light selection cap. Set a canvas memory ceiling and review native planning
-notes in the result.
+512-light selection cap. The default canvas memory ceiling applies automatically; change it in
+**Processing → Registration and Canvas Limits** if needed.
 
-**Optional sky-panel analysis → Group lights by solved sky position** lets you
+**Sky Panels → Group by sky position** lets you
 solve and review whole panels or individual exposures before stacking, and split
 disconnected fields into separate outputs. Filter splitting remains independent.
 See the [mosaic and GPU guide](docs/MOSAIC-STACKING.md) for calibration scope,

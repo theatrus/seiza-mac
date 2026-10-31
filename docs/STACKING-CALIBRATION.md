@@ -9,46 +9,54 @@ Swift owns setup, access grants and review; the app has no calibration
 orchestrator in Rust. Both canvas modes support per-light sessions. Live
 acquisition retains its existing preparation workflow.
 
-## Use the library
+## Start with defaults
 
-1. Select lights from images, folders or TXT/CSV lists and open **Stack Images**.
-2. A whole folder may contain lights alongside bias, dark, dark-flat and flat
-   frames or masters, including in subfolders. Stack Images reads native frame
-   roles from the FITS/XISF headers, selects only lights, and sends calibration
-   files to **Graded calibration files or library** automatically. The browser
-   keeps all images available for inspection. Import notes explain unreadable or
-   set-aside files; images without a recorded type are offered as lights for review.
-   You can also open the **Calibration** tab and add files or a library separately.
-3. Set **Calibration matching and grading settings**, globally or for a rig.
-   Per-rig controls become available after the first analysis. A rig is identified
-   by the camera and telescope metadata; gain, offset and other sensor fields
-   remain part of Seiza's compatibility rules.
-4. Analysis runs automatically when files, lights or settings change.
-   **Analyze Calibration** can refresh it manually. Discovery and measurement run off the main thread.
-   This step does not build masters. Unchanged measurements are reused and
-   screened again using the current settings and grading peers.
-5. Open **Review Grades and Matches**. Inspect calibration grades and reasons,
-   the selected files for each light, and each session's master recipes. **Keep
-   out**, **Use anyway** and **Clear choice** persist against the exact source
-   path and fingerprint. Choices or settings changes trigger another analysis.
-6. Choose **Incomplete lights**: **Stop and review** (default), **Exclude from
-   stack**, or **Keep with available calibration**. The setup checks that every
-   output retains at least two usable lights when excluding incomplete ones.
-   Changing this policy keeps the current review and does not restart analysis;
-   matching, grading and source changes still require a fresh review.
-7. Adjust alignment, reference and integration options in **Processing**, then
-   choose the output and stack. The app verifies the reviewed plan, builds or
-   reuses masters in dependency order, and carries each light's assignment into
-   planning, integration and transient-removal replay. New execution warnings,
-   such as an unstable-flat retry, are shown before processing lights.
+1. Open a capture folder or a TXT/CSV image list and choose **File → Stack Images…**
+   or the toolbar's stack icon. All detected lights are selected automatically.
+2. Stay on **Stack** while calibration is analyzed and matched. The summary shows
+   how many lights have complete calibration. No separate analysis, master-building
+   or review approval is required.
+3. Choose **Stack…** and an output destination. Seiza verifies the plan, builds or
+   reuses masters, and applies each light's calibration in fixed or expanded stacks.
 
-Stack Images opens a resizable window with **Inputs**, **Calibration**,
-**Processing** and **Review** tabs. Review stays in that window, with an
+The folder can contain lights alongside bias, dark, dark-flat, flat frames and
+masters, including in subfolders. Native FITS/XISF frame roles separate lights
+from calibration automatically. Images without a recorded type are offered as
+lights with an import note; unreadable and set-aside files have explanations.
+The browser keeps all images available for inspection.
+
+**Incomplete Lights** defaults to **Stop and Review**. If calibration is incomplete,
+resolve the matches or explicitly choose **Exclude from Stack** or
+**Use Available Calibration** in Calibration. Exclusion requires at least two
+usable lights in every output. Changing this policy does not restart analysis.
+
+## Optional adjustments
+
+- **Calibration**: add files or a separate library folder, choose **Automatic**
+  or **All Compatible Frames** for flats and darks, and tune matching and grading
+  globally or per rig. Per-rig controls
+  appear after the first analysis. Camera and telescope metadata identify rigs;
+  gain, offset and sensor fields still participate in native compatibility rules.
+- **Review**: inspect frame grades and reasons, per-light matches, master recipes
+  and measured flat groups. **Keep Out**, **Use Anyway** and **Clear Choice** are
+  bound to the exact source path and fingerprint. Editing choices or settings
+  updates analysis automatically. Review is optional when calibration is complete.
+- **Processing**: adjust alignment, reference and integration settings if needed.
+  Each light's assignment also applies during transient-removal replay.
+
+Discovery and measurement run off the main thread. Unchanged measurements are
+reused under the current settings and grading peers; analysis itself does not
+build masters. For source files changed outside the app, **Review → More (•••) → Refresh from Files** requests a fresh analysis. New execution
+warnings, such as an unstable-flat retry, are shown before lights are processed.
+
+Stack Images opens a resizable window with **Stack**, **Calibration**,
+**Processing** and **Review** tabs. Stack is the starting page; the other tabs
+are optional adjustments, not a sequence to complete. Review stays in that window, with an
 unbordered segmented control for Frames, Light Matches, Master Plan and Flat
 Groups. Matching settings live in Calibration. Browser thumbnails remain active
-while setup is idle; only master preparation and stacking pause them. Light sources
-and the optional calibration folder have native path controls; **Choose Folder**,
-**Remove**, **Add Files** and individual file removal keep the two sources
+while setup is idle; only master preparation and stacking pause them. **Source Folders** (under Summary)
+and the optional calibration folder have native path controls; **Choose Folder…**,
+**Remove**, **Add Files…** and individual file removal keep the two sources
 independent. Removing a source only removes it from this setup.
 
 Settings and review choices are drafts until stacking starts. **Cancel**, closing
@@ -61,7 +69,7 @@ matching setting cancels the old request and queues the latest values.
 These app captures use a synthetic night with two lights, three bias frames and
 three flats. The flat contains a dust shadow for inspection.
 
-![Inputs show the light folder and separate calibration-file count](images/stacking-calibration/inputs.png)
+![Stack summary shows selected lights and automatically matched calibration](images/stacking-calibration/inputs.png)
 
 ![Calibration sources, independent flat and dark modes, and incomplete-light policy](images/stacking-calibration/calibration.png)
 
@@ -98,8 +106,8 @@ candidate orders reuse one session and build, anchored by the first light.
 Builder options key only the recipes they affect. Native session methods decide
 flat use, and the retry carries that session's policy and held-back frames.
 
-Flats and darks each have an independent **Group and match automatically** /
-**Use all as one set** choice, defaulting to automatic. Automatic flats use
+Flats and darks each have an independent **Automatic** /
+**All Compatible Frames** choice, defaulting to automatic. Automatic flats use
 Seiza's raw-response preparation, bounded sample selection, pixel measurements
 and requested pair comparisons to establish response groups and change windows.
 The Flat Groups review section shows measured sessions, families and changes. Darks

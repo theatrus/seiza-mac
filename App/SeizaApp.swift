@@ -57,6 +57,8 @@ struct SeizaApp: App {
 
                 Divider()
 
+                Button("Stack Images…") { appDelegate.stackImages(nil) }
+
                 Button("Color Tools…") { ColorToolsWindowController.present() }
 
                 Button("Live Stack…") {
@@ -127,6 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         let exportCoordinator = ImageExportCoordinator()
         let editCoordinator = ImageEditCommandCoordinator()
         let processingClipboardCoordinator = ImageProcessingClipboardCoordinator()
+        let stackCommandCoordinator = StackImagesCommandCoordinator()
         private var accessedURLs: [URL] = []
 
         init(accessURLs: [URL]) {
@@ -150,7 +153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         DispatchQueue.main.async { [weak self] in
-            self?.installEditMenuRouting()
+            self?.installMenuRouting()
         }
     }
 
@@ -188,6 +191,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         panel.message = "Choose images, folders, or TXT/CSV image lists."
         guard panel.runModal() == .OK else { return }
         open(panel.urls)
+    }
+
+    private func stackingSession(for window: NSWindow?) -> DocumentWindowSession? {
+        guard let window,
+              let session = documentWindows.values.first(where: { $0.controller?.window === window }),
+              let host = window.contentViewController as? NSHostingController<ViewerView>,
+              host.rootView.canStackImages else { return nil }
+        return session
+    }
+
+    private var canStackActiveDocument: Bool {
+        stackingSession(for: activeDocumentSession?.controller?.window) != nil
+    }
+
+    @objc func stackImages(_ sender: Any?) {
+        guard let window = activeDocumentSession?.controller?.window else { return }
+        stackImages(in: window)
+    }
+
+    func stackImages(in window: NSWindow) {
+        stackingSession(for: window)?.stackCommandCoordinator.requestStack()
     }
 
     @objc func openImageList(_ sender: Any?) {
@@ -249,6 +273,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
+        case #selector(stackImages(_:)):
+            return canStackActiveDocument
         case #selector(undoImageEdit(_:)):
             if let video = ParallaxWindowController.activeSession { return video.canUndo && !video.isBusy }
             return activeDocumentSession?.editCoordinator.canUndo == true
@@ -262,10 +288,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         routeEditCommands(in: menu)
+        routeStackCommand(in: menu)
     }
 
     func menuWillOpen(_ menu: NSMenu) {
         routeEditCommands(in: menu)
+        routeStackCommand(in: menu)
     }
 
     @objc func pasteImageAdjustments(_ sender: Any?) {
@@ -321,6 +349,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 exportCoordinator: session.exportCoordinator,
                 editCoordinator: session.editCoordinator,
                 processingClipboardCoordinator: session.processingClipboardCoordinator,
+                stackCommandCoordinator: session.stackCommandCoordinator,
                 in: window
             )
         } else {
@@ -390,6 +419,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 exportCoordinator: session.exportCoordinator,
                 editCoordinator: session.editCoordinator,
                 processingClipboardCoordinator: session.processingClipboardCoordinator,
+                stackCommandCoordinator: session.stackCommandCoordinator,
                 in: window
             )
         }
@@ -532,6 +562,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         exportCoordinator: ImageExportCoordinator,
         editCoordinator: ImageEditCommandCoordinator,
         processingClipboardCoordinator: ImageProcessingClipboardCoordinator,
+        stackCommandCoordinator: StackImagesCommandCoordinator,
         in window: NSWindow
     ) {
         let view = ViewerView(
@@ -543,6 +574,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             exportCoordinator: exportCoordinator,
             editCoordinator: editCoordinator,
             processingClipboardCoordinator: processingClipboardCoordinator,
+            stackCommandCoordinator: stackCommandCoordinator,
             onSelectionChange: { [weak window] selectedURL in
                 window?.title = selectedURL.lastPathComponent
             },
@@ -610,6 +642,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             exportCoordinator: session.exportCoordinator,
             editCoordinator: session.editCoordinator,
             processingClipboardCoordinator: session.processingClipboardCoordinator,
+            stackCommandCoordinator: session.stackCommandCoordinator,
             in: window
         )
         window.makeKeyAndOrderFront(nil)
@@ -727,14 +760,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     private func refreshEditCommandAvailability() {
-        installEditMenuRouting()
+        installMenuRouting()
         NSApp.mainMenu?.item(withTitle: "Edit")?.submenu?.update()
     }
 
-    private func installEditMenuRouting() {
+    private func installMenuRouting() {
+        if let fileMenu = NSApp.mainMenu?.item(withTitle: "File")?.submenu {
+            fileMenu.delegate = self
+            routeStackCommand(in: fileMenu)
+        }
         guard let editMenu = NSApp.mainMenu?.item(withTitle: "Edit")?.submenu else { return }
         editMenu.delegate = self
         routeEditCommands(in: editMenu)
+    }
+
+    private func routeStackCommand(in menu: NSMenu) {
+        guard let item = menu.items.first(where: { $0.title == "Stack Images…" }) else { return }
+        item.target = self
+        item.action = #selector(stackImages(_:))
+        item.isEnabled = canStackActiveDocument
     }
 
     private func routeEditCommands(in editMenu: NSMenu) {
