@@ -8,7 +8,7 @@ objects in it. Turn a finished image into a camera tour with depth, motion, and
 titles. Image processing and video encoding run locally; optional online
 stellar-distance lookup sends sky coordinates to astronomical catalogues.
 
-[**Download Seiza for Mac 0.9.0**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.9.0-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
+[**Download Seiza for Mac 0.9.1**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.9.1-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
 **Also from Seiza:** [Core, CLI, and libraries](https://github.com/theatrus/seiza) ·
 [Seiza for Windows](https://github.com/theatrus/seiza-win) ·
@@ -34,7 +34,15 @@ Plate solving and sky-panel analysis are optional, including for mosaics.
 
 ![The Stack tab shows selected lights, automatic calibration and the Stack action](docs/images/stacking-calibration/inputs.png)
 
-## New in 0.9.0
+## New in 0.9.1
+
+Start a stack from **File → Stack Images…** or the toolbar, then choose
+**Stack…** and an output destination. The first tab shows light counts and
+automatic calibration matches; frame selection and advanced settings stay
+available when needed. Shorter macOS labels and updated guides make the default
+path easier to follow.
+
+## Calibration features from 0.9.0
 
 Build calibrated stacks from a whole night of captures, with shared Seiza grading,
 automatic grouping and per-light matching in fixed-reference and expanded mosaics.
@@ -410,7 +418,7 @@ and refits the whole frame as its window changes size.
 
 ## Download
 
-[**Download Seiza for Mac 0.9.0**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.9.0-universal.dmg), open it, and drag Seiza to Applications.
+[**Download Seiza for Mac 0.9.1**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.9.1-universal.dmg), open it, and drag Seiza to Applications.
 
 Or install with [Homebrew](https://brew.sh) from the
 [theatrus/homebrew-seiza tap](https://github.com/theatrus/homebrew-seiza):
