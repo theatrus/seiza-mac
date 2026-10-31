@@ -55,8 +55,8 @@ pointer to zoom, drag or scroll to pan, and press **Command-0** to fit again.
 1. Open the folder with **File → Open…**, then choose **File → Stack Images…**
    or the toolbar's stack icon. TXT/CSV image lists work too. At least two
    FITS/XISF lights are needed; raster images stay in the browser.
-2. On **Stack**, keep **Fixed reference** for repeated exposures of one field,
-   or choose **Expanded mosaic** for overlapping fields. All lights are already
+2. On **Stack**, keep **Fixed Reference** for repeated exposures of one field,
+   or choose **Expanded Mosaic** for overlapping fields. All lights are already
    selected. Included calibration files are analyzed and matched automatically.
 3. Choose **Stack…** and select an output. Calibration masters are built or
    reused automatically, then the lights are aligned and integrated. The saved
@@ -69,7 +69,7 @@ or Review to resolve it, or explicitly choose a different incomplete-light polic
 
 ### Optional adjustments
 
-**Stack** contains **Choose lights** if you want to exclude frames. **Calibration**
+**Stack** contains **Light Frames** if you want to exclude frames. **Calibration**
 contains sources and matching settings; **Processing** contains alignment and
 integration options; **Review** shows calibration evidence. These are settings
 pages, not steps that must be completed in order.
@@ -83,7 +83,7 @@ master policy. Unknown frame types are offered as lights with an import note;
 unreadable images and non-calibration masters are set aside with explanations.
 
 The first selected light supplies the reference by default. Change it in
-**Processing → Registration reference**, or enable automatic reference selection
+**Processing → Registration Reference**, or enable automatic reference selection
 to score the current inputs when stacking starts. You do not need to choose a
 reference to use the default path.
 
@@ -125,7 +125,7 @@ all three rejection passes. The core caches prepared frames on disk where
 supported; Bayer drizzle still rereads the sources. Allow space for that cache.
 
 For calibration, either pick integrated bias, dark and flat masters, or use
-**Graded calibration files or library**. A mixed folder prepopulates its
+**Calibration Files**. A mixed folder prepopulates its
 calibration files; you can add more files or a separate library. Seiza grades,
 groups and matches them to each light. You can inspect grades and matches in
 Review, but no approval is required when calibration is complete. Masters are built in dependency order and cached for reuse. Flats and darks can

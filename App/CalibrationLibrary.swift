@@ -70,7 +70,7 @@ struct LibraryRigSettings: Encodable, Sendable {
 enum LibraryAssociation: String, Codable, CaseIterable, Identifiable, Sendable {
     case automatic, oneSet = "one_set"
     var id: Self { self }
-    var title: String { self == .automatic ? "Group and match automatically" : "Use all as one set" }
+    var title: String { self == .automatic ? "Automatic" : "All Compatible Frames" }
 }
 struct LibraryPreferences: Codable, Equatable, Sendable {
     var settings: [String: LibraryJSON] = [:]
@@ -379,9 +379,9 @@ struct CalibrationLibrarySettingsView: View {
     @ObservedObject var model: CalibrationLibraryModel
     @State private var scope = ""
     var body: some View {
-        DisclosureGroup("Calibration matching and grading settings") {
-            Picker("Settings for", selection: $scope) {
-                Text("All rigs").tag("")
+        DisclosureGroup("Matching and Grading") {
+            Picker("Settings For", selection: $scope) {
+                Text("All Rigs").tag("")
                 ForEach(model.review?.rigs ?? []) { Text($0.name).tag($0.id) }
             }
             ForEach(["matching", "darks", "flat_groups", "grades"], id: \.self) { group in
@@ -391,7 +391,7 @@ struct CalibrationLibrarySettingsView: View {
                             control(field)
                             Text(field.help).font(.caption).foregroundStyle(.secondary)
                             if values[field.key] != nil {
-                                Button(scope.isEmpty ? "Use default" : "Inherit global setting") { update(field.key, nil) }.font(.caption)
+                                Button(scope.isEmpty ? "Use Default" : "Use Global Setting") { update(field.key, nil) }.font(.caption)
                             }
                         }.padding(.vertical, 3)
                     }
@@ -475,15 +475,14 @@ struct CalibrationLibraryReviewView: View {
                 } label: { Image(systemName: "ellipsis.circle") }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
-                .accessibilityLabel("Calibration review actions")
-                Button(onDone == nil ? "Done" : "Back to Stack") {
+                .accessibilityLabel("More")
+                .help("More calibration options")
+                Button("Done") {
                     if let onDone { onDone() } else { dismiss() }
                 }
             }
             if model.busy { ProgressView("Measuring and matching calibration…") }
-            Text("Calibration is analyzed automatically. Inspect grades or change matches here; no separate approval is needed to start.")
-                .font(.caption).foregroundStyle(.secondary)
-            if model.stale, model.error == nil { Text("Updating calibration matches automatically…").foregroundStyle(.secondary) }
+            if model.stale, model.error == nil { Text("Updating calibration…").foregroundStyle(.secondary) }
             if let error = model.error { Text(error).foregroundStyle(.red) }
             Picker("Review section", selection: $pane) {
                 ForEach(CalibrationReviewPane.allCases) { Text($0.rawValue).tag($0) }
@@ -499,10 +498,10 @@ struct CalibrationLibraryReviewView: View {
                         TableColumn("Grade") { Text($0.isMaster ? "Existing master" : $0.grade?.capitalized ?? "Ungraded") }
                         TableColumn("Reason") { Text($0.error ?? $0.reason ?? $0.measurementState) }
                         TableColumn("Choice") { frame in
-                            Menu(model.preferences.choices.first { $0.path == frame.path && $0.fingerprint == frame.fingerprint }.map { $0.choice == "use" ? "Use anyway" : "Keep out" } ?? "Automatic") {
-                                Button("Keep out") { model.choose(frame, "exclude") }
-                                Button("Use anyway") { model.choose(frame, "use") }
-                                Button("Clear choice") { model.choose(frame, nil) }
+                            Menu(model.preferences.choices.first { $0.path == frame.path && $0.fingerprint == frame.fingerprint }.map { $0.choice == "use" ? "Use Anyway" : "Keep Out" } ?? "Automatic") {
+                                Button("Keep Out") { model.choose(frame, "exclude") }
+                                Button("Use Anyway") { model.choose(frame, "use") }
+                                Button("Clear Choice") { model.choose(frame, nil) }
                             }
                         }
                     }
@@ -565,10 +564,10 @@ struct CalibrationLibraryReviewView: View {
                                 ForEach(model.review?.flatWork["group_edges"].array ?? [], id: \.self) { edge in
                                     HStack {
                                         Text(edge["label"].text).font(.caption)
-                                        Menu("Group edge") {
-                                            Button("Split here") { model.chooseGroupEdge(edge, choice: "split") }
-                                            Button("Join with previous group") { model.chooseGroupEdge(edge, choice: "join") }
-                                            Button("Use measured grouping") { model.chooseGroupEdge(edge, choice: nil) }
+                                        Menu("Group Boundary") {
+                                            Button("Split Here") { model.chooseGroupEdge(edge, choice: "split") }
+                                            Button("Join Previous Group") { model.chooseGroupEdge(edge, choice: "join") }
+                                            Button("Use Measured Grouping") { model.chooseGroupEdge(edge, choice: nil) }
                                         }.disabled(model.busy || model.stale)
                                     }
                                 }
@@ -605,16 +604,16 @@ struct CalibrationLibraryReviewView: View {
         }.padding().frame(minWidth: 720, idealWidth: 1000, minHeight: 440, idealHeight: 650)
     }
     @ViewBuilder private func lightChoices(_ options: LibraryJSON) -> some View {
-        Menu("Flat choices") {
-            Button("Use automatic choices") { model.clearLightChoices(options) }
+        Menu("Flat Selection") {
+            Button("Use Automatic Selection") { model.clearLightChoices(options) }
             ForEach(options["changes"].array, id: \.self) { change in
                 Menu("Change \(change["key"].text.prefix(8))") {
-                    Button("Before change") { model.chooseLight(options, change: change, side: "before") }
-                    Button("After change") { model.chooseLight(options, change: change, side: "after") }
-                    Button("Use automatic side") { model.chooseLight(options, change: change) }
+                    Button("Before Change") { model.chooseLight(options, change: change, side: "before") }
+                    Button("After Change") { model.chooseLight(options, change: change, side: "after") }
+                    Button("Use Automatic Selection") { model.chooseLight(options, change: change) }
                 }
             }
-            Menu("Use a flat group") {
+            Menu("Use Flat Group") {
                 ForEach(options["groups"].array, id: \.self) { group in
                     Button(group["label"].text) { model.chooseLight(options, group: group) }
                 }

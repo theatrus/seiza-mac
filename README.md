@@ -21,7 +21,7 @@ stellar-distance lookup sends sky coordinates to astronomical catalogues.
    are also supported.
 2. Choose **File → Stack Images…** or the toolbar's stack icon. All lights are
    selected, and any included calibration is graded and matched automatically.
-   Keep **Fixed reference** for one field, or choose **Expanded mosaic** for
+   Keep **Fixed Reference** for one field, or choose **Expanded Mosaic** for
    overlapping fields.
 3. Choose **Stack…**, pick where to save, and start. Seiza builds or reuses the
    calibration masters, aligns and combines the lights, and opens the saved
@@ -42,8 +42,8 @@ automatic grouping and per-light matching in fixed-reference and expanded mosaic
 - Open a folder containing lights and calibration frames. Stack Images reads
   their FITS/XISF frame types and puts calibration files into the library. You
   can still choose separate light and calibration folders or add individual files.
-- **Group and match automatically** for flats and darks, or independently choose
-  **Use all as one set** for eligible compatible frames. Review grades, light
+- **Automatic** for flats and darks, or independently choose
+  **All Compatible Frames** for eligible compatible frames. Review grades, light
   matches, flat groups and master recipes before stacking; masters are built or
   reused when processing starts.
 - Tune matching and grading globally or per rig. Review exclusions and overrides,
@@ -267,13 +267,13 @@ Fixed and expanded outputs support per-light calibration sessions. See the
 ### Stack a mosaic from selected lights
 
 Open images, folders, or a TXT/CSV image list, choose **Stack Images**, then select
-**Stacking mode → Expanded mosaic** on the Stack tab. The selected lights
+**Stacking Mode → Expanded Mosaic** on the Stack tab. The selected lights
 are registered onto one expanding canvas per output, retaining overlapping panel
 edges. This works without sky-panel analysis or pre-solving catalogs and has no
 512-light selection cap. The default canvas memory ceiling applies automatically; change it in
-**Processing → Registration and canvas limits** if needed.
+**Processing → Registration and Canvas Limits** if needed.
 
-**Optional sky-panel analysis → Group lights by solved sky position** lets you
+**Sky Panels → Group by sky position** lets you
 solve and review whole panels or individual exposures before stacking, and split
 disconnected fields into separate outputs. Filter splitting remains independent.
 See the [mosaic and GPU guide](docs/MOSAIC-STACKING.md) for calibration scope,

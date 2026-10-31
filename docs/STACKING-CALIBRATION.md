@@ -25,19 +25,20 @@ from calibration automatically. Images without a recorded type are offered as
 lights with an import note; unreadable and set-aside files have explanations.
 The browser keeps all images available for inspection.
 
-**Incomplete lights** defaults to **Stop and review**. If calibration is incomplete,
-resolve the matches or explicitly choose **Exclude from stack** or **Keep with
-available calibration** in Calibration. Exclusion requires at least two usable
-lights in every output. Changing this policy does not restart analysis.
+**Incomplete Lights** defaults to **Stop and Review**. If calibration is incomplete,
+resolve the matches or explicitly choose **Exclude from Stack** or
+**Use Available Calibration** in Calibration. Exclusion requires at least two
+usable lights in every output. Changing this policy does not restart analysis.
 
 ## Optional adjustments
 
-- **Calibration**: add files or a separate library folder, change flat/dark
-  association, and tune matching and grading globally or per rig. Per-rig controls
+- **Calibration**: add files or a separate library folder, choose **Automatic**
+  or **All Compatible Frames** for flats and darks, and tune matching and grading
+  globally or per rig. Per-rig controls
   appear after the first analysis. Camera and telescope metadata identify rigs;
   gain, offset and sensor fields still participate in native compatibility rules.
 - **Review**: inspect frame grades and reasons, per-light matches, master recipes
-  and measured flat groups. **Keep out**, **Use anyway** and **Clear choice** are
+  and measured flat groups. **Keep Out**, **Use Anyway** and **Clear Choice** are
   bound to the exact source path and fingerprint. Editing choices or settings
   updates analysis automatically. Review is optional when calibration is complete.
 - **Processing**: adjust alignment, reference and integration settings if needed.
@@ -53,9 +54,9 @@ Stack Images opens a resizable window with **Stack**, **Calibration**,
 are optional adjustments, not a sequence to complete. Review stays in that window, with an
 unbordered segmented control for Frames, Light Matches, Master Plan and Flat
 Groups. Matching settings live in Calibration. Browser thumbnails remain active
-while setup is idle; only master preparation and stacking pause them. Light folders (under the Stack summary)
-and the optional calibration folder have native path controls; **Choose Folder**,
-**Remove**, **Add Files** and individual file removal keep the two sources
+while setup is idle; only master preparation and stacking pause them. **Source Folders** (under Summary)
+and the optional calibration folder have native path controls; **Choose Folder…**,
+**Remove**, **Add Files…** and individual file removal keep the two sources
 independent. Removing a source only removes it from this setup.
 
 Settings and review choices are drafts until stacking starts. **Cancel**, closing
@@ -105,8 +106,8 @@ candidate orders reuse one session and build, anchored by the first light.
 Builder options key only the recipes they affect. Native session methods decide
 flat use, and the retry carries that session's policy and held-back frames.
 
-Flats and darks each have an independent **Group and match automatically** /
-**Use all as one set** choice, defaulting to automatic. Automatic flats use
+Flats and darks each have an independent **Automatic** /
+**All Compatible Frames** choice, defaulting to automatic. Automatic flats use
 Seiza's raw-response preparation, bounded sample selection, pixel measurements
 and requested pair comparisons to establish response groups and change windows.
 The Flat Groups review section shows measured sessions, families and changes. Darks

@@ -29,7 +29,7 @@ filter. Each group has a channel-reference picker and automatic-selection
 toggle. Automatic selection scores the current inputs when stacking starts,
 so changing the selected lights cannot leave a stale ranking.
 
-Choose **Shared alignment image** to give all groups the same bounds and
+Choose **Alignment Image** to give all groups the same bounds and
 coordinates. The image can be a previously integrated channel stack. It supplies
 geometry, not the channel's brightness or noise scale. Its pixels are not
 integrated unless it is also explicitly included among the selected lights.
