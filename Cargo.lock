@@ -2555,7 +2555,7 @@ dependencies = [
 
 [[package]]
 name = "seiza-mac-core"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "seiza",
  "seiza-cabi",

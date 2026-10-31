@@ -236,12 +236,10 @@ jobs:
             '' \
             "### New in ${version}" \
             '' \
-            '- Open a whole folder of lights and calibration frames. Stack Images reads FITS/XISF frame types and routes calibration files into the library; separate folders and individual files remain supported.' \
-            '- Grade calibration files, group and match flats and darks automatically, or use all eligible compatible frames as one set for either type. Review per-light matches and master recipes, then build or reuse masters for fixed-reference and expanded-mosaic stacking.' \
-            '- Tune matching and grading globally or per rig, keep explicit frame and flat-group choices, and choose whether incomplete calibration stops preparation, excludes lights, or keeps available calibration. Setup changes remain drafts until stacking starts.' \
-            '- Inspect linear flat measurements in the sidebar: channel levels, clipping, noise, dust and vignetting. Live folder stacking retains its existing calibration workflow.' \
-            '- Review calibration in a resizable Inputs / Calibration / Processing / Review window with segmented review sections, active browser thumbnails while setup is idle, and clear processing failures.' \
-            '- Uses published Seiza/C ABI 0.48.0, calibration 0.11.0, stacking 0.55.0 and image I/O 0.12.0. Shared header I/O preserves FITS commentary and native XISF/PixInsight WCS.' \
+            '- Start stacking from File → Stack Images… or the toolbar, then choose Stack… and an output destination. The first tab shows light counts, calibration progress and matching coverage.' \
+            '- Calibration grading, grouping, matching and master generation remain automatic. Frame selection, detailed settings and match review are available without adding required setup steps.' \
+            '- Use concise macOS labels, compact status rows and refreshed stacking guides and screenshots.' \
+            '- Retains Seiza/C ABI 0.48.0 and all calibration, fixed-reference and expanded-mosaic processing from 0.9.0.' \
             '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
             "- [Download the zipped application](${release_base}/Seiza-${version}-universal.zip)" \
@@ -261,6 +259,8 @@ jobs:
             '- Finder content thumbnails and Quick Look previews for FITS and XISF' \
             '- Recursive mixed-format folder browsing with collapsible groups and cached thumbnails' \
             '- Signed in-app updates with user-controlled checks and installs' \
+            '' \
+            "![Stack setup with automatic calibration matching](${screenshot_base}/stacking-calibration/inputs.png)" \
             '' \
             "![Graded calibration and per-light matching](${screenshot_base}/stacking-calibration/review.png)" \
             '' \
