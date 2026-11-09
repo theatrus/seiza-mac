@@ -236,10 +236,10 @@ jobs:
             '' \
             "### New in ${version}" \
             '' \
-            '- Start stacking from File → Stack Images… or the toolbar, then choose Stack… and an output destination. The first tab shows light counts, calibration progress and matching coverage.' \
-            '- Calibration grading, grouping, matching and master generation remain automatic. Frame selection, detailed settings and match review are available without adding required setup steps.' \
-            '- Use concise macOS labels, compact status rows and refreshed stacking guides and screenshots.' \
-            '- Retains Seiza/C ABI 0.48.0 and all calibration, fixed-reference and expanded-mosaic processing from 0.9.0.' \
+            '- Start Stack Images from the welcome window or File menu, even with no viewer collection. Add images, a capture folder, or a TXT/CSV list directly to the setup window.' \
+            '- Build and save bias, dark, dark flat, and flat masters without a light stack. The separate builder supports calibration dependencies, cancellation, and checked output publication.' \
+            '- Keep existing frame selections when adding sources. Setup shows skipped entries and refreshes light and calibration counts after imports.' \
+            '- Uses published Seiza/C ABI 0.50.0, stacking 0.58.0, and calibration 0.12.2, with updated dark integration and FITS/XISF validation.' \
             '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
             "- [Download the zipped application](${release_base}/Seiza-${version}-universal.zip)" \
@@ -260,7 +260,9 @@ jobs:
             '- Recursive mixed-format folder browsing with collapsible groups and cached thumbnails' \
             '- Signed in-app updates with user-controlled checks and installs' \
             '' \
-            "![Stack setup with automatic calibration matching](${screenshot_base}/stacking-calibration/inputs.png)" \
+            "![Stack setup with automatic calibration matching](${screenshot_base}/stacking-calibration/direct-stack.jpg)" \
+            '' \
+            "![Build calibration masters without lights](${screenshot_base}/stacking-calibration/master-builder.jpg)" \
             '' \
             "![Graded calibration and per-light matching](${screenshot_base}/stacking-calibration/review.png)" \
             '' \

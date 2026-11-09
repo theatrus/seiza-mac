@@ -2,8 +2,8 @@
 
 Stack Images calls `seiza_calibration_files_json`, the shared file coordinator
 in [Seiza #406](https://github.com/theatrus/seiza/pull/406), based on Seiza/C ABI
-**0.48.0**, calibration **0.11.0** and stacking **0.55.0**. Cargo pins exact
-published crate versions from [Seiza 0.48](https://github.com/theatrus/seiza/releases/tag/v0.48.0),
+**0.50.0**, calibration **0.12.2** and stacking **0.58.0**. Cargo pins exact
+published crate versions from [Seiza 0.50](https://github.com/theatrus/seiza/releases/tag/v0.50.0),
 with registry checksums in Cargo.lock. The generated C header matches the published package.
 Swift owns setup, access grants and review; the app has no calibration
 orchestrator in Rust. Both canvas modes support per-light sessions. Live
@@ -11,8 +11,9 @@ acquisition retains its existing preparation workflow.
 
 ## Start with defaults
 
-1. Open a capture folder or a TXT/CSV image list and choose **File → Stack Images…**
-   or the toolbar's stack icon. All detected lights are selected automatically.
+1. Choose **File → Stack Images…** or the toolbar's stack icon. The open
+   collection is included if there is one. Use **Add Frames** to add FITS/XISF
+   images, a folder, or a TXT/CSV list. New lights are selected automatically.
 2. Stay on **Stack** while calibration is analyzed and matched. The summary shows
    how many lights have complete calibration. No separate analysis, master-building
    or review approval is required.
@@ -29,6 +30,18 @@ The browser keeps all images available for inspection.
 resolve the matches or explicitly choose **Exclude from Stack** or
 **Use Available Calibration** in Calibration. Exclusion requires at least two
 usable lights in every output. Changing this policy does not restart analysis.
+
+## Build masters without lights
+
+Choose **File → Build Calibration Masters…**. Use **Add Frames**, choose
+**Master Type**, and select at least two compatible raw frames of that type.
+Darks can use a master bias. Flats require a master bias or an uncalibrated
+master dark flat with matching exposure; Seiza checks compatibility at build
+time. Choose **Build Master…** to save an integrated FITS. The app validates the
+build report before publishing and protects input frames and dependencies from
+being overwritten.
+
+![Build a bias master with no light frames](images/stacking-calibration/master-builder.jpg)
 
 ## Optional adjustments
 

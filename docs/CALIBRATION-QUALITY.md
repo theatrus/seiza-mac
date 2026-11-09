@@ -1,8 +1,8 @@
 # Calibration quality
 
-This branch targets core/C ABI 0.48.0, calibration 0.11.0, stacking 0.55.0,
-stretch 0.3.2 and parallax 0.19.6. Cargo pins the published
-[Seiza 0.48 crates](https://github.com/theatrus/seiza/releases/tag/v0.48.0),
+This branch targets core/C ABI 0.50.0, calibration 0.12.2, stacking 0.58.0,
+stretch 0.3.3 and parallax 0.20.1. Cargo pins the published
+[Seiza 0.50 crates](https://github.com/theatrus/seiza/releases/tag/v0.50.0),
 including the shared file coordinator from #406; the generated C header matches
 the published package. Graded library
 setup calls the shared C ABI described in the [setup guide](STACKING-CALIBRATION.md).

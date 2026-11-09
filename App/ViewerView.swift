@@ -273,7 +273,7 @@ struct ViewerView: View {
             preferredBrowserGrouping = grouping
         }
         .onReceive(stackCommandCoordinator.$requestNumber.dropFirst()) { _ in
-            if canStackImages { presentStack() }
+            presentStack()
         }
         .toolbar {
             if showsImageBrowser {
@@ -286,24 +286,17 @@ struct ViewerView: View {
                     .help(showImageBrowser ? "Hide Image Browser" : "Show Image Browser")
                 }
 
-                ToolbarItem {
-                    Button {
-                        presentStack()
-                    } label: {
-                        Label("Stack Images", systemImage: "square.stack.3d.up")
-                    }
-                    .disabled(stackableURLs.count < 2)
-                    .help(
-                        stackableURLs.count < 2
-                            ? "A directory needs at least two FITS or XISF images to stack"
-                            : "Stack Images…"
-                    )
+            }
+            ToolbarItem {
+                Button {
+                    presentStack()
+                } label: {
+                    Label("Stack Images", systemImage: "square.stack.3d.up")
                 }
+                .help("Stack Images…")
             }
         }
     }
-
-    var canStackImages: Bool { stackableURLs.count >= 2 }
 
     private func presentStack() {
         ImageStackWindowController.present(id: stackWindowID, urls: stackableURLs,
@@ -314,7 +307,7 @@ struct ViewerView: View {
         urls[selectedIndex]
     }
 
-    private var stackableURLs: [URL] {
+    var stackableURLs: [URL] {
         urls.filter(ImageCollection.isStackableImage)
     }
 

@@ -1491,6 +1491,16 @@ struct FolderPathControl: NSViewRepresentable {
 
 @MainActor final class ImageStackWindowController: NSObject, NSWindowDelegate {
     private static var windows: [UUID: ImageStackWindowController] = [:]
+    static let standaloneID = UUID()
+
+    static func reactivateFocused() -> Bool {
+        guard let key = NSApp.keyWindow, let existing = windows.values.first(where: { $0.window === key }) else {
+            return false
+        }
+        existing.window.makeKeyAndOrderFront(nil)
+        return true
+    }
+
     private let id: UUID
     private var window: NSWindow!
     private var busy = false
@@ -1532,7 +1542,14 @@ struct FolderPathControl: NSViewRepresentable {
 struct ImageStackWorkflowView: View {
     let urls: [URL]
     let sourceAccessURLs: [URL]
+    @StateObject private var frameImporter = StackFrameImporter()
     @State private var importedFrames: StackInputSelection?
+    @State private var showsImportNotes = false
+    @State private var importNotice: String?
+    @State private var importTask: Task<Void, Never>?
+    @State private var importedSources: [URL] = []
+    private var allAccessURLs: [URL] { sourceAccessURLs + frameImporter.accessURLs }
+    private var protectedSources: [URL] { urls + importedSources + allAccessURLs + providedCalibration }
     private var lightURLs: [URL] { importedFrames?.lights ?? [] }
     let onComplete: (ImageStackBatchResult) -> Void
 
@@ -1566,13 +1583,13 @@ struct ImageStackWorkflowView: View {
     @State private var preparationTask: Task<Void, Never>?
 
     init(urls: [URL], sourceAccessURLs: [URL] = [], onClose: @escaping () -> Void = {}, onBusyChange: @escaping (Bool) -> Void = { _ in }, onComplete: @escaping (ImageStackBatchResult) -> Void) {
-        precondition(!urls.isEmpty)
         self.urls = urls
         self.sourceAccessURLs = sourceAccessURLs
         self.onComplete = onComplete
         self.onClose = onClose
         self.onBusyChange = onBusyChange
         _selectedURLs = State(initialValue: [])
+        _importedFrames = State(initialValue: urls.isEmpty ? StackInputSelection() : nil)
     }
 
     var body: some View {
@@ -1621,6 +1638,7 @@ struct ImageStackWorkflowView: View {
         .onChange(of: libraryModel.preferences.reviewInputs) { _, _ in analyzeCalibration() }
         .onChange(of: calibrationSource) { _, _ in analyzeCalibration() }
         .onDisappear {
+            importTask?.cancel()
             libraryModel.task?.cancel()
             preparationTask?.cancel()
         }
@@ -1723,17 +1741,30 @@ struct ImageStackWorkflowView: View {
             TabView(selection: $setupTab) {
                 Form {
                     Section("Summary") {
+                        StackAddFramesMenu(action: addFrames)
+                            .disabled(isChoosingFile)
+                        if importTask != nil {
+                            ProgressView("Reading frames…")
+                        } else if let importNotice {
+                            Text(importNotice).foregroundStyle(.secondary)
+                        }
+                        if let notes = importedFrames?.notes, !notes.isEmpty {
+                            DisclosureGroup("Import Notes (\(notes.count))", isExpanded: $showsImportNotes) {
+                                ForEach(notes, id: \.self) { Text($0).font(.caption).textSelection(.enabled) }
+                            }
+                        }
                         VStack(alignment: .leading, spacing: 8) {
-                            LabeledContent("Light Frames", value: "\(selectedFrames.count) of \(lightURLs.count) selected")
-                            LabeledContent("Output Files", value: "\(stackGroups.count) FITS \(stackGroups.count == 1 ? "file" : "files")")
+                            StackCountRow(label: "Light Frames", value: "\(selectedFrames.count) of \(lightURLs.count) selected")
+                            StackCountRow(label: "Output Files", value: "\(stackGroups.count) FITS \(stackGroups.count == 1 ? "file" : "files")")
                             if stackGroups.count > 1 {
                                 Text(groupSummary).font(.caption).foregroundStyle(.secondary)
                             }
                         }
-                        .accessibilityElement(children: .contain)
-                        DisclosureGroup("Source Folders") {
-                            ForEach(Array(Set(lightURLs.map { $0.deletingLastPathComponent() })).sorted(by: { $0.path < $1.path }), id: \.self) { folder in
-                                FolderPathControl(url: folder, label: "Light folder")
+                        if !lightURLs.isEmpty {
+                            DisclosureGroup("Source Folders") {
+                                ForEach(Array(Set(lightURLs.map { $0.deletingLastPathComponent() })).sorted(by: { $0.path < $1.path }), id: \.self) { folder in
+                                    FolderPathControl(url: folder, label: "Light folder")
+                                }
                             }
                         }
                     }
@@ -1782,13 +1813,6 @@ struct ImageStackWorkflowView: View {
 
                         }
 
-                        if let importedFrames {
-                            if !importedFrames.notes.isEmpty {
-                                DisclosureGroup("Import Notes (\(importedFrames.notes.count))") {
-                                    ForEach(importedFrames.notes, id: \.self) { Text($0).font(.caption).textSelection(.enabled) }
-                                }
-                            }
-                        }
                         DisclosureGroup("Sky Panels") {
                             Toggle("Group by sky position", isOn: $groupsPanelsAutomatically)
                             Text("Separate disconnected fields using plate solving.")
@@ -1929,7 +1953,7 @@ struct ImageStackWorkflowView: View {
                                 isChoosingFile = true
                                 Task { @MainActor in
                                     if let selected = await StackFilePanels.chooseCalibration(
-                                        directory: urls.first?.deletingLastPathComponent(),
+                                        directory: lightURLs.first?.deletingLastPathComponent(),
                                         message: "Choose a FITS or XISF image to set the common alignment grid.") {
                                         referenceImage = selected
                                     }
@@ -2033,7 +2057,7 @@ struct ImageStackWorkflowView: View {
                 Group {
                     if libraryModel.review != nil {
                         CalibrationLibraryReviewView(model: libraryModel, library: calibrationLibrary, lights: libraryLights,
-                            provided: providedCalibration, accessURLs: sourceAccessURLs, onDone: { setupTab = .inputs })
+                            provided: providedCalibration, accessURLs: allAccessURLs, onDone: { setupTab = .inputs })
                     } else {
                         ContentUnavailableView("No Calibration Review", systemImage: "checklist",
                             description: Text("Add calibration files to view grades and matches."))
@@ -2043,6 +2067,7 @@ struct ImageStackWorkflowView: View {
             }
             .padding(.horizontal, 12)
             .toggleStyle(.checkbox)
+            .disabled(isChoosingFile)
             if let status = StackSetupStatus(error: coordinator.errorMessage, validation: setupValidationMessage,
                 notice: preparationNotice ?? coordinator.cancellationMessage) {
                 Label(status.message, systemImage: status.symbol)
@@ -2053,9 +2078,14 @@ struct ImageStackWorkflowView: View {
             Divider()
 
             HStack {
-                Button("Cancel", role: .cancel) { onClose() }
-                    .disabled(isChoosingFile)
-                    .keyboardShortcut(.cancelAction)
+                if let importTask {
+                    Button("Cancel Import", role: .cancel) { importTask.cancel() }
+                        .keyboardShortcut(.cancelAction)
+                } else {
+                    Button("Cancel", role: .cancel) { onClose() }
+                        .disabled(isChoosingFile)
+                        .keyboardShortcut(.cancelAction)
+                }
                 Spacer()
                 Button("Stack…") {
                     chooseOutputAndStart()
@@ -2203,7 +2233,7 @@ struct ImageStackWorkflowView: View {
         if options.canvasMode == .expanded, referenceImage != nil {
             return "Clear the shared alignment image before using an expanded canvas."
         }
-        guard selectedURLs.count >= 2 else { return "Choose at least two frames." }
+        guard selectedFrames.count >= 2 else { return "Select at least two light frames." }
         if let group = stackGroups.first(where: { $0.inputs.count < 2 }) {
             return "\(group.title) needs at least two selected frames."
         }
@@ -2223,7 +2253,7 @@ struct ImageStackWorkflowView: View {
                 for group in stackGroups {
                     let count = group.inputs.filter { url in
                         guard let index = libraryLights.firstIndex(of: url) else { return false }
-                        return !review.missing[index]
+                        return review.missing.indices.contains(index) && !review.missing[index]
                     }.count
                     if count < 2 { return "\(group.title) needs at least two lights with complete calibration." }
                 }
@@ -2252,7 +2282,7 @@ struct ImageStackWorkflowView: View {
                 if let reference = referenceURLs[group.id], group.inputs.contains(reference) {
                     return reference
                 }
-                return group.inputs.first ?? urls[0]
+                return group.inputs[0]
             },
             set: { referenceURLs[group.id] = $0 }
         )
@@ -2290,7 +2320,7 @@ struct ImageStackWorkflowView: View {
         isChoosingFile = true
         Task { @MainActor in
             selection.wrappedValue = await StackFilePanels.chooseCalibration(
-                directory: urls.first?.deletingLastPathComponent()
+                directory: lightURLs.first?.deletingLastPathComponent()
             )
             isChoosingFile = false
         }
@@ -2311,10 +2341,45 @@ struct ImageStackWorkflowView: View {
         catch { importedFrames = .init(notes: [error.localizedDescription]) }
     }
 
+    private func addFrames(_ kind: StackFrameImportKind) {
+        guard !isChoosingFile else { return }
+        isChoosingFile = true
+        importTask = Task { @MainActor in
+            defer { isChoosingFile = false; importTask = nil }
+            do {
+                guard let incoming = try await frameImporter.choose(kind) else { return }
+                try Task.checkCancellation()
+                importedSources += incoming.sources
+                var frames = importedFrames ?? StackInputSelection()
+                let added = frames.append(incoming.frames)
+                importedFrames = frames
+                selectedURLs.formUnion(added.lights)
+                if !added.lights.isEmpty, groupsPanelsAutomatically {
+                    panelAnalysis = nil
+                }
+                var existing = Set(providedCalibration.map { $0.standardizedFileURL.resolvingSymlinksInPath() })
+                // A removed calibration frame may be explicitly added again.
+                let calibrationFiles = incoming.frames.calibration.filter {
+                    existing.insert($0.standardizedFileURL.resolvingSymlinksInPath()).inserted
+                }
+                providedCalibration += calibrationFiles
+                if !calibrationFiles.isEmpty { calibrationSource = .automatic }
+                showsImportNotes = !incoming.frames.notes.isEmpty
+                importNotice = added.lights.isEmpty && calibrationFiles.isEmpty
+                    ? "No new light or calibration frames."
+                    : nil
+            } catch is CancellationError {
+                importNotice = "Import cancelled."
+            } catch {
+                importNotice = error.localizedDescription
+            }
+        }
+    }
+
     private func analyzeCalibration() {
         guard calibrationSource == .automatic, !libraryLights.isEmpty,
               calibrationLibrary != nil || !providedCalibration.isEmpty else { libraryModel.invalidate(); return }
-        libraryModel.analyze(library: calibrationLibrary, lights: libraryLights, provided: providedCalibration, accessURLs: sourceAccessURLs, debounce: true)
+        libraryModel.analyze(library: calibrationLibrary, lights: libraryLights, provided: providedCalibration, accessURLs: allAccessURLs, debounce: true)
     }
 
     private func chooseCalibrationFiles() {
@@ -2328,7 +2393,10 @@ struct ImageStackWorkflowView: View {
             let chosen: [URL] = await withCheckedContinuation { continuation in
                 panel.begin { response in continuation.resume(returning: response == .OK ? panel.urls : []) }
             }
-            for url in chosen where !providedCalibration.contains(url) { providedCalibration.append(url) }
+            frameImporter.retain(chosen)
+            importedSources += chosen
+            var seen = Set(providedCalibration.map { $0.standardizedFileURL.resolvingSymlinksInPath() })
+            providedCalibration += chosen.filter { seen.insert($0.standardizedFileURL.resolvingSymlinksInPath()).inserted }
             isChoosingFile = false
         }
     }
@@ -2341,7 +2409,7 @@ struct ImageStackWorkflowView: View {
             panel.canChooseFiles = false
             panel.allowsMultipleSelection = false
             panel.directoryURL = calibrationLibrary
-                ?? urls.first?.deletingLastPathComponent()
+                ?? lightURLs.first?.deletingLastPathComponent()
             panel.message = "Choose a library containing raw bias, dark, "
                 + "dark-flat, and flat frames."
             panel.prompt = "Choose"
@@ -2351,6 +2419,7 @@ struct ImageStackWorkflowView: View {
                 }
             }
             if let url {
+                frameImporter.retain([url])
                 calibrationLibrary = url
             }
             isChoosingFile = false
@@ -2375,7 +2444,7 @@ struct ImageStackWorkflowView: View {
                 for: groups,
                 splitByFilter: groups.count > 1,
                 baseName: outputBaseName.trimmingCharacters(in: .whitespacesAndNewlines),
-                directory: urls.first?.deletingLastPathComponent()
+                directory: lightURLs.first?.deletingLastPathComponent()
             )
             isChoosingFile = false
             guard let outputSelection else { return }
@@ -2404,7 +2473,7 @@ struct ImageStackWorkflowView: View {
                     preparationMessage = "Building reviewed calibration masters…"
                     var execution = LibraryRequest(operation: "execute", library: calibrationLibrary, lights: lights,
                         provided: providedCalibration, preferences: preferences, reviewKey: reviewed.reviewKey)
-                    execution.accessURLs += sourceAccessURLs
+                    execution.accessURLs += allAccessURLs
                     let prepared = try await CalibrationLibraryService.perform(execution)
                     let plan = LibraryPreparedPlan(review: prepared, originalPaths: lights.map(\.path), accessURLs: execution.accessURLs)
                     let jobs = try makeLibraryJobs(groups: groups, outputSelection: outputSelection, plan: plan,
@@ -2439,7 +2508,7 @@ struct ImageStackWorkflowView: View {
             return ImageStackJob(group: group, request: ImageStackRequest(inputs: inputs, output: output,
                 outputAccessURL: outputSelection.accessURL, options: stackOptions, calibration: ImageStackCalibration(),
                 referenceImage: referenceImage, choosesReferenceAutomatically: automaticReferenceGroups.contains(group.id),
-                additionalProtectedSources: urls + sourceAccessURLs, libraryPlan: plan))
+                additionalProtectedSources: protectedSources, libraryPlan: plan))
         }
     }
 
@@ -2469,7 +2538,7 @@ struct ImageStackWorkflowView: View {
                             : calibration),
                     referenceImage: referenceImage,
                     choosesReferenceAutomatically: automaticReferenceGroups.contains(group.id),
-                    additionalProtectedSources: urls + sourceAccessURLs
+                    additionalProtectedSources: protectedSources
                 )
             )
         }
@@ -2495,7 +2564,17 @@ struct ImageStackWorkflowView: View {
 }
 
 @MainActor
-private enum StackFilePanels {
+enum StackFilePanels {
+    @MainActor static func present(_ panel: NSSavePanel) async -> NSApplication.ModalResponse {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                panel.begin { continuation.resume(returning: $0) }
+            }
+        } onCancel: {
+            Task { @MainActor in panel.cancel(nil) }
+        }
+    }
+
     struct OutputSelection {
         let outputs: [URL]
         let accessURL: URL

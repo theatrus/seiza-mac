@@ -8,7 +8,7 @@ objects in it. Turn a finished image into a camera tour with depth, motion, and
 titles. Image processing and video encoding run locally; optional online
 stellar-distance lookup sends sky coordinates to astronomical catalogues.
 
-[**Download Seiza for Mac 0.9.1**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.9.1-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
+[**Download Seiza for Mac 0.9.2**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.9.2-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
 **Also from Seiza:** [Core, CLI, and libraries](https://github.com/theatrus/seiza) ·
 [Seiza for Windows](https://github.com/theatrus/seiza-win) ·
@@ -16,13 +16,12 @@ stellar-distance lookup sends sky coordinates to astronomical catalogues.
 
 ## Stack a night of captures
 
-1. **Open the capture folder** with **File → Open…**. It can contain lights,
-   calibration frames and masters in subfolders; separate calibration folders
-   are also supported.
-2. Choose **File → Stack Images…** or the toolbar's stack icon. All lights are
-   selected, and any included calibration is graded and matched automatically.
-   Keep **Fixed Reference** for one field, or choose **Expanded Mosaic** for
-   overlapping fields.
+1. Choose **File → Stack Images…**, then **Add Frames** to import images,
+   a folder, or a TXT/CSV image list. An open viewer collection is included
+   automatically. Folders can contain both lights and calibration.
+2. On **Stack**, keep **Fixed Reference** for one field or choose
+   **Expanded Mosaic** for overlapping fields. Lights are selected and
+   included calibration is matched automatically.
 3. Choose **Stack…**, pick where to save, and start. Seiza builds or reuses the
    calibration masters, aligns and combines the lights, and opens the saved
    linear FITS result. If lights are split by filter, choose an output folder.
@@ -32,15 +31,22 @@ processing controls and match review are optional adjustments, not a checklist.
 If calibration is incomplete, the default stops and explains what needs attention.
 Plate solving and sky-panel analysis are optional, including for mosaics.
 
-![The Stack tab shows selected lights, automatic calibration and the Stack action](docs/images/stacking-calibration/inputs.png)
+![The Stack tab shows selected lights, automatic calibration and the Stack action](docs/images/stacking-calibration/direct-stack.jpg)
 
-## New in 0.9.1
+## New in 0.9.2
 
-Start a stack from **File → Stack Images…** or the toolbar, then choose
-**Stack…** and an output destination. The first tab shows light counts and
-automatic calibration matches; frame selection and advanced settings stay
-available when needed. Shorter macOS labels and updated guides make the default
-path easier to follow.
+Start from the welcome window, the File menu, or any viewer. Add frames
+directly to setup without opening them in the viewer first. Existing frame
+selections are preserved when adding another source.
+
+Choose **File → Build Calibration Masters…** to integrate raw bias, dark,
+dark flat, or flat frames without lights. Select one compatible set and supply
+a master bias or matching master dark flat when building flats. This is useful
+for preparing reusable masters; Stack Images still builds them automatically
+when matching raw calibration files.
+
+Uses the published [Seiza 0.50](https://github.com/theatrus/seiza/releases/tag/v0.50.0)
+core, including improved dark integration and updated FITS/XISF validation.
 
 ## Calibration features from 0.9.0
 
@@ -418,7 +424,7 @@ and refits the whole frame as its window changes size.
 
 ## Download
 
-[**Download Seiza for Mac 0.9.1**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.9.1-universal.dmg), open it, and drag Seiza to Applications.
+[**Download Seiza for Mac 0.9.2**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.9.2-universal.dmg), open it, and drag Seiza to Applications.
 
 Or install with [Homebrew](https://brew.sh) from the
 [theatrus/homebrew-seiza tap](https://github.com/theatrus/homebrew-seiza):
@@ -492,8 +498,8 @@ DerivedData/Build/Products/Debug/Seiza.app
 
 Open `Seiza.xcodeproj` to run and sign it with a local development team.
 
-This branch targets `seiza-cabi`/`seiza` 0.48.0, `seiza-calibration` 0.11.0,
-`seiza-parallax` 0.19.6, `seiza-stacking` 0.55.0 and `seiza-download` 0.9.0.
+This branch targets `seiza-cabi`/`seiza` 0.50.0, `seiza-calibration` 0.12.2,
+`seiza-parallax` 0.20.1, `seiza-stacking` 0.58.0 and `seiza-download` 0.9.1.
 The shared file coordinator introduced by [Seiza #406](https://github.com/theatrus/seiza/pull/406)
 is upstream. Swift calls its C ABI directly; the Mac calibration coordinator has
 moved upstream.

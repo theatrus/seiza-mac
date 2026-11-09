@@ -2697,7 +2697,7 @@ final class DocumentWindowLifecycleTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let delegate = AppDelegate()
         let item = NSMenuItem(title: "Stack Images…", action: #selector(AppDelegate.stackImages(_:)), keyEquivalent: "")
-        XCTAssertFalse(delegate.validateMenuItem(item))
+        XCTAssertTrue(delegate.validateMenuItem(item))
         let images = ["a.fits", "b.fits", "raster.png"].map { root.appendingPathComponent($0) }
         let cards = ["SIMPLE  =                    T", "BITPIX  =                   16", "NAXIS   =                    2", "NAXIS1  =                    2", "NAXIS2  =                    2", "IMAGETYP= 'LIGHT'", "END"]
         var fits = Data(cards.map { $0.padding(toLength: 80, withPad: " ", startingAt: 0) }.joined().utf8)
@@ -2709,7 +2709,7 @@ final class DocumentWindowLifecycleTests: XCTestCase {
         let lightsWindow = try XCTUnwrap(delegate.documentWindow(for: images[0]))
         defer { lightsWindow.close() }
         let host = try XCTUnwrap(lightsWindow.contentViewController as? NSHostingController<ViewerView>)
-        XCTAssertTrue(host.rootView.canStackImages)
+        XCTAssertEqual(host.rootView.stackableURLs.count, 2)
         let coordinator = host.rootView.stackCommandCoordinator
         let beforeWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
         defer {
@@ -2722,9 +2722,9 @@ final class DocumentWindowLifecycleTests: XCTestCase {
         let rasterWindow = try XCTUnwrap(delegate.documentWindow(for: images[2]))
         defer { rasterWindow.close() }
         let rasterHost = try XCTUnwrap(rasterWindow.contentViewController as? NSHostingController<ViewerView>)
-        XCTAssertFalse(rasterHost.rootView.canStackImages)
+        XCTAssertTrue(rasterHost.rootView.stackableURLs.isEmpty)
         delegate.stackImages(in: rasterWindow)
-        XCTAssertEqual(rasterHost.rootView.stackCommandCoordinator.requestNumber, 0)
+        XCTAssertEqual(rasterHost.rootView.stackCommandCoordinator.requestNumber, 1)
         XCTAssertEqual(coordinator.requestNumber, 1, "The inactive collection must not receive the command")
     }
 

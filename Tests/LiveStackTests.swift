@@ -1321,6 +1321,80 @@ final class CalibrationPreparationServiceTests: XCTestCase {
         }
     }
 
+    func testStandaloneMasterExportBuildsBiasAndFlatAndProtectsHardLinks() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func sources(_ role: String, level: Int16) throws -> [URL] {
+            try (1...2).map { index in
+                try SyntheticFrame.write(width: 64, height: 64,
+                    values: Array(repeating: level + Int16(index), count: 64 * 64),
+                    cards: ["IMAGETYP= '\(role)'", "EXPTIME =                  2.0"] + sensorCards(),
+                    directory: root, name: "\(role)-\(index).fits")
+            }
+        }
+        let biases = try sources("BIAS", level: 100)
+        let alias = root.appendingPathComponent("protected.fits")
+        try FileManager.default.linkItem(at: biases[0], to: alias)
+        let original = try Data(contentsOf: biases[0])
+        let biasRequest = CalibrationMasterBuildRequest(kind: "bias", inputs: biases.map(\.path), output: "")
+        do {
+            _ = try await CalibrationMasterExport.build(biasRequest, output: alias, protectedSources: [])
+            XCTFail("A master must not replace an alias of an input")
+        } catch is ImageStackError { }
+        XCTAssertEqual(try Data(contentsOf: alias), original)
+
+        let bias = root.appendingPathComponent("master-bias.fits")
+        let biasReport = try await CalibrationMasterExport.build(biasRequest, output: bias, protectedSources: [])
+        XCTAssertEqual(biasReport.inputFrames, 2)
+        XCTAssertTrue(try CalibrationService.probe(path: bias.path).isMaster)
+
+        let flats = try sources("FLAT", level: 2000)
+        let flat = root.appendingPathComponent("master-flat.fits")
+        let flatRequest = CalibrationMasterBuildRequest(kind: "flat", inputs: flats.map(\.path),
+            output: "", bias: bias.path)
+        // Exercise replacement of an existing destination after native validation.
+        try Data("old output".utf8).write(to: flat)
+        let flatReport = try await CalibrationMasterExport.build(flatRequest, output: flat, protectedSources: [])
+        XCTAssertTrue(flatReport.normalized)
+        XCTAssertEqual(flatReport.output, flat.path)
+        XCTAssertTrue(try CalibrationService.probe(path: flat.path).calibrationState.flatNormalized)
+
+        let darkFlats = try sources("DARKFLAT", level: 110)
+        let darkFlat = root.appendingPathComponent("master-dark-flat.fits")
+        let darkRequest = CalibrationMasterBuildRequest(kind: "dark", inputs: darkFlats.map(\.path), output: "")
+        let darkReport = try await CalibrationMasterExport.build(darkRequest, output: darkFlat, protectedSources: [])
+        XCTAssertFalse(darkReport.biasSubtracted)
+        let withDarkFlat = CalibrationMasterBuildRequest(kind: "flat", inputs: flats.map(\.path),
+            output: "", dark: darkFlat.path)
+        let corrected = try await CalibrationMasterExport.build(withDarkFlat, output: flat, protectedSources: [])
+        XCTAssertTrue(corrected.darkSubtracted)
+        XCTAssertTrue(corrected.normalized)
+        XCTAssertEqual(try Data(contentsOf: biases[0]), original)
+    }
+
+    func testAppendStackInputsDoesNotReaddPreviouslyImportedLights() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let values = [Int16](repeating: 100, count: 16)
+        let light = try SyntheticFrame.write(width: 4, height: 4, values: values, cards: ["IMAGETYP= 'LIGHT'"],
+            directory: root, name: "light.fits")
+        let bias = try SyntheticFrame.write(width: 4, height: 4, values: values, cards: ["IMAGETYP= 'BIAS'"],
+            directory: root, name: "bias.fits")
+        let alias = root.appendingPathComponent("alias.fits")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: light)
+        let list = root.appendingPathComponent("frames.txt")
+        try Data("alias.fits\nbias.fits\n".utf8).write(to: list)
+        var selection = try StackInputService.classify([light])
+        let scan = try ImageCollection.scan(from: [list])
+        let added = selection.append(try StackInputService.classify(scan.images))
+        XCTAssertTrue(added.lights.isEmpty)
+        XCTAssertEqual(selection.lights, [light])
+        XCTAssertEqual(added.calibration, [bias])
+        XCTAssertEqual(added.rawCalibrationRoles[bias], CalibrationFrameRole.bias)
+    }
+
     func testPreparesMastersInDependencyOrderAndReusesTheCache() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("seiza-calibration-\(UUID().uuidString)")
