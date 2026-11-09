@@ -52,9 +52,10 @@ pointer to zoom, drag or scroll to pan, and press **Command-0** to fit again.
 
 ## Stack a directory
 
-1. Open the folder with **File → Open…**, then choose **File → Stack Images…**
-   or the toolbar's stack icon. TXT/CSV image lists work too. At least two
-   FITS/XISF lights are needed; raster images stay in the browser.
+1. Choose **File → Stack Images…** or the toolbar's stack icon. Use **Add Frames**
+   to import images, a folder, or a TXT/CSV image list. If a viewer collection
+   is open, it is included automatically. At least two FITS/XISF lights are
+   needed; raster images stay in the browser.
 2. On **Stack**, keep **Fixed Reference** for repeated exposures of one field,
    or choose **Expanded Mosaic** for overlapping fields. All lights are already
    selected. Included calibration files are analyzed and matched automatically.
@@ -66,6 +67,10 @@ You do not need to visit every tab, start calibration analysis, build masters
 separately, or approve the review. Wait for automatic matching to finish. If
 calibration is incomplete, the default stops with an explanation; use Calibration
 or Review to resolve it, or explicitly choose a different incomplete-light policy.
+
+To build calibration masters without lights, choose **File → Build Calibration
+Masters…**. See the [calibration guide](STACKING-CALIBRATION.md#build-masters-without-lights)
+for frame selection and dependencies.
 
 ### Optional adjustments
 

@@ -483,10 +483,28 @@ struct StackInputSelection: Sendable {
     var lights: [URL] = []
     var calibration: [URL] = []
     var notes: [String] = []
+    var rawCalibrationRoles: [URL: String] = [:]
+
+    /// Append only new paths; callers can select the newly added lights
+    /// without reselecting previously excluded ones.
+    @discardableResult
+    mutating func append(_ incoming: Self) -> Self {
+        var seen = Set((lights + calibration).map { $0.standardizedFileURL.resolvingSymlinksInPath() })
+        var added = Self(notes: incoming.notes)
+        added.lights = incoming.lights.filter { seen.insert($0.standardizedFileURL.resolvingSymlinksInPath()).inserted }
+        added.calibration = incoming.calibration.filter { seen.insert($0.standardizedFileURL.resolvingSymlinksInPath()).inserted }
+        for url in added.calibration { added.rawCalibrationRoles[url] = incoming.rawCalibrationRoles[url] }
+        lights += added.lights
+        calibration += added.calibration
+        rawCalibrationRoles.merge(added.rawCalibrationRoles) { old, _ in old }
+        var knownNotes = Set(notes)
+        notes += added.notes.filter { knownNotes.insert($0).inserted }
+        return added
+    }
 }
 
 enum StackInputService {
-    static func classify(_ urls: [URL], accessURLs: [URL] = []) throws -> StackInputSelection {
+    static func classify(_ urls: [URL], accessURLs: [URL] = [], reportUnknownLights: Bool = true) throws -> StackInputSelection {
         let accessed = (accessURLs + urls).filter { $0.startAccessingSecurityScopedResource() }
         defer { accessed.forEach { $0.stopAccessingSecurityScopedResource() } }
         var result = StackInputSelection()
@@ -500,6 +518,7 @@ enum StackInputService {
                 switch probe.role {
                 case CalibrationFrameRole.bias, CalibrationFrameRole.dark, CalibrationFrameRole.darkFlat, CalibrationFrameRole.flat:
                     result.calibration.append(url)
+                    if probe.isRawCandidate { result.rawCalibrationRoles[url] = probe.role }
                 case CalibrationFrameRole.light where !probe.isMaster, CalibrationFrameRole.unknown where !probe.isMaster:
                     result.lights.append(url)
                     if probe.role == CalibrationFrameRole.unknown { unknown += 1 }
@@ -510,7 +529,7 @@ enum StackInputService {
                 result.notes.append("\(url.lastPathComponent): \(error.localizedDescription)")
             }
         }
-        if unknown > 0 { result.notes.append("\(unknown) images have no recorded frame type and are offered as lights. Review the light selection before stacking.") }
+        if reportUnknownLights, unknown > 0 { result.notes.append("\(unknown) images have no recorded frame type and are offered as lights. Review the light selection before stacking.") }
         return result
     }
 }

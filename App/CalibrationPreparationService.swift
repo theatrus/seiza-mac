@@ -990,7 +990,7 @@ struct CalibrationPreparationService {
             cancellation.cancel()
         }
         try Task.checkCancellation()
-        try validateBuildResult(
+        try Self.validateBuildResult(
             built,
             request: stagedRequest,
             stagingOutput: stagingMaster.path,
@@ -1265,14 +1265,14 @@ struct CalibrationPreparationService {
             build.kind == kind,
             LiveStackPath.equals(build.output, masterURL.path),
             build.width > 0, build.height > 0, build.channels > 0,
-            hasExpectedCalibrationState(build, request: request),
+            Self.hasExpectedCalibrationState(build, request: request),
             build.schemaVersion < 2 || build.requestedFrames == request.inputs.count,
-            hasValidInputPartition(build, requestedInputs: request.inputs, minimum: minimum)
+            Self.hasValidInputPartition(build, requestedInputs: request.inputs, minimum: minimum)
         else { return nil }
         return report
     }
 
-    private func hasExpectedCalibrationState(
+    private static func hasExpectedCalibrationState(
         _ result: CalibrationMasterBuildResult,
         request: CalibrationMasterBuildRequest
     ) -> Bool {
@@ -1287,7 +1287,7 @@ struct CalibrationPreparationService {
             && result.normalized == expected.normalized
     }
 
-    private func hasValidInputPartition(
+    private static func hasValidInputPartition(
         _ result: CalibrationMasterBuildResult,
         requestedInputs: [String],
         minimum: Int
@@ -1327,7 +1327,7 @@ struct CalibrationPreparationService {
         return reported == requested
     }
 
-    private func validateBuildResult(
+    static func validateBuildResult(
         _ result: CalibrationMasterBuildResult,
         request: CalibrationMasterBuildRequest,
         stagingOutput: String,
@@ -1338,10 +1338,10 @@ struct CalibrationPreparationService {
             && LiveStackPath.equals(result.output, stagingOutput)
             && result.width > 0 && result.height > 0 && result.channels > 0
             && (result.schemaVersion < 2 || result.requestedFrames == request.inputs.count)
-            && hasValidInputPartition(
+            && Self.hasValidInputPartition(
                 result, requestedInputs: request.inputs, minimum: minimum)
-            && hasExpectedCalibrationState(result, request: request)
-            && fileLength(stagingOutput) > 0
+            && Self.hasExpectedCalibrationState(result, request: request)
+            && Self.fileLength(stagingOutput) > 0
         guard valid else {
             throw CalibrationServiceError.invalidResponse(
                 "The Seiza core returned an invalid master-\(request.kind) build result.")
@@ -1450,7 +1450,7 @@ struct CalibrationPreparationService {
         Int64((date.timeIntervalSince1970 * 1_000_000_000).rounded())
     }
 
-    private func fileLength(_ path: String) -> Int64 {
+    private static func fileLength(_ path: String) -> Int64 {
         let attributes = try? FileManager.default.attributesOfItem(atPath: path)
         return ((attributes?[.size] as? NSNumber)?.int64Value) ?? 0
     }

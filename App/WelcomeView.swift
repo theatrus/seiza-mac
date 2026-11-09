@@ -3,7 +3,8 @@ import SwiftUI
 
 struct WelcomeView: View {
     let openPanel: () -> Void
-    let openImageList: () -> Void
+    let stackImages: () -> Void
+    let buildMasters: () -> Void
     let openURLs: ([URL]) -> Void
 
     @State private var isDropTarget = false
@@ -26,18 +27,15 @@ struct WelcomeView: View {
             Text("A fast native home for astronomy images")
                 .font(.title3)
                 .foregroundStyle(.secondary)
-            Button("Open Images or Folder…") {
+            Button("Open…") {
                 openPanel()
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            Button("Open Image List…", action: openImageList)
-                .help("Open images listed in a TXT or CSV file")
-            Text("Open a capture folder to stack images.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
+            HStack {
+                Button("Stack Images…", action: stackImages)
+                Button("Build Calibration Masters…", action: buildMasters)
+            }
             Text("Drop images, a folder, or a TXT/CSV image list here")
                 .font(.callout)
                 .foregroundStyle(.secondary)

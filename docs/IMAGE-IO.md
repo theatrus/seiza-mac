@@ -1,6 +1,6 @@
 # Image I/O boundary
 
-The Mac app uses the published [Seiza 0.48 release](https://github.com/theatrus/seiza/releases/tag/v0.48.0)
+The Mac app uses the published [Seiza 0.50 release](https://github.com/theatrus/seiza/releases/tag/v0.50.0)
 from crates.io, with exact direct-dependency versions and registry checksums in
 Cargo.lock. The complete C header matches the published `seiza-cabi` package.
 It includes the shared file-calibration coordinator,

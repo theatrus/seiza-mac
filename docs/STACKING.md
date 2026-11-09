@@ -5,8 +5,8 @@ choose **File → Stack Images…**, then **Stack…** and an output destination
 lights are selected initially; included calibration is matched automatically.
 See the [short stacking guide](../README.md#stack-a-night-of-captures).
 
-The app uses `seiza-cabi`/`seiza` **0.48.0**, `seiza-stacking` **0.55.0**
-and calibration **0.11.0**. Cargo pins exact published registry crates with
+The app uses `seiza-cabi`/`seiza` **0.50.0**, `seiza-stacking` **0.58.0**
+and calibration **0.12.2**. Cargo pins exact published registry crates with
 checksums. The shared file coordinator comes from [Seiza #406](https://github.com/theatrus/seiza/pull/406) and `Shared/seiza_cabi.h` matches its generated header. The graded setup
 calls the shared C ABI directly; the native library/session/evidence orchestration
 lives in Seiza. Its fixed and expanded

@@ -12,9 +12,8 @@ struct SeizaApp: App {
                 openPanel: {
                     appDelegate.openDocument(nil)
                 },
-                openImageList: {
-                    appDelegate.openImageList(nil)
-                },
+                stackImages: { appDelegate.presentStandaloneStack() },
+                buildMasters: { CalibrationMasterWindowController.present() },
                 openURLs: { urls in
                     appDelegate.open(urls)
                 }
@@ -58,6 +57,8 @@ struct SeizaApp: App {
                 Divider()
 
                 Button("Stack Images…") { appDelegate.stackImages(nil) }
+
+                Button("Build Calibration Masters…") { appDelegate.buildCalibrationMasters() }
 
                 Button("Color Tools…") { ColorToolsWindowController.present() }
 
@@ -196,22 +197,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private func stackingSession(for window: NSWindow?) -> DocumentWindowSession? {
         guard let window,
               let session = documentWindows.values.first(where: { $0.controller?.window === window }),
-              let host = window.contentViewController as? NSHostingController<ViewerView>,
-              host.rootView.canStackImages else { return nil }
+              window.contentViewController is NSHostingController<ViewerView> else { return nil }
         return session
     }
 
-    private var canStackActiveDocument: Bool {
-        stackingSession(for: activeDocumentSession?.controller?.window) != nil
-    }
-
     @objc func stackImages(_ sender: Any?) {
-        guard let window = activeDocumentSession?.controller?.window else { return }
-        stackImages(in: window)
+        if ImageStackWindowController.reactivateFocused() { return }
+        if let window = activeDocumentSession?.controller?.window, stackingSession(for: window) != nil {
+            stackImages(in: window)
+        } else {
+            presentStandaloneStack()
+        }
     }
 
     func stackImages(in window: NSWindow) {
         stackingSession(for: window)?.stackCommandCoordinator.requestStack()
+    }
+
+    func presentStandaloneStack() {
+        ImageStackWindowController.present(id: ImageStackWindowController.standaloneID,
+            urls: [], sourceAccessURLs: []) { [weak self] result in
+                self?.open(result.results.map(\.output), additionalAccessURLs: result.outputAccessURLs)
+            }
+    }
+
+    func buildCalibrationMasters() {
+        let viewer = (activeDocumentSession?.controller?.window?.contentViewController
+            as? NSHostingController<ViewerView>)?.rootView
+        CalibrationMasterWindowController.present(
+            urls: viewer?.stackableURLs ?? [], accessURLs: viewer?.sourceAccessURLs ?? [])
     }
 
     @objc func openImageList(_ sender: Any?) {
@@ -274,7 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
         case #selector(stackImages(_:)):
-            return canStackActiveDocument
+            return true
         case #selector(undoImageEdit(_:)):
             if let video = ParallaxWindowController.activeSession { return video.canUndo && !video.isBusy }
             return activeDocumentSession?.editCoordinator.canUndo == true
@@ -323,7 +337,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         open([url])
     }
 
-    func open(_ urls: [URL]) {
+    func open(_ urls: [URL], additionalAccessURLs: [URL] = []) {
         let request = normalizedRoots(from: urls)
         guard let windowKey = request.roots.first else { return }
 
@@ -335,7 +349,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             return
         }
 
-        let session = DocumentWindowSession(accessURLs: request.accessURLs)
+        let session = DocumentWindowSession(accessURLs: request.accessURLs + additionalAccessURLs)
         observeEditAvailability(for: session)
         let window = NSWindow()
         let controller = NSWindowController(window: window)
@@ -778,7 +792,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         guard let item = menu.items.first(where: { $0.title == "Stack Images…" }) else { return }
         item.target = self
         item.action = #selector(stackImages(_:))
-        item.isEnabled = canStackActiveDocument
+        item.isEnabled = true
     }
 
     private func routeEditCommands(in editMenu: NSMenu) {
