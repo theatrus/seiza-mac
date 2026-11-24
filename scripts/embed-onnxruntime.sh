@@ -22,5 +22,5 @@ archive "$arm.tgz" 2e1344a1926ee50eb25b38153cb6992c3567515aef0e677a1a520a1798896
 tar -xzf "$cache/$arm.tgz" -C "$stage" "$arm/lib/libonnxruntime.1.31.1.dylib" "$arm/LICENSE" "$arm/ThirdPartyNotices.txt"
 cp "$stage/$arm/LICENSE" "$stage/$arm/ThirdPartyNotices.txt" "$notices/"
 library="$stage/$arm/lib/libonnxruntime.1.31.1.dylib"
-xcrun lipo -verify_arch arm64 "$library"
+xcrun lipo "$library" -verify_arch arm64
 install -m 755 "$library" "$frameworks/libonnxruntime.dylib"

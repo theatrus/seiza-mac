@@ -16,7 +16,7 @@ test -d "$plugins_path"
 test -d "$quicklook_path"
 test -d "$thumbnail_path"
 test -d "$sparkle_path"
-xcrun lipo -verify_arch arm64 "$app_path/Contents/Frameworks/libonnxruntime.dylib"
+xcrun lipo "$app_path/Contents/Frameworks/libonnxruntime.dylib" -verify_arch arm64
 test -s "$app_path/Contents/Resources/ONNXRuntime/LICENSE"
 test -s "$app_path/Contents/Resources/ONNXRuntime/ThirdPartyNotices.txt"
 
