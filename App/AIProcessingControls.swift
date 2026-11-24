@@ -33,6 +33,34 @@ struct ProcessingRecipe: Codable {
 
     static func url(for source: URL) -> URL { source.appendingPathExtension("seiza.json") }
 
+    // A single Finder document grant can exclude its siblings. Remember a folder only
+    // when the user selects it to save a recipe. Opening images never prompts.
+    private static func folderKey(_ source: URL) -> String {
+        "processingFolder:" + source.deletingLastPathComponent().standardizedFileURL.path
+    }
+    private static func rememberedFolder(for source: URL) -> URL? {
+        guard let data = UserDefaults.standard.data(forKey: folderKey(source)) else { return nil }
+        var stale = false
+        return try? URL(resolvingBookmarkData: data, options: [.withSecurityScope, .withoutUI],
+                        relativeTo: nil, bookmarkDataIsStale: &stale)
+    }
+    @MainActor static func grantSaveAccess(for source: URL) throws {
+        let folder = source.deletingLastPathComponent()
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.directoryURL = folder
+        panel.prompt = "Allow Access"
+        panel.message = "Choose the image’s folder to save its processing settings."
+        guard panel.runModal() == .OK, let selected = panel.url else { throw CancellationError() }
+        guard selected.resolvingSymlinksInPath().path == folder.resolvingSymlinksInPath().path else {
+            throw SeizaCoreError.message("Choose the folder containing " + source.lastPathComponent + ".")
+        }
+        let data = try selected.bookmarkData(options: .withSecurityScope,
+                                             includingResourceValuesForKeys: nil, relativeTo: nil)
+        UserDefaults.standard.set(data, forKey: folderKey(source))
+    }
+
     private final class Presenter: NSObject, NSFilePresenter {
         let primaryPresentedItemURL: URL?
         let presentedItemURL: URL?
@@ -43,6 +71,9 @@ struct ProcessingRecipe: Codable {
         }
     }
     private static func coordinate<T>(_ source: URL, write: Bool, access: (URL) throws -> T) throws -> T {
+        let folder = rememberedFolder(for: source)
+        let accessFolder = folder?.startAccessingSecurityScopedResource() == true
+        defer { if accessFolder { folder?.stopAccessingSecurityScopedResource() } }
         let presenter = Presenter(source)
         NSFileCoordinator.addFilePresenter(presenter)
         defer { NSFileCoordinator.removeFilePresenter(presenter) }
@@ -72,6 +103,10 @@ struct ProcessingRecipe: Codable {
         } catch let error as NSError where error.domain == NSCocoaErrorDomain &&
             [NSFileReadNoSuchFileError, NSFileNoSuchFileError].contains(error.code) {
             return nil
+        } catch let error as NSError where error.domain == NSCocoaErrorDomain &&
+            error.code == NSFileReadNoPermissionError && !FileManager.default.fileExists(atPath: url(for: source).path) {
+            // A single-file grant can hide a nonexistent sibling, too.
+            return nil
         }
     }
 
@@ -80,6 +115,53 @@ struct ProcessingRecipe: Codable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(self)
         try Self.coordinate(source, write: true) { try data.write(to: $0, options: .atomic) }
+    }
+}
+
+/// AppKit owns the mouse sequence so the processing scroll view cannot take a rectangle drag.
+struct AIRegionPicker: NSViewRepresentable {
+    let width: Int
+    let height: Int
+    let selected: (AIRegion) -> Void
+
+    func makeNSView(context: Context) -> Canvas { Canvas() }
+    func updateNSView(_ view: Canvas, context: Context) {
+        view.selected = { rect in
+            let x = min(width - 1, max(0, Int(floor(rect.minX * CGFloat(width)))))
+            let y = min(height - 1, max(0, Int(floor(rect.minY * CGFloat(height)))))
+            let right = min(width, max(x + 1, Int(ceil(rect.maxX * CGFloat(width)))))
+            let bottom = min(height, max(y + 1, Int(ceil(rect.maxY * CGFloat(height)))))
+            selected(AIRegion(x: x, y: y, width: right - x, height: bottom - y))
+        }
+    }
+
+    final class Canvas: NSView {
+        override var isFlipped: Bool { true }
+        var selected: ((CGRect) -> Void)?
+        private var start: CGPoint?
+        private var selection: CGRect? { didSet { needsDisplay = true } }
+        override func resetCursorRects() { addCursorRect(bounds, cursor: .crosshair) }
+        override func mouseDown(with event: NSEvent) {
+            start = convert(event.locationInWindow, from: nil)
+        }
+        override func mouseDragged(with event: NSEvent) {
+            guard let start else { return }
+            let end = convert(event.locationInWindow, from: nil)
+            selection = CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
+                               width: abs(start.x - end.x), height: abs(start.y - end.y)).intersection(bounds)
+        }
+        override func mouseUp(with event: NSEvent) {
+            mouseDragged(with: event)
+            defer { start = nil; selection = nil }
+            guard let r = selection, !r.isEmpty, bounds.width > 0, bounds.height > 0 else { return }
+            selected?(CGRect(x: r.minX / bounds.width, y: r.minY / bounds.height,
+                             width: r.width / bounds.width, height: r.height / bounds.height))
+        }
+        override func draw(_ dirtyRect: NSRect) {
+            guard let selection else { return }
+            NSColor.systemYellow.setStroke()
+            NSBezierPath(rect: selection).stroke()
+        }
     }
 }
 
@@ -93,6 +175,8 @@ struct AIProcessingControls: View {
     @State private var expanded = true
     @State private var advanced = false
     @State private var models: [String] = []
+    @State private var devices = ["cpu"]
+    @State private var confirmRemove = false
     @State private var published: [String] = []
     @State private var busy = false
     @State private var message: String?
@@ -141,7 +225,13 @@ struct AIProcessingControls: View {
                 }
             }
         }.onChange(of: advanced) { _, open in
-            if open { manage { try AIRestoration.shared.installed().map(\.name) } }
+            if open {
+                manage { try AIRestoration.shared.installed().map(\.name) }
+                Task {
+                    do { devices = try await Task.detached { try AIRestoration.shared.backends() }.value }
+                    catch { message = error.localizedDescription }
+                }
+            }
         }
     }
 
@@ -165,14 +255,7 @@ struct AIProcessingControls: View {
                             .frame(width: CGFloat(r.width) * sx, height: CGFloat(r.height) * sy)
                             .position(x: (CGFloat(r.x) + CGFloat(r.width) / 2) * sx, y: (CGFloat(r.y) + CGFloat(r.height) / 2) * sy)
                     }
-                    Color.clear.contentShape(Rectangle()).gesture(DragGesture(minimumDistance: 1)
-                        .onEnded { value in
-                            let x = min(width - 1, max(0, Int(floor(min(value.startLocation.x, value.location.x) / sx))))
-                            let y = min(height - 1, max(0, Int(floor(min(value.startLocation.y, value.location.y) / sy))))
-                            let right = min(width, max(x + 1, Int(ceil(max(value.startLocation.x, value.location.x) / sx))))
-                            let bottom = min(height, max(y + 1, Int(ceil(max(value.startLocation.y, value.location.y) / sy))))
-                            region = AIRegion(x: x, y: y, width: right - x, height: bottom - y)
-                        })
+                    AIRegionPicker(width: width, height: height) { region = $0 }
                 }
             }.frame(maxHeight: 160).help("Drag across the image to select a preview rectangle.")
             .accessibilityLabel("Preview rectangle")
@@ -211,7 +294,7 @@ struct AIProcessingControls: View {
             }.controlSize(.small)
             Picker("Device", selection: parameters.backend) {
                 Text("Automatic").tag(nil as String?)
-                ForEach(["cpu", "neural-engine", "coreml-gpu", "coreml-cpu", "webgpu"], id: \.self) {
+                ForEach(devices, id: \.self) {
                     Text(["cpu": "CPU", "neural-engine": "Neural Engine", "coreml-gpu": "Core ML GPU",
                           "coreml-cpu": "Core ML CPU", "webgpu": "WebGPU"][$0] ?? $0).tag(Optional($0))
                 }
@@ -223,7 +306,20 @@ struct AIProcessingControls: View {
             }
             TextField("Tile size (automatic)", value: parameters.tile, format: .number)
             if let selected = settings?.model, models.contains(selected) {
-                Button("Verify Model") { manage { try AIRestoration.shared.verify(selected); return try AIRestoration.shared.installed().map(\.name) } }
+                HStack {
+                    Button("Verify Model") {
+                        manage { try AIRestoration.shared.verify(selected); return try AIRestoration.shared.installed().map(\.name) }
+                    }
+                    Button("Remove…") { confirmRemove = true }
+                }
+                .confirmationDialog("Remove " + selected + "?", isPresented: $confirmRemove) {
+                    Button("Remove Model", role: .destructive) {
+                        // Disabling the step prevents a new preview from downloading the model again.
+                        settings = nil
+                        retained.model = nil
+                        manage { try AIRestoration.shared.remove(selected); return try AIRestoration.shared.installed().map(\.name) }
+                    }
+                }
             }
         }.disabled(busy)
     }

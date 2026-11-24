@@ -25,9 +25,11 @@ struct FITSStretchControlsView: View {
         FITSStretchStack,
         FITSBackgroundConfiguration?,
         FITSDeconvolutionConfiguration?, AIProcessing?
-    ) -> Void
+    ) async throws -> Void
     let cancel: () -> Void
 
+    @State private var saveTask: Task<Void, Never>?
+    @State private var saveError: String?
     @State private var previewTask: Task<Void, Never>?
     @State private var handledDismissal = false
     @State private var retainedBackground = FITSBackgroundConfiguration.default
@@ -73,6 +75,7 @@ struct FITSStretchControlsView: View {
                                 Label("Add Stage", systemImage: "plus")
                             }
                             .help("Add another stretch stage")
+                            .disabled(stages.count >= 64)
                             Button(action: undo) {
                                 Label("Undo Stretch", systemImage: "arrow.uturn.backward")
                                     .labelStyle(.iconOnly)
@@ -249,7 +252,7 @@ struct FITSStretchControlsView: View {
                         HStack(spacing: 8) {
                             ProgressView()
                                 .controlSize(.small)
-                            Text("Updating live preview…")
+                            Text(model.previewProgress ?? "Updating live preview…")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -263,27 +266,34 @@ struct FITSStretchControlsView: View {
                 .padding(16)
             }
             .frame(maxHeight: contentMaxHeight)
+            .disabled(saveTask != nil)
 
             Divider()
 
             HStack {
                 Button("Cancel") {
+                    saveTask?.cancel()
                     handledDismissal = true
                     cancel()
                 }
                     .keyboardShortcut(.cancelAction)
                 Spacer()
+                if saveTask != nil { ProgressView("Applying processing…").controlSize(.small) }
                 Button("Save Changes") {
-                    handledDismissal = true
-                    save(
-                        FITSStretchStack(stages: stages),
-                        background,
-                        deconvolution, ai
-                    )
+                    previewTask?.cancel()
+                    saveTask = Task { @MainActor in
+                        defer { saveTask = nil }
+                        do {
+                            try await save(FITSStretchStack(stages: stages), background, deconvolution, ai)
+                            handledDismissal = true
+                        } catch {
+                            if !Task.isCancelled { saveError = error.localizedDescription }
+                        }
+                    }
                 }
                     .keyboardShortcut(.defaultAction)
                     .disabled(
-                        (ai != nil && (try? ai?.validate()) == nil) || stages.contains { $0.validationMessage != nil }
+                        saveTask != nil || (ai != nil && (try? ai?.validate()) == nil) || stages.contains { $0.validationMessage != nil }
                             || background?.validationMessage != nil
                             || deconvolution?.validationMessage != nil
                     )
@@ -313,7 +323,11 @@ struct FITSStretchControlsView: View {
         .onChange(of: deconvolution) { _, _ in
             schedulePreview()
         }
+        .alert("Couldn’t Apply Processing", isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(saveError ?? "") }
         .onDisappear {
+            saveTask?.cancel()
             previewTask?.cancel()
             if !handledDismissal {
                 clearPreview()

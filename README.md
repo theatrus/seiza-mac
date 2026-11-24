@@ -40,7 +40,7 @@ Open a linear FITS or XISF image, choose **Processing**, and turn on **AI Noise 
 - Drag a rectangle in the preview or choose **Full Image**. Adjust grain, mottle, and noise scale. Changing the strengths reuses cached inference. The outline affects only the editor.
 - **Save Changes** applies the recipe to the whole image. Image export and parallax use the same processing. **Save Linear AI FITS…** exports denoised linear samples before gradient correction, deconvolution, or stretching.
 - **Model and device** provides model downloads, updates, local bundle import, device, precision, and tile size. The runtime and models process images on your Mac.
-- Only **Save Changes** writes a recipe beside the source, for example `M31.xisf.seiza.json`. Opening, previewing, cancelling, pasting, undoing, redoing, and exporting leave the saved recipe untouched. Choose **Save Changes** again to remember subsequent edits.
+- Only **Save Changes** writes a recipe beside the source, for example `M31.xisf.seiza.json`. Opening, previewing, cancelling, pasting, undoing, redoing, and exporting leave the saved recipe untouched. Choose **Save Changes** again to remember subsequent edits. When a single image was opened from Finder, macOS may ask for access to its folder the first time you save.
 - Keep the recipe with the image when moving or renaming it. Reopening restores AI, gradient correction, deconvolution, ordered stretches, and color handling. If the recipe cannot be applied, Seiza opens with default processing and leaves the saved file intact.
 
 Uses the same Seiza 0.56.0 restoration core and versioned recipe format as Seiza for Windows 0.10.1.

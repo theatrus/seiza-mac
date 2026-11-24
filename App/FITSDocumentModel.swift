@@ -152,6 +152,7 @@ final class ImageDocumentModel: ObservableObject {
     @Published private(set) var stretchHistory: FITSStretchHistory
     @Published private(set) var linearProcessingHistory: FITSLinearProcessingHistory
     @Published private(set) var isPreviewRendering = false
+    @Published private(set) var previewProgress: String?
     @Published private(set) var previewError: String?
     private var loadGeneration = 0
     private var previewGeneration = 0
@@ -404,9 +405,39 @@ final class ImageDocumentModel: ObservableObject {
         }
     }
 
+    @MainActor
+    func applyAndSave(_ recipe: FITSImageProcessingConfiguration) async throws {
+        // Validate the full image before replacing a previously usable sidecar.
+        // Rectangle previews are never eligible for promotion to the committed image.
+        if recipe.ai != nil, fullResolutionPreview?.processing != recipe {
+            cancelPreview()
+            let signal = AICancellation()
+            let source = url
+            let rendered = try await withTaskCancellationHandler {
+                try await Task.detached(priority: .userInitiated) {
+                    try SeizaCore.render(url: source, processing: recipe, cancel: signal)
+                }.value
+            } onCancel: { signal.cancel() }
+            try Task.checkCancellation()
+            fullResolutionPreview = (recipe, rendered)
+        }
+        replaceStretchStack(with: recipe.stretchStack, backgroundConfiguration: recipe.backgroundConfiguration,
+                            deconvolution: recipe.deconvolution, ai: recipe.ai)
+        saveProcessing()
+    }
+
     /// The only document action that creates or replaces a processing sidecar.
-    func saveProcessing() {
+    @MainActor func saveProcessing() {
         do { try ProcessingRecipe(processingConfiguration).save(beside: url) }
+        catch let error as NSError where error.domain == NSCocoaErrorDomain &&
+            [NSFileWriteNoPermissionError, NSFileReadNoPermissionError].contains(error.code) {
+            do {
+                try ProcessingRecipe.grantSaveAccess(for: url)
+                try ProcessingRecipe(processingConfiguration).save(beside: url)
+            } catch {
+                processingNotice = "The settings are applied in this window, but could not be saved. " + error.localizedDescription
+            }
+        }
         catch { processingNotice = "The settings are applied in this window, but could not be saved. " + error.localizedDescription }
     }
 
@@ -476,12 +507,19 @@ final class ImageDocumentModel: ObservableObject {
         let generation = previewGeneration
         fullResolutionPreview = nil
         isPreviewRendering = true
+        previewProgress = nil
         previewError = nil
         previewRenderer.render(
             url: url,
             responsiveProcessing: responsiveProcessing,
             fullResolutionProcessing: requestedProcessing,
-            plan: renderPlan
+            plan: renderPlan,
+            progress: { [weak self] message in
+                DispatchQueue.main.async {
+                    guard let self, self.previewGeneration == generation, self.isPreviewRendering else { return }
+                    self.previewProgress = message
+                }
+            }
         ) { [weak self] pass, result in
             guard let self, self.previewGeneration == generation else { return }
             if pass == .fullResolution {
@@ -507,6 +545,7 @@ final class ImageDocumentModel: ObservableObject {
         previewRenderer.cancel()
         fullResolutionPreview = nil
         isPreviewRendering = false
+        previewProgress = nil
         previewError = nil
         if let committedImage {
             image = committedImage
@@ -520,6 +559,7 @@ final class ImageDocumentModel: ObservableObject {
         previewRenderer.cancel()
         fullResolutionPreview = nil
         isPreviewRendering = false
+        previewProgress = nil
         previewError = nil
         loadGeneration &+= 1
         let generation = loadGeneration

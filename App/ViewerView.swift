@@ -1346,12 +1346,8 @@ private struct ImagePageView: View {
             },
             clearPreview: model.cancelPreview,
             save: { stack, background, deconvolution, ai in
-                model.replaceStretchStack(
-                    with: stack,
-                    backgroundConfiguration: background,
-                    deconvolution: deconvolution, ai: ai
-                )
-                model.saveProcessing()
+                try await model.applyAndSave(.init(stretchStack: stack, backgroundConfiguration: background,
+                                                   deconvolution: deconvolution, ai: ai))
                 dismissStretchEditor(presentation)
             },
             cancel: {
@@ -1680,6 +1676,10 @@ private struct ImagePageView: View {
                             .frame(width: metrics.imageSize.width, height: metrics.imageSize.height)
                             .clipped(antialiased: false)
 
+                        if isSelectingAIRegion, let metadata = model.metadata {
+                            AIRegionPicker(width: metadata.width, height: metadata.height) { aiRegion = $0 }
+                                .frame(width: metrics.imageSize.width, height: metrics.imageSize.height)
+                        }
                         if (showStretchControls || stretchPanelPresenter.isPresented), aiDraft != nil,
                            !aiFullPreview, aiShowOutline, let metadata = model.metadata {
                             let r = aiRegion ?? AIRegion.center(width: metadata.width, height: metadata.height)
@@ -1764,7 +1764,7 @@ private struct ImagePageView: View {
             .background(.black.opacity(0.94))
             .background {
                 ViewportInputMonitor(
-                    isEnabled: !isPickingSymmetryPoint,
+                    isEnabled: !isPickingSymmetryPoint && !showStretchControls && !isSelectingAIRegion,
                     onWheelZoom: { deltaY, location in
                         zoomWithWheel(
                             deltaY: deltaY,
@@ -2094,6 +2094,10 @@ private struct ImagePageView: View {
             width: pixelAlignedLength(sourceSize.width * zoom),
             height: pixelAlignedLength(sourceSize.height * zoom)
         )
+    }
+
+    private var isSelectingAIRegion: Bool {
+        stretchPanelPresenter.isPresented && aiDraft != nil && !aiFullPreview
     }
 
     private func sourceSize(for image: CGImage) -> CGSize {

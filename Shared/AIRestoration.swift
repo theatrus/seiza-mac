@@ -31,6 +31,18 @@ final class AICancellation {
     let signal = seiza_cancel_signal_create()
     private let lock = NSLock()
     private var cancelled = false
+    private let progress: ((String) -> Void)?
+    private var nextUpdate = Date.distantPast
+    init(progress: ((String) -> Void)? = nil) { self.progress = progress }
+    func report(_ message: String) {
+        let now = Date()
+        guard lock.withLock({
+            guard !cancelled, now >= nextUpdate else { return false }
+            nextUpdate = now.addingTimeInterval(0.2)
+            return true
+        }) else { return }
+        progress?(message)
+    }
     func cancel() {
         lock.withLock { cancelled = true }
         seiza_cancel_signal_cancel(signal)
@@ -117,8 +129,21 @@ final class AIRestoration {
     }
     func installed() throws -> [Model] { try lock.withLock { try models() } }
     func catalog() throws -> Catalog { try native(Catalog.self) { seiza_model_catalog_json(nil, $0) } }
-    private func download(_ name: String?) throws -> Model {
-        try native(Model.self) { seiza_model_download_json(name, store.path, nil, nil, nil, $0) }
+    private func download(_ name: String?, progress: AICancellation? = nil) throws -> Model {
+        let context = progress.map { Unmanaged.passUnretained($0).toOpaque() }
+        return try withExtendedLifetime(progress) {
+            try native(Model.self) { error in
+                seiza_model_download_json(name, store.path, nil, { json, context in
+                    guard let json, let context,
+                          let event = try? JSONSerialization.jsonObject(with: Data(bytes: json, count: strlen(json))) as? [String: Any]
+                    else { return }
+                    let sink = Unmanaged<AICancellation>.fromOpaque(context).takeUnretainedValue()
+                    if let bytes = event["downloaded"] as? Double, let total = event["total"] as? Double, total > 0 {
+                        sink.report("Downloading noise model · " + (bytes / total).formatted(.percent.precision(.fractionLength(0))))
+                    } else { sink.report("Preparing noise model…") }
+                }, context, error)
+            }
+        }
     }
     func update(_ name: String?) throws -> Model {
         try lock.withLock { let result = try download(name); automaticModel = nil; return result }
@@ -130,6 +155,32 @@ final class AIRestoration {
             return model
         }
     }
+    private func runtimeLibrary() throws -> URL {
+        guard let url = Bundle.main.privateFrameworksURL?.appendingPathComponent("libonnxruntime.dylib"),
+              FileManager.default.isReadableFile(atPath: url.path) else {
+            throw SeizaCoreError.message("The bundled ONNX Runtime is missing. Reinstall Seiza.")
+        }
+        return url
+    }
+    func backends() throws -> [String] {
+        struct Response: Decodable {
+            struct Entry: Decodable { let backend: String; let unavailable: String? }
+            let backends: [Entry]
+        }
+        let json = String(decoding: try JSONEncoder().encode(["library": runtimeLibrary().path]), as: UTF8.self)
+        return try native(Response.self) { seiza_model_backends_json(json, $0) }
+            .backends.filter { $0.unavailable == nil }.map(\.backend)
+    }
+    func remove(_ name: String) throws {
+        try lock.withLock {
+            var error: UnsafeMutablePointer<CChar>?
+            defer { seiza_string_free(error) }
+            guard seiza_model_remove(name, store.path, &error) else { throw failure(error) }
+            automaticModel = nil
+            residuals.removeAll()
+            blend = nil
+        }
+    }
     func verify(_ name: String) throws {
         try lock.withLock {
             var error: UnsafeMutablePointer<CChar>?
@@ -137,14 +188,14 @@ final class AIRestoration {
             guard seiza_model_verify(name, store.path, &error) else { throw failure(error) }
         }
     }
-    private func resolve(_ name: String?) throws -> Model {
+    private func resolve(_ name: String?, progress: AICancellation?) throws -> Model {
         let installed = try models()
         if name == nil && automaticModel == nil {
             do { automaticModel = try catalog().latest.denoise }
             catch { guard let first = installed.first else { throw error }; automaticModel = first.name }
         }
         let requested = name ?? automaticModel
-        return try installed.first { $0.name == requested } ?? download(requested)
+        return try installed.first { $0.name == requested } ?? download(requested, progress: progress)
     }
 
     /// Inference and model replacement are serialized. Blending a different strength reuses the residual.
@@ -153,7 +204,7 @@ final class AIRestoration {
         try settings.validate()
         return try lock.withLock {
             try cancel?.check()
-            let model = try resolve(settings.model)
+            let model = try resolve(settings.model, progress: cancel)
             let folder = URL(fileURLWithPath: model.path)
             func key() throws -> Key {
                 let files = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
@@ -170,10 +221,7 @@ final class AIRestoration {
                 residual = residuals.remove(at: index).1
                 residuals.append((initial, residual))
             } else {
-                guard let library = Bundle.main.privateFrameworksURL?.appendingPathComponent("libonnxruntime.dylib"),
-                      FileManager.default.isReadableFile(atPath: library.path) else {
-                    throw SeizaCoreError.message("The bundled ONNX Runtime is missing. Reinstall Seiza.")
-                }
+                let library = try runtimeLibrary()
                 var options: [String: Any] = ["library": library.path]
                 options["backend"] = settings.backend
                 options["precision"] = settings.precision
@@ -185,12 +233,19 @@ final class AIRestoration {
                 guard let handle = seiza_noise_model_open(model.path, json, &error) else { throw failure(error) }
                 defer { seiza_noise_model_free(handle) }
                 try cancel?.check()
+                let context = cancel.map { Unmanaged.passUnretained($0).toOpaque() }
+                let progress: SeizaModelProgressCallback = { channel, channels, tile, tiles, context in
+                    guard let context else { return }
+                    Unmanaged<AICancellation>.fromOpaque(context).takeUnretainedValue()
+                        .report("Channel " + String(channel + 1) + " of " + String(channels) +
+                                " · Tile " + String(tile) + " of " + String(tiles))
+                }
                 let pointer: OpaquePointer?
                 if let r = region {
                     pointer = seiza_noise_model_denoise_file_region(handle, source.path, r.x, r.y, r.width, r.height,
-                                                                   nil, cancel?.signal, nil, &error)
+                                                                   progress, cancel?.signal, context, &error)
                 } else {
-                    pointer = seiza_noise_model_denoise_file(handle, source.path, false, nil, cancel?.signal, nil, &error)
+                    pointer = seiza_noise_model_denoise_file(handle, source.path, false, progress, cancel?.signal, context, &error)
                 }
                 guard let pointer else { throw failure(error) }
                 let maximum = 384 * 1024 * 1024
