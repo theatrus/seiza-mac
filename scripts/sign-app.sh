@@ -22,6 +22,8 @@ test -d "$sparkle_version_path"
 test -f "$extension_entitlements"
 test -f "$app_entitlements"
 
+codesign --force --options runtime --timestamp --sign "$signing_identity" "$app_path/Contents/Frameworks/libonnxruntime.dylib"
+
 codesign \
     --force \
     --options runtime \

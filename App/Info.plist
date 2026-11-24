@@ -13,6 +13,18 @@
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>
+            <key>CFBundleTypeName</key>
+            <string>Seiza Processing Recipe</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>None</string>
+            <key>NSIsRelatedItemType</key>
+            <true/>
+            <key>CFBundleTypeExtensions</key>
+            <array><string>seiza.json</string></array>
+        </dict>
+        <dict>
             <key>CFBundleTypeIconFile</key>
             <string>FITSFile</string>
             <key>CFBundleTypeName</key>

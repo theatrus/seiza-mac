@@ -51,6 +51,7 @@ struct ImagePreviewRenderPlan: Equatable {
 }
 
 struct FITSLinearProcessingState: Equatable {
+    var ai: AIProcessing? = nil
     let background: FITSBackgroundConfiguration?
     let deconvolution: FITSDeconvolutionConfiguration?
 }
@@ -62,21 +63,23 @@ struct FITSLinearProcessingHistory: Equatable {
 
     init(
         background: FITSBackgroundConfiguration?,
-        deconvolution: FITSDeconvolutionConfiguration?
+        deconvolution: FITSDeconvolutionConfiguration?,
+        ai: AIProcessing? = nil
     ) {
         current = FITSLinearProcessingState(
-            background: background,
+            ai: ai, background: background,
             deconvolution: deconvolution
         )
     }
 
     mutating func commit(
         background: FITSBackgroundConfiguration?,
-        deconvolution: FITSDeconvolutionConfiguration?
+        deconvolution: FITSDeconvolutionConfiguration?,
+        ai: AIProcessing? = nil
     ) {
         undoStates.append(current)
         current = FITSLinearProcessingState(
-            background: background,
+            ai: ai, background: background,
             deconvolution: deconvolution
         )
         redoStates.removeAll()
@@ -128,6 +131,8 @@ final class ImageDocumentModel: ObservableObject {
     }
 
     let url: URL
+    @Published var processingNotice: String?
+    private var restoringRecipe = false
     @Published private(set) var frameProbe: CalibrationFrameProbe?
     @Published private(set) var flatInspectionState: FlatInspectionState = .idle
     @Published var flatInspectionOptions: FlatQualityOptions = {
@@ -147,6 +152,7 @@ final class ImageDocumentModel: ObservableObject {
     @Published private(set) var stretchHistory: FITSStretchHistory
     @Published private(set) var linearProcessingHistory: FITSLinearProcessingHistory
     @Published private(set) var isPreviewRendering = false
+    @Published private(set) var previewProgress: String?
     @Published private(set) var previewError: String?
     private var loadGeneration = 0
     private var previewGeneration = 0
@@ -166,13 +172,22 @@ final class ImageDocumentModel: ObservableObject {
         linearProcessingHistory carriedLinearProcessingHistory: FITSLinearProcessingHistory? = nil
     ) {
         self.url = url
-        let requested = processingConfiguration ?? SeizaCore.initialProcessing(for: url)
-        let processingConfiguration = FITSImageProcessingConfiguration(
-            stretchStack: requested.stretchStack,
-            backgroundConfiguration: requested.backgroundConfiguration,
-            deconvolution: requested.deconvolution
-        )
-        if let carriedStretchHistory {
+        var saved: FITSImageProcessingConfiguration?
+        var readError: String?
+        if ImageCollection.isStackableImage(url) {
+            do {
+                saved = try ProcessingRecipe.read(for: url)
+                if saved?.ai != nil && !AIRestoration.supported {
+                    throw SeizaCoreError.message("AI noise reduction requires Apple silicon.")
+                }
+            } catch {
+                saved = nil
+                readError = error.localizedDescription
+            }
+        }
+        let processingConfiguration = saved ?? (readError == nil ? processingConfiguration : nil)
+            ?? SeizaCore.initialProcessing(for: url)
+        if let carriedStretchHistory, saved == nil, readError == nil {
             precondition(
                 carriedStretchHistory.stack == processingConfiguration.stretchStack,
                 "Carried stretch history must match the current processing recipe"
@@ -181,7 +196,7 @@ final class ImageDocumentModel: ObservableObject {
         } else {
             stretchHistory = FITSStretchHistory(stack: processingConfiguration.stretchStack)
         }
-        if let carriedLinearProcessingHistory {
+        if let carriedLinearProcessingHistory, saved == nil, readError == nil {
             precondition(
                 carriedLinearProcessingHistory.current.background
                     == processingConfiguration.backgroundConfiguration
@@ -193,15 +208,17 @@ final class ImageDocumentModel: ObservableObject {
         } else {
             linearProcessingHistory = FITSLinearProcessingHistory(
                 background: processingConfiguration.backgroundConfiguration,
-                deconvolution: processingConfiguration.deconvolution
+                deconvolution: processingConfiguration.deconvolution, ai: processingConfiguration.ai
             )
         }
+        restoringRecipe = saved != nil
+        processingNotice = readError.map { "Opened with default processing. " + $0 }
         let processing = processingConfiguration
         previewImage = ImageThumbnailCache.memoryImage(
             for: url,
             processing: processing
         )
-        if previewImage == nil {
+        if previewImage == nil, processing.ai == nil {
             ImageThumbnailCache.load(
                 for: url,
                 processing: processing
@@ -282,16 +299,16 @@ final class ImageDocumentModel: ObservableObject {
         FITSImageProcessingConfiguration(
             stretchStack: stretchHistory.stack,
             backgroundConfiguration: backgroundConfiguration,
-            deconvolution: deconvolutionConfiguration
+            deconvolution: deconvolutionConfiguration, ai: linearProcessingHistory.current.ai
         )
     }
 
     private func recordProcessingChange(
         background: FITSBackgroundConfiguration?,
-        deconvolution: FITSDeconvolutionConfiguration?
+        deconvolution: FITSDeconvolutionConfiguration?, ai: AIProcessing?
     ) {
         var history = linearProcessingHistory
-        history.commit(background: background, deconvolution: deconvolution)
+        history.commit(background: background, deconvolution: deconvolution, ai: ai)
         linearProcessingHistory = history
     }
 
@@ -319,7 +336,7 @@ final class ImageDocumentModel: ObservableObject {
         stretchHistory = history
         recordProcessingChange(
             background: backgroundConfiguration,
-            deconvolution: deconvolution
+            deconvolution: deconvolution, ai: linearProcessingHistory.current.ai
         )
         load()
     }
@@ -340,7 +357,7 @@ final class ImageDocumentModel: ObservableObject {
         stretchHistory = history
         recordProcessingChange(
             background: backgroundConfiguration,
-            deconvolution: deconvolution
+            deconvolution: deconvolution, ai: linearProcessingHistory.current.ai
         )
         load()
     }
@@ -348,20 +365,21 @@ final class ImageDocumentModel: ObservableObject {
     func replaceStretchStack(
         with stack: FITSStretchStack,
         backgroundConfiguration: FITSBackgroundConfiguration?,
-        deconvolution: FITSDeconvolutionConfiguration? = nil
+        deconvolution: FITSDeconvolutionConfiguration? = nil,
+        ai: AIProcessing? = nil
     ) {
         guard
             stack.stages.allSatisfy({ $0.validationMessage == nil }),
             backgroundConfiguration?.validationMessage == nil,
             deconvolution?.validationMessage == nil
         else { return }
-        let hasChanges = stretchHistory.stack != stack
+        let hasChanges = stretchHistory.stack != stack || linearProcessingHistory.current.ai != ai
             || self.backgroundConfiguration != backgroundConfiguration
             || deconvolutionConfiguration != deconvolution
         let requestedProcessing = FITSImageProcessingConfiguration(
             stretchStack: stack,
             backgroundConfiguration: backgroundConfiguration,
-            deconvolution: deconvolution
+            deconvolution: deconvolution, ai: ai
         )
         let refinedPreview = fullResolutionPreview.flatMap { preview in
             preview.processing == requestedProcessing ? preview.rendered : nil
@@ -377,7 +395,7 @@ final class ImageDocumentModel: ObservableObject {
         stretchHistory = history
         recordProcessingChange(
             background: backgroundConfiguration,
-            deconvolution: deconvolution
+            deconvolution: deconvolution, ai: ai
         )
         if let refinedPreview {
             loadGeneration &+= 1
@@ -385,6 +403,42 @@ final class ImageDocumentModel: ObservableObject {
         } else {
             load()
         }
+    }
+
+    @MainActor
+    func applyAndSave(_ recipe: FITSImageProcessingConfiguration) async throws {
+        // Validate the full image before replacing a previously usable sidecar.
+        // Rectangle previews are never eligible for promotion to the committed image.
+        if recipe.ai != nil, fullResolutionPreview?.processing != recipe {
+            cancelPreview()
+            let signal = AICancellation()
+            let source = url
+            let rendered = try await withTaskCancellationHandler {
+                try await Task.detached(priority: .userInitiated) {
+                    try SeizaCore.render(url: source, processing: recipe, cancel: signal)
+                }.value
+            } onCancel: { signal.cancel() }
+            try Task.checkCancellation()
+            fullResolutionPreview = (recipe, rendered)
+        }
+        replaceStretchStack(with: recipe.stretchStack, backgroundConfiguration: recipe.backgroundConfiguration,
+                            deconvolution: recipe.deconvolution, ai: recipe.ai)
+        saveProcessing()
+    }
+
+    /// The only document action that creates or replaces a processing sidecar.
+    @MainActor func saveProcessing() {
+        do { try ProcessingRecipe(processingConfiguration).save(beside: url) }
+        catch let error as NSError where error.domain == NSCocoaErrorDomain &&
+            [NSFileWriteNoPermissionError, NSFileReadNoPermissionError].contains(error.code) {
+            do {
+                try ProcessingRecipe.grantSaveAccess(for: url)
+                try ProcessingRecipe(processingConfiguration).save(beside: url)
+            } catch {
+                processingNotice = "The settings are applied in this window, but could not be saved. " + error.localizedDescription
+            }
+        }
+        catch { processingNotice = "The settings are applied in this window, but could not be saved. " + error.localizedDescription }
     }
 
     func undoStretch() {
@@ -413,6 +467,7 @@ final class ImageDocumentModel: ObservableObject {
         stretchStack: FITSStretchStack,
         backgroundConfiguration: FITSBackgroundConfiguration?,
         deconvolution: FITSDeconvolutionConfiguration? = nil,
+        ai: AIProcessing? = nil, region: AIRegion? = nil,
         zoom: Double = 1,
         displayScale: Double = 1
     ) {
@@ -424,21 +479,23 @@ final class ImageDocumentModel: ObservableObject {
             cancelPreview()
             return
         }
-        let requestedProcessing = FITSImageProcessingConfiguration(
+        var requestedProcessing = FITSImageProcessingConfiguration(
             stretchStack: stretchStack,
             backgroundConfiguration: backgroundConfiguration,
-            deconvolution: deconvolution
+            deconvolution: deconvolution, ai: ai
         )
+        requestedProcessing.previewRegion = ai == nil ? nil : region
         guard requestedProcessing != processingConfiguration else {
             cancelPreview()
             return
         }
-        let responsiveProcessing = FITSImageProcessingConfiguration(
+        var responsiveProcessing = FITSImageProcessingConfiguration(
             stretchStack: stretchStack,
             backgroundConfiguration: backgroundConfiguration,
             deconvolution: deconvolution,
-            interactivePreview: true
+            ai: ai, interactivePreview: true
         )
+        responsiveProcessing.previewRegion = requestedProcessing.previewRegion
         let renderPlan = ImagePreviewRenderPlan.make(
             sourceWidth: metadata?.width,
             sourceHeight: metadata?.height,
@@ -450,12 +507,19 @@ final class ImageDocumentModel: ObservableObject {
         let generation = previewGeneration
         fullResolutionPreview = nil
         isPreviewRendering = true
+        previewProgress = nil
         previewError = nil
         previewRenderer.render(
             url: url,
             responsiveProcessing: responsiveProcessing,
             fullResolutionProcessing: requestedProcessing,
-            plan: renderPlan
+            plan: renderPlan,
+            progress: { [weak self] message in
+                DispatchQueue.main.async {
+                    guard let self, self.previewGeneration == generation, self.isPreviewRendering else { return }
+                    self.previewProgress = message
+                }
+            }
         ) { [weak self] pass, result in
             guard let self, self.previewGeneration == generation else { return }
             if pass == .fullResolution {
@@ -481,6 +545,7 @@ final class ImageDocumentModel: ObservableObject {
         previewRenderer.cancel()
         fullResolutionPreview = nil
         isPreviewRendering = false
+        previewProgress = nil
         previewError = nil
         if let committedImage {
             image = committedImage
@@ -494,6 +559,7 @@ final class ImageDocumentModel: ObservableObject {
         previewRenderer.cancel()
         fullResolutionPreview = nil
         isPreviewRendering = false
+        previewProgress = nil
         previewError = nil
         loadGeneration &+= 1
         let generation = loadGeneration
@@ -507,7 +573,15 @@ final class ImageDocumentModel: ObservableObject {
             guard let self, self.loadGeneration == generation else { return }
             switch result {
             case .success(let rendered):
+                self.restoringRecipe = false
                 self.commit(rendered)
+            case .failure(let error) where self.restoringRecipe:
+                self.restoringRecipe = false
+                self.processingNotice = "Opened with default processing. " + error.localizedDescription
+                let fallback = SeizaCore.initialProcessing(for: url)
+                self.stretchHistory = FITSStretchHistory(stack: fallback.stretchStack)
+                self.linearProcessingHistory = FITSLinearProcessingHistory(background: nil, deconvolution: nil)
+                self.load()
             case .failure(let error):
                 self.loadState = .failed(error.localizedDescription)
             }

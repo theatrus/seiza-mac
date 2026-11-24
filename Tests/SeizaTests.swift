@@ -3327,3 +3327,82 @@ final class ColorToolsIntegrationTests: XCTestCase {
         model.close()
     }
 }
+
+final class DenoiseProcessingTests: XCTestCase {
+    private let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("Fixtures/NoiseModel")
+
+    func testPackagedRuntimeRestoresFullImageAndSelectedRegionOffline() throws {
+        guard AIRestoration.supported else { throw XCTSkip("AI requires Apple silicon") }
+        let store = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: store) }
+        let engine = AIRestoration(store: store)
+        let model = try engine.importBundle(fixtures.appendingPathComponent("tiny"))
+        let source = fixtures.appendingPathComponent("tiny-input.fits")
+        let original = try Data(contentsOf: source)
+        var settings = AIProcessing(model: model.name, backend: "cpu", precision: "f32")
+        let full = try engine.prepare(source, settings: settings)
+        XCTAssertTrue(try engine.prepare(source, settings: settings) === full)
+        let header = try SeizaCore.readHeader(url: full.url)
+        let size = try SeizaCore.render(url: source).metadata
+        let r = AIRegion(x: 2, y: 4, width: 48, height: 50)
+        let patch = try engine.prepare(source, settings: settings, region: r)
+        XCTAssertEqual(try SeizaCore.render(url: patch.url).image.width, size.width)
+        XCTAssertEqual(try SeizaCore.render(url: patch.url).image.height, size.height)
+        XCTAssertNotNil(try SeizaCore.readHeader(url: patch.url).headers["MDPREV"])
+        XCTAssertNil(header.headers["MDPREV"])
+        settings.high = 0
+        settings.low = 0
+        let reblended = try engine.prepare(source, settings: settings)
+        XCTAssertNotEqual(try Data(contentsOf: reblended.url), try Data(contentsOf: full.url))
+        XCTAssertEqual(original, try Data(contentsOf: source))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ProcessingRecipe.url(for: source).path))
+    }
+
+    @MainActor func testOnlyExplicitSaveChangesSidecar() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("M31.fits")
+        try FileManager.default.copyItem(at: fixtures.appendingPathComponent("tiny-input.fits"), to: source)
+        let original = try Data(contentsOf: source)
+        let sidecar = ProcessingRecipe.url(for: source)
+        let model = ImageDocumentModel(url: source)
+        let stack = FITSStretchStack(stages: [.identity])
+        model.preview(stretchStack: stack, backgroundConfiguration: nil)
+        model.cancelPreview()
+        model.replaceStretchStack(with: stack, backgroundConfiguration: nil)
+        model.undoStretch()
+        model.redoStretch()
+        _ = try SeizaCore.render16(url: source, processing: model.processingConfiguration)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sidecar.path))
+        model.saveProcessing()
+        XCTAssertNil(model.processingNotice)
+        XCTAssertEqual(sidecar.lastPathComponent, "M31.fits.seiza.json")
+        let saved = try Data(contentsOf: sidecar)
+        XCTAssertEqual(ImageDocumentModel(url: source).processingConfiguration.stretchStack, stack)
+        model.undoStretch()
+        XCTAssertEqual(saved, try Data(contentsOf: sidecar))
+        let broken = Data("invalid".utf8)
+        try broken.write(to: sidecar)
+        let reopened = ImageDocumentModel(url: source)
+        XCTAssertEqual(reopened.processingConfiguration, .default)
+        XCTAssertNotNil(reopened.processingNotice)
+        XCTAssertEqual(broken, try Data(contentsOf: sidecar))
+        XCTAssertEqual(original, try Data(contentsOf: source))
+    }
+
+    func testWindowsRecipePreservesAIAndOmitsPreviewGeometry() throws {
+        var recipe = FITSImageProcessingConfiguration.default
+        recipe.ai = AIProcessing(model: "noise-tiny", backend: "cpu", precision: "f32", high: 0.7, low: 0.2)
+        recipe.previewRegion = AIRegion(x: 0, y: 0, width: 5, height: 5)
+        let encoded = try JSONEncoder().encode(ProcessingRecipe(recipe))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertEqual(root["schema"] as? String, "org.seiza.image-processing")
+        let processing = try XCTUnwrap(root["processing"] as? [String: Any])
+        XCTAssertNotNil(processing["aiNoiseReduction"])
+        let restored = try ProcessingRecipe.decode(encoded)
+        XCTAssertNil(restored.previewRegion)
+        XCTAssertEqual(restored.ai, recipe.ai)
+    }
+}

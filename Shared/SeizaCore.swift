@@ -830,6 +830,8 @@ struct FITSImageProcessingConfiguration: Equatable, Codable {
     let stretchStack: FITSStretchStack
     let backgroundConfiguration: FITSBackgroundConfiguration?
     let deconvolution: FITSDeconvolutionConfiguration?
+    var ai: AIProcessing?
+    var previewRegion: AIRegion?
     let interactivePreview: Bool
 
     var extractsBackground: Bool { backgroundConfiguration != nil }
@@ -838,11 +840,13 @@ struct FITSImageProcessingConfiguration: Equatable, Codable {
         stretchStack: FITSStretchStack,
         extractsBackground: Bool,
         deconvolution: FITSDeconvolutionConfiguration? = nil,
+        ai: AIProcessing? = nil,
         interactivePreview: Bool = false
     ) {
         self.stretchStack = stretchStack
         backgroundConfiguration = extractsBackground ? .legacyDefault : nil
         self.deconvolution = deconvolution
+        self.ai = ai
         self.interactivePreview = interactivePreview
     }
 
@@ -850,11 +854,13 @@ struct FITSImageProcessingConfiguration: Equatable, Codable {
         stretchStack: FITSStretchStack,
         backgroundConfiguration: FITSBackgroundConfiguration?,
         deconvolution: FITSDeconvolutionConfiguration? = nil,
+        ai: AIProcessing? = nil,
         interactivePreview: Bool = false
     ) {
         self.stretchStack = stretchStack
         self.backgroundConfiguration = backgroundConfiguration
         self.deconvolution = deconvolution
+        self.ai = ai
         self.interactivePreview = interactivePreview
     }
 
@@ -873,6 +879,7 @@ struct FITSImageProcessingConfiguration: Equatable, Codable {
 
     private enum CodingKeys: String, CodingKey {
         case stretch
+        case ai = "aiNoiseReduction"
         case background
         case deconvolution
         case interactivePreview = "interactive_preview"
@@ -880,6 +887,7 @@ struct FITSImageProcessingConfiguration: Equatable, Codable {
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(ai, forKey: .ai)
         try container.encode(stretchStack.stages, forKey: .stretch)
         if let backgroundConfiguration {
             try container.encode(backgroundConfiguration, forKey: .background)
@@ -898,11 +906,11 @@ struct FITSImageProcessingConfiguration: Equatable, Codable {
             [FITSStretchConfiguration].self,
             forKey: .stretch
         )
-        guard !stages.isEmpty else {
+        guard (1...64).contains(stages.count) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .stretch,
                 in: container,
-                debugDescription: "A processing recipe needs at least one stretch stage."
+                debugDescription: "A processing recipe needs between one and 64 stretch stages."
             )
         }
         let background = try container.decodeIfPresent(
@@ -916,11 +924,13 @@ struct FITSImageProcessingConfiguration: Equatable, Codable {
                 FITSDeconvolutionConfiguration.self,
                 forKey: .deconvolution
             ),
+            ai: try container.decodeIfPresent(AIProcessing.self, forKey: .ai),
             interactivePreview: try container.decodeIfPresent(
                 Bool.self,
                 forKey: .interactivePreview
             ) ?? false
         )
+        try ai?.validate()
         if let validationMessage = deconvolution?.validationMessage {
             throw DecodingError.dataCorruptedError(
                 forKey: .deconvolution,
@@ -1506,6 +1516,7 @@ enum SeizaCore {
 
     static func renderConfigurationJSON(url: URL, processing: FITSImageProcessingConfiguration) throws -> String {
         var value = try JSONSerialization.jsonObject(with: processing.jsonData) as! [String: Any]
+        value.removeValue(forKey: "aiNoiseReduction")
         if isDisplayProduct(url) {
             value["sample_domain"] = ["type": "physical-linear", "normalization": [
                 "type": "explicit-range", "black": 0.0, "white": 1.0]]
@@ -1516,16 +1527,22 @@ enum SeizaCore {
     static func render(
         url: URL,
         maxDimension: UInt32 = 0,
-        processing: FITSImageProcessingConfiguration? = nil
+        processing: FITSImageProcessingConfiguration? = nil,
+        cancel: AICancellation? = nil
     ) throws -> RenderedImage {
         let processing = processing ?? initialProcessing(for: url)
+        let linear = try processing.ai.map {
+            try AIRestoration.shared.prepare(url, settings: $0, region: processing.previewRegion, cancel: cancel)
+        }
+        defer { withExtendedLifetime(linear) {} }
+        let renderURL = linear?.url ?? url
         var errorPointer: UnsafeMutablePointer<CChar>?
         let extensionName = url.pathExtension.lowercased()
         let usesAstronomyPipeline = astronomyImageExtensions.contains(extensionName)
         let handle: OpaquePointer?
         if usesAstronomyPipeline {
             let configurationJSON = try renderConfigurationJSON(url: url, processing: processing)
-            handle = url.path.withCString { path in
+            handle = renderURL.path.withCString { path in
                 configurationJSON.withCString { configuration in
                     seiza_rendered_image_open_with_stretch_config(
                         path,
@@ -1604,16 +1621,22 @@ enum SeizaCore {
     static func render16(
         url: URL,
         maxDimension: UInt32 = 0,
-        processing: FITSImageProcessingConfiguration? = nil
+        processing: FITSImageProcessingConfiguration? = nil,
+        cancel: AICancellation? = nil
     ) throws -> RenderedImage {
         let processing = processing ?? initialProcessing(for: url)
+        let linear = try processing.ai.map {
+            try AIRestoration.shared.prepare(url, settings: $0, region: processing.previewRegion, cancel: cancel)
+        }
+        defer { withExtendedLifetime(linear) {} }
+        let renderURL = linear?.url ?? url
         var errorPointer: UnsafeMutablePointer<CChar>?
         let extensionName = url.pathExtension.lowercased()
         let usesAstronomyPipeline = astronomyImageExtensions.contains(extensionName)
         let handle: OpaquePointer?
         if usesAstronomyPipeline {
             let configurationJSON = try renderConfigurationJSON(url: url, processing: processing)
-            handle = url.path.withCString { path in
+            handle = renderURL.path.withCString { path in
                 configurationJSON.withCString { configuration in
                     seiza_rendered_image16_open_with_stretch_config(
                         path,

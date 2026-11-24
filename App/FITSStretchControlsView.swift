@@ -6,6 +6,10 @@ struct FITSStretchControlsView: View {
     @Binding var selectedStageIndex: Int
     @Binding var background: FITSBackgroundConfiguration?
     @Binding var deconvolution: FITSDeconvolutionConfiguration?
+    @Binding var ai: AIProcessing?
+    @Binding var region: AIRegion?
+    @Binding var fullPreview: Bool
+    @Binding var showOutline: Bool
     let undo: () -> Void
     let redo: () -> Void
     let pickSymmetryPoint: () -> Void
@@ -14,16 +18,18 @@ struct FITSStretchControlsView: View {
     let preview: (
         FITSStretchStack,
         FITSBackgroundConfiguration?,
-        FITSDeconvolutionConfiguration?
+        FITSDeconvolutionConfiguration?, AIProcessing?, AIRegion?
     ) -> Void
     let clearPreview: () -> Void
     let save: (
         FITSStretchStack,
         FITSBackgroundConfiguration?,
-        FITSDeconvolutionConfiguration?
-    ) -> Void
+        FITSDeconvolutionConfiguration?, AIProcessing?
+    ) async throws -> Void
     let cancel: () -> Void
 
+    @State private var saveTask: Task<Void, Never>?
+    @State private var saveError: String?
     @State private var previewTask: Task<Void, Never>?
     @State private var handledDismissal = false
     @State private var retainedBackground = FITSBackgroundConfiguration.default
@@ -31,7 +37,7 @@ struct FITSStretchControlsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Image Stretch")
+                Text("Processing")
                     .font(.headline)
                 Spacer()
                 if let popOut {
@@ -57,6 +63,9 @@ struct FITSStretchControlsView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    AIProcessingControls(model: model, settings: $ai, region: $region,
+                                         fullPreview: $fullPreview, showOutline: $showOutline)
+                    Divider()
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Text("Stretch Stages")
@@ -66,6 +75,7 @@ struct FITSStretchControlsView: View {
                                 Label("Add Stage", systemImage: "plus")
                             }
                             .help("Add another stretch stage")
+                            .disabled(stages.count >= 64)
                             Button(action: undo) {
                                 Label("Undo Stretch", systemImage: "arrow.uturn.backward")
                                     .labelStyle(.iconOnly)
@@ -242,7 +252,7 @@ struct FITSStretchControlsView: View {
                         HStack(spacing: 8) {
                             ProgressView()
                                 .controlSize(.small)
-                            Text("Updating live preview…")
+                            Text(model.previewProgress ?? "Updating live preview…")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -256,27 +266,34 @@ struct FITSStretchControlsView: View {
                 .padding(16)
             }
             .frame(maxHeight: contentMaxHeight)
+            .disabled(saveTask != nil)
 
             Divider()
 
             HStack {
                 Button("Cancel") {
+                    saveTask?.cancel()
                     handledDismissal = true
                     cancel()
                 }
                     .keyboardShortcut(.cancelAction)
                 Spacer()
+                if saveTask != nil { ProgressView("Applying processing…").controlSize(.small) }
                 Button("Save Changes") {
-                    handledDismissal = true
-                    save(
-                        FITSStretchStack(stages: stages),
-                        background,
-                        deconvolution
-                    )
+                    previewTask?.cancel()
+                    saveTask = Task { @MainActor in
+                        defer { saveTask = nil }
+                        do {
+                            try await save(FITSStretchStack(stages: stages), background, deconvolution, ai)
+                            handledDismissal = true
+                        } catch {
+                            if !Task.isCancelled { saveError = error.localizedDescription }
+                        }
+                    }
                 }
                     .keyboardShortcut(.defaultAction)
                     .disabled(
-                        stages.contains { $0.validationMessage != nil }
+                        saveTask != nil || (ai != nil && (try? ai?.validate()) == nil) || stages.contains { $0.validationMessage != nil }
                             || background?.validationMessage != nil
                             || deconvolution?.validationMessage != nil
                     )
@@ -291,6 +308,9 @@ struct FITSStretchControlsView: View {
             }
             schedulePreview()
         }
+        .onChange(of: ai) { _, _ in schedulePreview() }
+        .onChange(of: region) { _, _ in schedulePreview() }
+        .onChange(of: fullPreview) { _, _ in schedulePreview() }
         .onChange(of: stages) { _, _ in
             schedulePreview()
         }
@@ -303,7 +323,11 @@ struct FITSStretchControlsView: View {
         .onChange(of: deconvolution) { _, _ in
             schedulePreview()
         }
+        .alert("Couldn’t Apply Processing", isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(saveError ?? "") }
         .onDisappear {
+            saveTask?.cancel()
             previewTask?.cancel()
             if !handledDismissal {
                 clearPreview()
@@ -702,7 +726,8 @@ struct FITSStretchControlsView: View {
             }
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                preview(stack, backgroundConfiguration, deconvolution)
+                let selected = model.metadata.map { AIRegion.center(width: $0.width, height: $0.height) }
+                preview(stack, backgroundConfiguration, deconvolution, ai, fullPreview ? nil : (region ?? selected))
             }
         }
     }

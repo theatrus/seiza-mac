@@ -476,6 +476,7 @@ final class LatestImagePreviewRenderer {
         responsiveProcessing: FITSImageProcessingConfiguration,
         fullResolutionProcessing: FITSImageProcessingConfiguration,
         plan: ImagePreviewRenderPlan,
+        progress: @escaping (String) -> Void = { _ in },
         completion: @escaping Completion
     ) {
         operations.cancelAllOperations()
@@ -486,7 +487,7 @@ final class LatestImagePreviewRenderer {
                     url: url,
                     processing: fullResolutionProcessing,
                     maxDimension: 0,
-                    pass: .fullResolution,
+                    pass: .fullResolution, progress: progress,
                     completion: completion
                 )
             )
@@ -498,7 +499,7 @@ final class LatestImagePreviewRenderer {
                 url: url,
                 processing: responsiveProcessing,
                 maxDimension: plan.responsiveMaxDimension,
-                pass: .responsive,
+                pass: .responsive, progress: progress,
                 completion: completion
             )
         )
@@ -507,7 +508,7 @@ final class LatestImagePreviewRenderer {
                 url: url,
                 processing: fullResolutionProcessing,
                 maxDimension: 0,
-                pass: .fullResolution,
+                pass: .fullResolution, progress: progress,
                 completion: completion
             )
         )
@@ -529,14 +530,22 @@ private final class ImagePreviewOperation: Operation, @unchecked Sendable {
         url: URL,
         processing: FITSImageProcessingConfiguration,
         maxDimension: UInt32,
-        pass: LatestImagePreviewRenderer.Pass,
+        pass: LatestImagePreviewRenderer.Pass, progress: @escaping (String) -> Void,
         completion: @escaping LatestImagePreviewRenderer.Completion
     ) {
+        cancellation = AICancellation(progress: progress)
         self.url = url
         self.processing = processing
         self.maxDimension = maxDimension
         self.pass = pass
         self.completion = completion
+    }
+
+    private let cancellation: AICancellation
+
+    override func cancel() {
+        super.cancel()
+        cancellation.cancel()
     }
 
     override func main() {
@@ -547,7 +556,8 @@ private final class ImagePreviewOperation: Operation, @unchecked Sendable {
             try SeizaCore.render(
                 url: url,
                 maxDimension: maxDimension,
-                processing: processing
+                processing: processing,
+                cancel: cancellation
             )
         }
         guard !isCancelled else { return }
