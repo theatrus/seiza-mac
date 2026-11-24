@@ -236,10 +236,9 @@ jobs:
             '' \
             "### New in ${version}" \
             '' \
-            '- Start Stack Images from the welcome window or File menu, even with no viewer collection. Add images, a capture folder, or a TXT/CSV list directly to the setup window.' \
-            '- Build and save bias, dark, dark flat, and flat masters without a light stack. The separate builder supports calibration dependencies, cancellation, and checked output publication.' \
-            '- Keep existing frame selections when adding sources. Setup shows skipped entries and refreshes light and calibration counts after imports.' \
-            '- Uses published Seiza/C ABI 0.50.0, stacking 0.58.0, and calibration 0.12.2, with updated dark integration and FITS/XISF validation.' \
+            '- AI Noise Reduction runs on the open linear FITS or XISF image using Seiza 0.56.0. The universal app includes ONNX Runtime for Apple silicon and downloads the recommended model on first use.' \
+            '- Drag a preview rectangle or select the full image. Adjust grain and mottle with cached inference. Export the linear AI FITS or use the full recipe in image and parallax exports.' \
+            '- Save Changes remembers the processing stack beside the source as image.fits.seiza.json. Keep the sidecar with its image. Browsing, previews, clipboard edits, undo, redo and exports leave it untouched.' \
             '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
             "- [Download the zipped application](${release_base}/Seiza-${version}-universal.zip)" \

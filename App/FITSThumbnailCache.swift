@@ -539,6 +539,13 @@ private final class ImagePreviewOperation: Operation, @unchecked Sendable {
         self.completion = completion
     }
 
+    private let cancellation = AICancellation()
+
+    override func cancel() {
+        super.cancel()
+        cancellation.cancel()
+    }
+
     override func main() {
         guard !isCancelled else { return }
         let accessing = url.startAccessingSecurityScopedResource()
@@ -547,7 +554,8 @@ private final class ImagePreviewOperation: Operation, @unchecked Sendable {
             try SeizaCore.render(
                 url: url,
                 maxDimension: maxDimension,
-                processing: processing
+                processing: processing,
+                cancel: cancellation
             )
         }
         guard !isCancelled else { return }

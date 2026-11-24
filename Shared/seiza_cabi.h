@@ -256,6 +256,11 @@ typedef struct SeizaDenoised SeizaDenoised;
 typedef struct SeizaDrizzleResult SeizaDrizzleResult;
 
 /*
+ An owned file restoration. Release it with seiza_file_restoration_free.
+ */
+typedef struct SeizaFileRestoration SeizaFileRestoration;
+
+/*
  Immutable measured grouping book. Safe for concurrent read-only planning.
  */
 typedef struct SeizaFlatGroups SeizaFlatGroups;
@@ -566,6 +571,17 @@ typedef struct {
  the channels, the tiles done in this channel, and its tiles.
  */
 typedef void (*SeizaModelProgressCallback)(size_t, size_t, size_t, size_t, void*);
+
+/*
+ Told of each step of a model download, on the downloading thread: one
+ event as JSON, valid only for the duration of the call, and the caller's
+ context. The event's kind is under `event` (`fetching-manifest`,
+ `using-cached-manifest`, `cache-hit`, `download-started`,
+ `download-progress`, `download-complete`, `installing`, `verifying`,
+ `install-complete`), beside its fields: a transfer's `name`, `downloaded`
+ and `total` bytes on the wire, and `written` bytes once decompressed.
+ */
+typedef void (*SeizaModelDownloadProgressCallback)(const char*, void*);
 
 /*
  Progress for the parallax functions: one event as JSON, valid only for
@@ -1407,7 +1423,9 @@ char *seiza_stack_detect_defects_json(const char *paths_json,
  `"interpolation": "bilinear" | "lanczos3"`,
  `"normalization": {"mode": "local-background", "options": {"tile_size": 256}}`,
  `"weighting": {"mode": "inverse-noise-variance"}`,
- `"registration": {"model": "quadratic"}`,
+ `"registration": {"model": "similarity" | "affine" | "quadratic"}`
+ (quadratic by default; a `"registration"` object that names no model is
+ a similarity, as options saved before 0.59 are),
  `"match_tolerances": {"rotation_deg": 5.0}`, the gate the reference and
  every pushed light are judged under against the masters (tolerances left
  out keep their defaults), or `"gpu": {"enabled": false}`, which keeps
@@ -2178,6 +2196,9 @@ bool seiza_live_stacker_retain_frames_for_reintegration(SeizaLiveStacker *stacke
  detection and registration do not run again, and every admitted frame
  takes part.
 
+ Expanded canvases match panel backgrounds only when the stack was opened
+ with `matchMosaicBackgrounds: true`. This is independent of normalization
+ and defaults to false; use calibrated panels with matching photometric gains.
  The live stacker is not changed and may keep integrating afterwards. The
  stack must be replayable: `reintegrationUnavailable` in
  [`seiza_live_stacker_state_json`] says why not when it is not, and this
@@ -4268,6 +4289,39 @@ char *seiza_reblur_consistency_json(const SeizaRemainingKernel *kernel,
                                     char **error_out);
 
 /*
+ Measure a circular aperture at each supplied position on one linear mono
+ plane. Request JSON is {"positions": [[x, y], ...], "options": {"geometry":
+ {"apertureRadius", "annulusInner", "annulusOuter"}, "saturation"?, "gain"?}}.
+ Positions are zero-based with pixel centres on whole numbers and are
+ measured where given; nothing is detected or moved. mask, saturation_mask
+ and uncertainty are nullable width*height planes: mask is nonzero where a
+ pixel must not be used, saturation_mask nonzero where it clipped, and
+ uncertainty each pixel's total 1-sigma noise in the image's units.
+
+ Returns {"measurements": [...]}, one per position in order, each with x, y,
+ flux, fluxError, magnitude, magnitudeError, background, backgroundNoise,
+ apertureSum, apertureArea, annulusPixels, peak and flags {saturated,
+ missingCoverage, unusable}. Flux is signed; values that could not be
+ measured are null. The noise model is the one
+ seiza_stacking::aperture_photometry documents. Free the result with
+ seiza_string_free. No input buffer is modified.
+
+ # Safety
+ data points to width*height readable floats. mask and saturation_mask, if
+ non-null, point to width*height readable bytes, and uncertainty, if
+ non-null, to width*height readable floats. request_json is NUL-terminated
+ UTF-8. error_out, if non-null, points to writable pointer storage.
+ */
+char *seiza_aperture_photometry_json(const float *data,
+                                     size_t width,
+                                     size_t height,
+                                     const uint8_t *mask,
+                                     const uint8_t *saturation_mask,
+                                     const float *uncertainty,
+                                     const char *request_json,
+                                     char **error_out);
+
+/*
  Grade/group/match provided FITS/XISF files or a recursive library and prepare
  cached masters through the native file coordinator. Run off the UI thread.
  camelCase request: operation (analyze/execute/verify/schema), lights, library
@@ -4916,7 +4970,7 @@ char *seiza_master_flat_stability_json(const char *request_json, char **error_ou
 
  `model` names an installed model or a bundle's directory; null means the one
  installed noise model. `options_json` may be null, or hold `backend`,
- `store`, `library`, `cacheDir`, `tile` and `precision`. With no `backend`,
+ `store`, `library`, `cacheDir`, `tile`, `precision` and DirectML `deviceId`. With no `backend`,
  the best one this machine can run and the model's card allows is chosen.
  The first open on Core ML compiles the model, which can take some time.
  Release the result with [`seiza_noise_model_free`].
@@ -4972,6 +5026,90 @@ SeizaDenoised *seiza_noise_model_denoise(SeizaNoiseModel *model,
                                          char **error_out);
 
 /*
+ Run a model on a full linear file or on its center when center is true.
+
+ # Safety
+ The model is live and exclusively borrowed, input is a NUL-terminated path,
+ and the signal, context and error pointer follow seiza_noise_model_denoise.
+ */
+SeizaFileRestoration *seiza_noise_model_denoise_file(SeizaNoiseModel *model,
+                                                     const char *input,
+                                                     bool center,
+                                                     SeizaModelProgressCallback progress,
+                                                     const SeizaCancelSignal *cancel,
+                                                     void *context,
+                                                     char **error_out);
+
+/*
+ Run a model on a bounded rectangle in source pixels; only that crop is inferred.
+
+ # Safety
+ The pointers and callback obey seiza_noise_model_denoise_file.
+ */
+SeizaFileRestoration *seiza_noise_model_denoise_file_region(SeizaNoiseModel *model,
+                                                            const char *input,
+                                                            size_t x,
+                                                            size_t y,
+                                                            size_t width,
+                                                            size_t height,
+                                                            SeizaModelProgressCallback progress,
+                                                            const SeizaCancelSignal *cancel,
+                                                            void *context,
+                                                            char **error_out);
+
+/*
+ Write a preview result as linear FITS for further processing, without full-frame WCS.
+
+ # Safety
+ The result is live, output is NUL-terminated, and error_out is null or writable.
+ */
+char *seiza_file_restoration_write_preview_linear(const SeizaFileRestoration *result,
+                                                  const char *output,
+                                                  float high,
+                                                  float low,
+                                                  float scale_px,
+                                                  char **error_out);
+
+/*
+ Write a full-sized preview by restoring only the selected source rectangle.
+ The source must be the unchanged file used for inference.
+
+ # Safety
+ The result is live, paths are NUL-terminated, error_out is null or writable.
+ */
+char *seiza_file_restoration_write_preview_in_context(const SeizaFileRestoration *result,
+                                                      const char *source,
+                                                      const char *output,
+                                                      float high,
+                                                      float low,
+                                                      float scale_px,
+                                                      char **error_out);
+
+/*
+ Write the blended linear file, or two display images for a center run.
+ On success returns a model report owned by the caller; free with seiza_string_free.
+
+ # Safety
+ The result is live, paths are NUL-terminated, original may be null, and
+ error_out is null or writable.
+ */
+char *seiza_file_restoration_write(const SeizaFileRestoration *result,
+                                   const char *output,
+                                   const char *original,
+                                   float high,
+                                   float low,
+                                   float scale_px,
+                                   char **error_out);
+
+/*
+ Release a file restoration.
+
+ # Safety
+ The result is null or an unreleased handle from seiza_noise_model_denoise_file.
+ */
+void seiza_file_restoration_free(SeizaFileRestoration *result);
+
+/*
  Write the image with `high` of the grain and `low` of the mottle the model
  found taken out, split at a Gaussian of `scale_px`. It costs no inference.
 
@@ -5002,9 +5140,13 @@ const float *seiza_denoised_residual(const SeizaDenoised *denoised,
                                      size_t *length_out);
 
 /*
- What ran, as JSON lent until the result is freed: `model`, `sha256`,
- `backend`, `precision`, `tile`, `noiseMap`, and `channels`, each with its
- `background` and `noise`. A host keys cached results on `sha256`, `backend`,
+ What ran, as JSON lent until the result is freed: `model`, `sha256` (the
+ graph's), `cardSha256` (the model card's), `backend`, `precision`, `tile`,
+ `noiseMap`, `holes`, and `channels`, each with its `background` and
+ `noise`. `holes` is null, or how the image's holes were kept from the
+ network, as the model's card asks: `depth`, `margin`, `fillRadius` and
+ `restore`. The card names its graphs by their hashes and everything the
+ image is read by, so a host keys cached results on `cardSha256`, `backend`,
  `precision` and [`seiza_model_output_version`].
 
  # Safety
@@ -5046,7 +5188,8 @@ char *seiza_model_backends_json(const char *options_json, char **error_out);
 
 /*
  The installed models, as a JSON array the caller frees with
- `seiza_string_free`, each with `name`, `path`, `task`, `noiseMap` and
+ `seiza_string_free`, each with `name`, `path`, `task`, `cardSha256`,
+ `noiseMap`, `holes` (as [`seiza_denoised_report_json`] gives them) and
  `precisions`. `store` may be null for the default store.
 
  # Safety
@@ -5065,6 +5208,70 @@ char *seiza_model_list_json(const char *store, char **error_out);
  non-null, `error_out` must point to writable storage for one pointer.
  */
 char *seiza_model_install_json(const char *source, const char *store, char **error_out);
+
+/*
+ Fetch and validate the hosted model catalog without downloading any graph.
+ The result is JSON owned by the caller. Release it with seiza_string_free.
+
+ # Safety
+ The options are null or a NUL-terminated string; error_out is null or writable.
+ */
+char *seiza_model_catalog_json(const char *options_json, char **error_out);
+
+/*
+ Return the verified installed CPU runtime as `{version, library}`, or JSON
+ null when missing or damaged. Does not download or load a library. The
+ returned JSON is released with `seiza_string_free`.
+
+ # Safety
+ `directory` is a NUL-terminated path; `error_out` is null or writable.
+ */
+char *seiza_onnxruntime_installed_json(const char *directory, char **error_out);
+
+/*
+ Download and install the pinned CPU runtime, including the Windows CRT.
+ Uses verified mirrors and atomic installation, and returns `{version,
+ library}`. Never loads the library or changes the selected backend.
+ Existing valid files work offline. Run off the UI thread, outside Tokio.
+ `progress` receives the same events as model downloads; `cancel` can stop
+ transfer and extraction before publication. Free JSON with seiza_string_free.
+
+ # Safety
+ `directory` is a NUL-terminated path. `cancel` is null or a live signal held
+ until return. `context` is passed to `progress`; `error_out` is null or writable.
+ */
+char *seiza_onnxruntime_install_json(const char *directory,
+                                     SeizaModelDownloadProgressCallback progress,
+                                     const SeizaCancelSignal *cancel,
+                                     void *context,
+                                     char **error_out);
+
+/*
+ Download the model `name` that Seiza's hosted manifest offers, or with
+ `name` null the latest noise model it names, and install it, replacing any
+ model of its name, once its card matches the manifest and its graphs match
+ its card. Returns the model as [`seiza_model_list_json`] describes it, as
+ JSON the caller frees with `seiza_string_free`. `store` may be null for the
+ default store. `options_json` may be null, or hold `baseUrl`, another copy
+ of the hosted models, and `cacheDir`, where downloads are kept. `progress`,
+ when non-null, hears each step as [`SeizaModelDownloadProgressCallback`]
+ describes.
+
+ The call is synchronous and must run off the UI thread. It builds its own
+ Tokio runtime, so it must not be called from a thread already inside one;
+ doing so panics, which this call catches and returns through `error_out`.
+
+ # Safety
+ `name`, `store` and `options_json` must be null or NUL-terminated strings.
+ `context` is passed through untouched to `progress`. When non-null,
+ `error_out` must point to writable storage for one pointer.
+ */
+char *seiza_model_download_json(const char *name,
+                                const char *store,
+                                const char *options_json,
+                                SeizaModelDownloadProgressCallback progress,
+                                void *context,
+                                char **error_out);
 
 /*
  Check a model's graphs against its card. `model` is as for

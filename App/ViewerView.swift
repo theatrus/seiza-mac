@@ -65,7 +65,7 @@ enum ImageProcessingClipboard {
     ) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(processing)
+        let data = try encoder.encode(ProcessingRecipe(processing))
         pasteboard.clearContents()
         pasteboard.setData(data, forType: pasteboardType)
         pasteboard.setString(String(decoding: data, as: UTF8.self), forType: .string)
@@ -78,15 +78,7 @@ enum ImageProcessingClipboard {
             ?? pasteboard.string(forType: .string)?.data(using: .utf8)
         guard let data else { throw ClipboardError.noRecipe }
         do {
-            let decoded = try JSONDecoder().decode(
-                FITSImageProcessingConfiguration.self,
-                from: data
-            )
-            return FITSImageProcessingConfiguration(
-                stretchStack: decoded.stretchStack,
-                backgroundConfiguration: decoded.backgroundConfiguration,
-                deconvolution: decoded.deconvolution
-            )
+            return try ProcessingRecipe.decode(data)
         } catch {
             throw ClipboardError.invalidRecipe(error.localizedDescription)
         }
@@ -781,6 +773,10 @@ private struct ImagePageView: View {
     @State private var showStretchControls = false
     @State private var stretchDraftStages = [FITSStretchConfiguration.default]
     @State private var selectedStretchStageIndex = 0
+    @State private var aiDraft: AIProcessing?
+    @State private var aiRegion: AIRegion?
+    @State private var aiFullPreview = false
+    @State private var aiShowOutline = true
     @State private var backgroundDraft: FITSBackgroundConfiguration?
     @State private var deconvolutionDraft: FITSDeconvolutionConfiguration?
     @State private var isPickingSymmetryPoint = false
@@ -878,13 +874,13 @@ private struct ImagePageView: View {
                         showStretchControls.toggle()
                     }
                 } label: {
-                    Label("Stretch", systemImage: "slider.horizontal.3")
+                    Label("Processing", systemImage: "slider.horizontal.3")
                 }
                 .disabled(!model.supportsAstronomyProcessing)
                 .help(
                     model.supportsAstronomyProcessing
                         ? "Stretch: \(model.stretchConfiguration.type.title)"
-                        : "Stretch controls are available for FITS and XISF images"
+                        : "Processing is available for FITS and XISF images"
                 )
                 .popover(isPresented: $showStretchControls, arrowEdge: .bottom) {
                     stretchEditor(presentation: .popover)
@@ -1090,6 +1086,7 @@ private struct ImagePageView: View {
         .onChange(of: model.url) { _, _ in
             showStretchControls = false
             stretchPanelPresenter.close()
+            aiRegion = nil
             isPickingSymmetryPoint = false
             returnsToStretchPanelAfterPicking = false
             copiesImageWhenPreviewFinishes = false
@@ -1137,6 +1134,12 @@ private struct ImagePageView: View {
                 Text(wcsExportError ?? "An unknown error occurred.")
             }
         )
+        .alert("Processing Settings", isPresented: Binding(
+            get: { model.processingNotice != nil },
+            set: { if !$0 { model.processingNotice = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(model.processingNotice ?? "") }
         .alert(
             "Couldn’t Copy or Paste Adjustments",
             isPresented: Binding(
@@ -1296,7 +1299,7 @@ private struct ImagePageView: View {
             model.replaceStretchStack(
                 with: processing.stretchStack,
                 backgroundConfiguration: processing.backgroundConfiguration,
-                deconvolution: processing.deconvolution
+                deconvolution: processing.deconvolution, ai: processing.ai
             )
             beginStretchEditing()
         } catch {
@@ -1307,6 +1310,7 @@ private struct ImagePageView: View {
     private func beginStretchEditing() {
         stretchDraftStages = model.stretchHistory.appliedStages
         selectedStretchStageIndex = stretchDraftStages.count - 1
+        aiDraft = model.processingConfiguration.ai
         backgroundDraft = model.backgroundConfiguration
         deconvolutionDraft = model.deconvolutionConfiguration
     }
@@ -1320,6 +1324,7 @@ private struct ImagePageView: View {
             selectedStageIndex: $selectedStretchStageIndex,
             background: $backgroundDraft,
             deconvolution: $deconvolutionDraft,
+            ai: $aiDraft, region: $aiRegion, fullPreview: $aiFullPreview, showOutline: $aiShowOutline,
             undo: performUndo,
             redo: performRedo,
             pickSymmetryPoint: {
@@ -1329,22 +1334,24 @@ private struct ImagePageView: View {
             },
             popOut: presentation == .popover ? { presentStretchPanel() } : nil,
             contentMaxHeight: presentation == .popover ? 520 : nil,
-            preview: { stack, background, deconvolution in
+            preview: { stack, background, deconvolution, ai, region in
                 model.preview(
                     stretchStack: stack,
                     backgroundConfiguration: background,
                     deconvolution: deconvolution,
+                    ai: ai, region: region,
                     zoom: zoom,
                     displayScale: Double(displayScale)
                 )
             },
             clearPreview: model.cancelPreview,
-            save: { stack, background, deconvolution in
+            save: { stack, background, deconvolution, ai in
                 model.replaceStretchStack(
                     with: stack,
                     backgroundConfiguration: background,
-                    deconvolution: deconvolution
+                    deconvolution: deconvolution, ai: ai
                 )
+                model.saveProcessing()
                 dismissStretchEditor(presentation)
             },
             cancel: {
@@ -1357,7 +1364,7 @@ private struct ImagePageView: View {
     private func presentStretchPanel() {
         showStretchControls = false
         stretchPanelPresenter.present(
-            title: "Stretch — \(model.url.lastPathComponent)",
+            title: "Processing — \(model.url.lastPathComponent)",
             relativeTo: NSApp.mainWindow
         ) {
             stretchEditor(presentation: .panel)
@@ -1673,6 +1680,16 @@ private struct ImagePageView: View {
                             .frame(width: metrics.imageSize.width, height: metrics.imageSize.height)
                             .clipped(antialiased: false)
 
+                        if (showStretchControls || stretchPanelPresenter.isPresented), aiDraft != nil,
+                           !aiFullPreview, aiShowOutline, let metadata = model.metadata {
+                            let r = aiRegion ?? AIRegion.center(width: metadata.width, height: metadata.height)
+                            let sx = metrics.imageSize.width / CGFloat(max(1, metadata.width))
+                            let sy = metrics.imageSize.height / CGFloat(max(1, metadata.height))
+                            Rectangle().stroke(.yellow, lineWidth: 1)
+                                .frame(width: CGFloat(r.width) * sx, height: CGFloat(r.height) * sy)
+                                .offset(x: CGFloat(r.x) * sx, y: CGFloat(r.y) * sy)
+                                .allowsHitTesting(false).accessibilityHidden(true)
+                        }
                         if let analysis = starAnalysisModel, showSensorTilt {
                             StarAnalysisOverlayView(
                                 model: analysis,

@@ -8,7 +8,7 @@ objects in it. Turn a finished image into a camera tour with depth, motion, and
 titles. Image processing and video encoding run locally; optional online
 stellar-distance lookup sends sky coordinates to astronomical catalogues.
 
-[**Download Seiza for Mac 0.9.2**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.9.2-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
+[**Download Seiza for Mac 0.10.0**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.10.0-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
 **Also from Seiza:** [Core, CLI, and libraries](https://github.com/theatrus/seiza) ·
 [Seiza for Windows](https://github.com/theatrus/seiza-win) ·
@@ -33,7 +33,19 @@ Plate solving and sky-panel analysis are optional, including for mosaics.
 
 ![The Stack tab shows selected lights, automatic calibration and the Stack action](docs/images/stacking-calibration/direct-stack.jpg)
 
-## New in 0.9.2
+## AI noise reduction and saved processing in 0.10.0
+
+Open a linear FITS or XISF image, choose **Processing**, and turn on **AI Noise Reduction**. Seiza downloads the recommended noise model on first use and runs it locally on Apple silicon. The app includes ONNX Runtime. Intel Macs retain the viewer, stacker, and other processing tools.
+
+- Drag a rectangle in the preview or choose **Full Image**. Adjust grain, mottle, and noise scale. Changing the strengths reuses cached inference. The outline affects only the editor.
+- **Save Changes** applies the recipe to the whole image. Image export and parallax use the same processing. **Save Linear AI FITS…** exports denoised linear samples before gradient correction, deconvolution, or stretching.
+- **Model and device** provides model downloads, updates, local bundle import, device, precision, and tile size. The runtime and models process images on your Mac.
+- Only **Save Changes** writes a recipe beside the source, for example `M31.xisf.seiza.json`. Opening, previewing, cancelling, pasting, undoing, redoing, and exporting leave the saved recipe untouched. Choose **Save Changes** again to remember subsequent edits.
+- Keep the recipe with the image when moving or renaming it. Reopening restores AI, gradient correction, deconvolution, ordered stretches, and color handling. If the recipe cannot be applied, Seiza opens with default processing and leaves the saved file intact.
+
+Uses the same Seiza 0.56.0 restoration core and versioned recipe format as Seiza for Windows 0.10.1.
+
+## Stacking workflows from 0.9.2
 
 Start from the welcome window, the File menu, or any viewer. Add frames
 directly to setup without opening them in the viewer first. Existing frame
@@ -424,7 +436,7 @@ and refits the whole frame as its window changes size.
 
 ## Download
 
-[**Download Seiza for Mac 0.9.2**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.9.2-universal.dmg), open it, and drag Seiza to Applications.
+[**Download Seiza for Mac 0.10.0**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.10.0-universal.dmg), open it, and drag Seiza to Applications.
 
 Or install with [Homebrew](https://brew.sh) from the
 [theatrus/homebrew-seiza tap](https://github.com/theatrus/homebrew-seiza):
@@ -498,8 +510,8 @@ DerivedData/Build/Products/Debug/Seiza.app
 
 Open `Seiza.xcodeproj` to run and sign it with a local development team.
 
-This branch targets `seiza-cabi`/`seiza` 0.50.0, `seiza-calibration` 0.12.2,
-`seiza-parallax` 0.20.1, `seiza-stacking` 0.58.0 and `seiza-download` 0.9.1.
+This branch targets `seiza-cabi`/`seiza` 0.56.0,
+`seiza-parallax` 0.26.0, `seiza-stacking` 0.64.0 and `seiza-download` 0.12.0.
 The shared file coordinator introduced by [Seiza #406](https://github.com/theatrus/seiza/pull/406)
 is upstream. Swift calls its C ABI directly; the Mac calibration coordinator has
 moved upstream.

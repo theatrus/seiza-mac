@@ -6,6 +6,10 @@ struct FITSStretchControlsView: View {
     @Binding var selectedStageIndex: Int
     @Binding var background: FITSBackgroundConfiguration?
     @Binding var deconvolution: FITSDeconvolutionConfiguration?
+    @Binding var ai: AIProcessing?
+    @Binding var region: AIRegion?
+    @Binding var fullPreview: Bool
+    @Binding var showOutline: Bool
     let undo: () -> Void
     let redo: () -> Void
     let pickSymmetryPoint: () -> Void
@@ -14,13 +18,13 @@ struct FITSStretchControlsView: View {
     let preview: (
         FITSStretchStack,
         FITSBackgroundConfiguration?,
-        FITSDeconvolutionConfiguration?
+        FITSDeconvolutionConfiguration?, AIProcessing?, AIRegion?
     ) -> Void
     let clearPreview: () -> Void
     let save: (
         FITSStretchStack,
         FITSBackgroundConfiguration?,
-        FITSDeconvolutionConfiguration?
+        FITSDeconvolutionConfiguration?, AIProcessing?
     ) -> Void
     let cancel: () -> Void
 
@@ -31,7 +35,7 @@ struct FITSStretchControlsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Image Stretch")
+                Text("Processing")
                     .font(.headline)
                 Spacer()
                 if let popOut {
@@ -57,6 +61,9 @@ struct FITSStretchControlsView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    AIProcessingControls(model: model, settings: $ai, region: $region,
+                                         fullPreview: $fullPreview, showOutline: $showOutline)
+                    Divider()
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Text("Stretch Stages")
@@ -271,12 +278,12 @@ struct FITSStretchControlsView: View {
                     save(
                         FITSStretchStack(stages: stages),
                         background,
-                        deconvolution
+                        deconvolution, ai
                     )
                 }
                     .keyboardShortcut(.defaultAction)
                     .disabled(
-                        stages.contains { $0.validationMessage != nil }
+                        (ai != nil && (try? ai?.validate()) == nil) || stages.contains { $0.validationMessage != nil }
                             || background?.validationMessage != nil
                             || deconvolution?.validationMessage != nil
                     )
@@ -291,6 +298,9 @@ struct FITSStretchControlsView: View {
             }
             schedulePreview()
         }
+        .onChange(of: ai) { _, _ in schedulePreview() }
+        .onChange(of: region) { _, _ in schedulePreview() }
+        .onChange(of: fullPreview) { _, _ in schedulePreview() }
         .onChange(of: stages) { _, _ in
             schedulePreview()
         }
@@ -702,7 +712,8 @@ struct FITSStretchControlsView: View {
             }
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                preview(stack, backgroundConfiguration, deconvolution)
+                let selected = model.metadata.map { AIRegion.center(width: $0.width, height: $0.height) }
+                preview(stack, backgroundConfiguration, deconvolution, ai, fullPreview ? nil : (region ?? selected))
             }
         }
     }
