@@ -236,9 +236,9 @@ jobs:
             '' \
             "### New in ${version}" \
             '' \
-            '- AI Noise Reduction runs on the open linear FITS or XISF image using Seiza 0.56.0. The universal app includes ONNX Runtime for Apple silicon and downloads the recommended model on first use.' \
-            '- Drag a preview rectangle or select the full image. Adjust grain and mottle with cached inference. Export the linear AI FITS or use the full recipe in image and parallax exports.' \
-            '- Save Changes remembers the processing stack beside the source as image.fits.seiza.json. Keep the sidecar with its image. Browsing, previews, clipboard edits, undo, redo and exports leave it untouched.' \
+            '- StarXTerminator works again in Parallax videos. 0.10.0 refused every rc-astro command chosen in Settings, and the App Sandbox would not have let it run one. Seiza now runs outside the sandbox; it stays signed and notarized, and the Quick Look and thumbnail extensions stay sandboxed.' \
+            '- On first launch Seiza brings settings, calibration masters, live stacks, catalogs and AI models out of the old sandbox folder, leaving folders already outside alone. Calibration masters are rebuilt once. Going back to 0.10.0 afterwards keeps its settings but not those folders.' \
+            '- Retains Seiza 0.56.0, AI Noise Reduction and saved processing from 0.10.0.' \
             '' \
             "- [Download the universal DMG](${release_base}/Seiza-${version}-universal.dmg)" \
             "- [Download the zipped application](${release_base}/Seiza-${version}-universal.zip)" \

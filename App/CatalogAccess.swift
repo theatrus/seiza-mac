@@ -66,9 +66,18 @@ final class RcAstroSettings: ObservableObject {
                                relativeTo: nil, bookmarkDataIsStale: &stale)
              return (url, stale)
          },
-         isExecutable: @escaping (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }) {
+         isExecutable: @escaping (String) -> Bool = RcAstroSettings.isRunnableFile) {
         self.defaults = defaults; self.makeBookmark = makeBookmark
         self.readBookmark = readBookmark; self.isExecutable = isExecutable
+    }
+
+    /// A regular file this user may run. `access(X_OK)` alone, like
+    /// `FileManager.isExecutableFile`, also accepts a folder such as an
+    /// `.app` bundle, which cannot be started as a command.
+    nonisolated static func isRunnableFile(atPath path: String) -> Bool {
+        var info = stat()
+        guard stat(path, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return false }
+        return access(path, X_OK) == 0
     }
 
     var displayPath: String { defaults.string(forKey: pathKey) ?? "" }
@@ -76,7 +85,9 @@ final class RcAstroSettings: ObservableObject {
     func save(_ url: URL) throws {
         let scope = ParallaxScopedURL(url)
         try withExtendedLifetime(scope) {
-            guard isExecutable(url.path) else { throw SeizaCoreError.message("Choose an executable rc-astro command.") }
+            guard isExecutable(url.path) else {
+                throw SeizaCoreError.message("Choose the rc-astro command itself, not a folder or app. It must be marked executable.")
+            }
             let data = try makeBookmark(url)
             defaults.set(data, forKey: bookmarkKey)
             defaults.set(url.path, forKey: pathKey)

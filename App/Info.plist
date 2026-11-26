@@ -87,8 +87,6 @@
     <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
     <key>NSHighResolutionCapable</key>
     <true/>
-    <key>SUEnableInstallerLauncherService</key>
-    <true/>
     <key>SUFeedURL</key>
     <string>https://updates.seiza.fyi/mac/appcast.xml</string>
     <key>SUPublicEDKey</key>

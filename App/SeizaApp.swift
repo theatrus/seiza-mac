@@ -110,6 +110,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private let collectionErrorPresenter: ((Error) -> Void)?
 
     override convenience init() {
+        // Before UpdateController and any settings read preferences.
+        SandboxMigration.runIfNeeded()
         self.init(collectionScanner: { try await ImageCollection.scanInBackground(from: $0) })
     }
 

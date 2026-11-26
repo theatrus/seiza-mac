@@ -8,7 +8,7 @@ objects in it. Turn a finished image into a camera tour with depth, motion, and
 titles. Image processing and video encoding run locally; optional online
 stellar-distance lookup sends sky coordinates to astronomical catalogues.
 
-[**Download Seiza for Mac 0.10.0**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.10.0-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
+[**Download Seiza for Mac 0.10.1**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.10.1-universal.dmg) · [Release notes and other downloads](https://github.com/theatrus/seiza-mac/releases/latest)
 
 **Also from Seiza:** [Core, CLI, and libraries](https://github.com/theatrus/seiza) ·
 [Seiza for Windows](https://github.com/theatrus/seiza-win) ·
@@ -33,6 +33,16 @@ Plate solving and sky-panel analysis are optional, including for mosaics.
 
 ![The Stack tab shows selected lights, automatic calibration and the Stack action](docs/images/stacking-calibration/direct-stack.jpg)
 
+## StarXTerminator works in 0.10.1
+
+Seiza 0.10.0 refused every `rc-astro` command chosen in **Settings → Star
+separation**, and macOS would not have let it run one anyway. Seiza now runs
+outside the App Sandbox, so Parallax videos can split stars with your own
+licensed RC-Astro install. Seiza is still signed and notarized, and its Quick
+Look and thumbnail extensions stay sandboxed. On first launch it brings your
+settings, calibration masters, live stacks, catalogs and AI models out of the
+old sandbox folder.
+
 ## AI noise reduction and saved processing in 0.10.0
 
 Open a linear FITS or XISF image, choose **Processing**, and turn on **AI Noise Reduction**. Seiza downloads the recommended noise model on first use and runs it locally on Apple silicon. The app includes ONNX Runtime. Intel Macs retain the viewer, stacker, and other processing tools.
@@ -40,7 +50,7 @@ Open a linear FITS or XISF image, choose **Processing**, and turn on **AI Noise 
 - Drag a rectangle in the preview or choose **Full Image**. Adjust grain, mottle, and noise scale. Changing the strengths reuses cached inference. The outline affects only the editor.
 - **Save Changes** applies the recipe to the whole image. Image export and parallax use the same processing. **Save Linear AI FITS…** exports denoised linear samples before gradient correction, deconvolution, or stretching.
 - **Model and device** provides model downloads, updates, local bundle import, device, precision, and tile size. The runtime and models process images on your Mac.
-- Only **Save Changes** writes a recipe beside the source, for example `M31.xisf.seiza.json`. Opening, previewing, cancelling, pasting, undoing, redoing, and exporting leave the saved recipe untouched. Choose **Save Changes** again to remember subsequent edits. When a single image was opened from Finder, macOS may ask for access to its folder the first time you save.
+- Only **Save Changes** writes a recipe beside the source, for example `M31.xisf.seiza.json`. Opening, previewing, cancelling, pasting, undoing, redoing, and exporting leave the saved recipe untouched. Choose **Save Changes** again to remember subsequent edits.
 - Keep the recipe with the image when moving or renaming it. Reopening restores AI, gradient correction, deconvolution, ordered stretches, and color handling. If the recipe cannot be applied, Seiza opens with default processing and leaves the saved file intact.
 
 Uses the same Seiza 0.56.0 restoration core and versioned recipe format as Seiza for Windows 0.10.1.
@@ -405,8 +415,7 @@ seiza download-data prebuilt --output /path/to/catalogs
 ```
 
 If you created a catalog directory on the command line, choose that directory
-in Seiza's Settings. The sandbox permission is retained as a security-scoped
-bookmark. The main object catalog supplies named-star and deep-sky overlays,
+in Seiza's Settings. Seiza remembers it as a security-scoped bookmark. The main object catalog supplies named-star and deep-sky overlays,
 `transients.bin` supplies dated transient overlays, and `minor-bodies.bin`
 supplies comet and asteroid positions at the image acquisition time. Solving and
 catalogue loading begin only when requested by Solve or a video operation. If
@@ -436,7 +445,7 @@ and refits the whole frame as its window changes size.
 
 ## Download
 
-[**Download Seiza for Mac 0.10.0**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.10.0-universal.dmg), open it, and drag Seiza to Applications.
+[**Download Seiza for Mac 0.10.1**](https://github.com/theatrus/seiza-mac/releases/latest/download/Seiza-0.10.1-universal.dmg), open it, and drag Seiza to Applications.
 
 Or install with [Homebrew](https://brew.sh) from the
 [theatrus/homebrew-seiza tap](https://github.com/theatrus/homebrew-seiza):

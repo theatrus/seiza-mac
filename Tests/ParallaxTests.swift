@@ -33,6 +33,44 @@ final class ParallaxTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: "catalogDirectory"), "catalogs")
     }
 
+    /// Runs the real check on real files. These live in the app's own temp
+    /// folder, so they cannot show the sandbox refusing `access(X_OK)` on a
+    /// user-picked file (that needs the Open panel); they do catch an `.app`
+    /// folder passing for a command, which `access` allowed.
+    @MainActor
+    func testRcAstroSettingsAcceptRealExecutableAndRefuseOthers() throws {
+        let suite = "RcAstro-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func file(_ name: String, mode: Int) throws -> URL {
+            let url = directory.appendingPathComponent(name)
+            try Data("#!/bin/sh\n".utf8).write(to: url)
+            try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path)
+            return url
+        }
+        let executable = try file("rc-astro", mode: 0o755)
+        let plain = try file("readme", mode: 0o644)
+        let bundle = directory.appendingPathComponent("RC-Astro.app", isDirectory: true)
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+
+        XCTAssertTrue(RcAstroSettings.isRunnableFile(atPath: executable.path))
+        XCTAssertFalse(RcAstroSettings.isRunnableFile(atPath: plain.path))
+        XCTAssertFalse(RcAstroSettings.isRunnableFile(atPath: bundle.path), "A folder is not a command")
+        XCTAssertFalse(RcAstroSettings.isRunnableFile(atPath: directory.appendingPathComponent("missing").path))
+
+        let settings = RcAstroSettings(defaults: defaults,
+            makeBookmark: { Data($0.path.utf8) },
+            readBookmark: { (URL(fileURLWithPath: String(decoding: $0, as: UTF8.self)), false) })
+        try settings.save(executable)
+        XCTAssertEqual(settings.resolve(), executable)
+        XCTAssertThrowsError(try settings.save(bundle))
+        XCTAssertThrowsError(try settings.save(plain))
+        XCTAssertEqual(settings.resolve(), executable)
+    }
+
     @MainActor
     func testRcAstroSettingsUpdateExistingAndNewParallaxWindows() async throws {
         let suite = "RcAstro-\(UUID().uuidString)"

@@ -591,7 +591,9 @@ final class ParallaxSession: ObservableObject {
     private func request(preview: Bool) throws -> ParallaxRequest {
         guard let files, sourceReady else { throw SeizaCoreError.message("The source snapshot is not ready.") }
         if let message = composition.validationMessage { throw SeizaCoreError.message(message) }
+        // Outside the sandbox the caches folder is shared, so keep to our own.
         let cache = try FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "fyi.seiza.mac", isDirectory: true)
             .appendingPathComponent("ParallaxDistances", isDirectory: true)
         try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
         let inputs = ParallaxInputs(image: files.image.path,
