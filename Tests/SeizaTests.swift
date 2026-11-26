@@ -117,7 +117,7 @@ final class SandboxMigrationTests: XCTestCase {
         try write("session", to: "LiveStacks/night/session.json", under: oldSupport)
         let oldCore = paths.container.appendingPathComponent("Library/Application Support/fyi.Seiza.seiza", isDirectory: true)
         try write("stars", to: "catalogs/catalog.bin", under: oldCore)
-        try write("weights", to: "models/denoise.onnx", under: oldCore)
+        try write("weights", to: "Models/denoise.onnx", under: oldSupport)
         // Another product's folder outside the container must survive as is.
         let newSupport = paths.applicationSupport.appendingPathComponent("Seiza", isDirectory: true)
         try write("plugin", to: "Photoshop/plugin.txt", under: newSupport)
@@ -138,9 +138,13 @@ final class SandboxMigrationTests: XCTestCase {
         XCTAssertEqual(read("LiveStacks/night/session.json", under: newSupport), "session")
         XCTAssertEqual(read("Photoshop/plugin.txt", under: newSupport), "plugin")
         XCTAssertEqual(read("catalogs/catalog.bin", under: newCore), "stars")
-        XCTAssertEqual(read("models/denoise.onnx", under: newCore), "weights")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: oldSupport.appendingPathComponent("LiveStacks").path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: preferencesURL.path), "The container stays for a downgrade")
+        XCTAssertEqual(read("Models/denoise.onnx", under: newSupport), "weights")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: preferencesURL.path), "The container's preferences stay")
+        // A link at each old path keeps paths saved while sandboxed working.
+        let oldLiveStacks = oldSupport.appendingPathComponent("LiveStacks").path
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: oldLiveStacks),
+                       newSupport.appendingPathComponent("LiveStacks").path)
+        XCTAssertEqual(read("CalibrationMasters/lib/index.json", under: oldSupport), "master")
 
         // A second launch changes nothing, even if the container has changed.
         defaults.set("/chosen-later", forKey: "catalogDirectory")
@@ -160,6 +164,46 @@ final class SandboxMigrationTests: XCTestCase {
         XCTAssertEqual(read("catalogs/catalog.bin", under: newCore), "new")
         XCTAssertEqual(read("catalogs/catalog.bin", under: oldCore), "old", "Nothing is overwritten or lost")
         XCTAssertTrue(defaults.bool(forKey: SandboxMigration.doneKey))
+    }
+
+    func testRetryAfterFailedMoveKeepsSettingsChangedSince() throws {
+        let preferences = try PropertyListSerialization.data(
+            fromPropertyList: ["rcAstroExecutablePath": "/old/rc-astro"], format: .binary, options: 0)
+        let preferencesURL = paths.container.appendingPathComponent("Library/Preferences/fyi.seiza.mac.plist")
+        try FileManager.default.createDirectory(at: preferencesURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try preferences.write(to: preferencesURL)
+        let oldSupport = paths.container.appendingPathComponent("Library/Application Support/Seiza", isDirectory: true)
+        try write("session", to: "LiveStacks/a.json", under: oldSupport)
+        // A file where the Seiza folder should be makes every move fail.
+        try write("not a folder", to: "Seiza", under: paths.applicationSupport)
+
+        XCTAssertThrowsError(try SandboxMigration.run(paths: paths, defaults: defaults))
+        XCTAssertEqual(defaults.string(forKey: "rcAstroExecutablePath"), "/old/rc-astro")
+        XCTAssertFalse(defaults.bool(forKey: SandboxMigration.doneKey))
+        XCTAssertEqual(read("LiveStacks/a.json", under: oldSupport), "session", "A failed move loses nothing")
+
+        // The user picks a new command, then the obstacle goes away.
+        defaults.set("/new/rc-astro", forKey: "rcAstroExecutablePath")
+        try FileManager.default.removeItem(at: paths.applicationSupport.appendingPathComponent("Seiza"))
+        try SandboxMigration.run(paths: paths, defaults: defaults)
+
+        XCTAssertEqual(defaults.string(forKey: "rcAstroExecutablePath"), "/new/rc-astro")
+        XCTAssertEqual(read("Seiza/LiveStacks/a.json", under: paths.applicationSupport), "session")
+        XCTAssertTrue(defaults.bool(forKey: SandboxMigration.doneKey))
+    }
+
+    func testFinishesAMoveThatStoppedHalfway() throws {
+        // The folder left the container but never got its final name.
+        let staging = paths.applicationSupport.appendingPathComponent("Seiza/Models.moving-from-sandbox", isDirectory: true)
+        try write("weights", to: "denoise.onnx", under: staging)
+        let oldModels = paths.container.appendingPathComponent("Library/Application Support/Seiza/Models")
+        try FileManager.default.createDirectory(at: oldModels.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        try SandboxMigration.run(paths: paths, defaults: defaults)
+
+        XCTAssertEqual(read("Seiza/Models/denoise.onnx", under: paths.applicationSupport), "weights")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staging.path))
+        XCTAssertEqual(read("denoise.onnx", under: oldModels), "weights", "The old path links to the new one")
     }
 
     func testFreshInstallWithNoContainerJustRecordsItRan() throws {

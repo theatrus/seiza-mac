@@ -71,14 +71,13 @@ final class RcAstroSettings: ObservableObject {
         self.readBookmark = readBookmark; self.isExecutable = isExecutable
     }
 
-    /// A regular file with an execute bit set. The App Sandbox answers
-    /// `access(X_OK)`, and so `FileManager.isExecutableFile`, with "no" for
-    /// every user-selected file, so read the mode bits instead. Unlike
-    /// `access`, this also refuses directories such as an `.app` bundle.
+    /// A regular file this user may run. `access(X_OK)` alone, like
+    /// `FileManager.isExecutableFile`, also accepts a folder such as an
+    /// `.app` bundle, which cannot be started as a command.
     nonisolated static func isRunnableFile(atPath path: String) -> Bool {
         var info = stat()
-        guard stat(path, &info) == 0 else { return false }
-        return info.st_mode & S_IFMT == S_IFREG && info.st_mode & 0o111 != 0
+        guard stat(path, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return false }
+        return access(path, X_OK) == 0
     }
 
     var displayPath: String { defaults.string(forKey: pathKey) ?? "" }
