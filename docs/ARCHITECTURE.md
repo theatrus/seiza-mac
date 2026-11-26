@@ -154,8 +154,20 @@ links verified cache objects into the configured directory on the same file
 system, avoiding a second copy and hash pass, and falls back to a verified copy
 across file systems. Catalog setup runs on a utility queue and is owned by a
 persistent controller, allowing the Settings window to close without canceling
-it. The sandboxed app has outbound-network and user-selected read/write
-entitlements; selected directories are retained as security-scoped bookmarks.
+it. Selected directories are retained as security-scoped bookmarks.
+
+The app runs outside the App Sandbox: the sandbox refuses to start a program the
+user picks, so StarXTerminator could not run the user's `rc-astro`. It is still
+signed with the hardened runtime and notarized, and the Quick Look and thumbnail
+extensions stay sandboxed. Releases up to 0.10 were sandboxed and kept their
+data in `~/Library/Containers/fyi.seiza.mac`. On its first launch outside the
+sandbox, `SandboxMigration` copies the container's preferences across (its
+values win over any older unsandboxed ones). It then moves `Seiza/CalibrationMasters`,
+`Seiza/LiveStacks`, and the core's default `fyi.Seiza.seiza/catalogs` and
+`fyi.Seiza.seiza/models` into `~/Library/Application Support`, folder by
+folder, leaving any folder already there alone (the `seiza` command-line tool
+shares `fyi.Seiza.seiza`). Caches stay behind and rebuild themselves. The
+container itself stays in place.
 
 ## Frame stacking and live sessions
 

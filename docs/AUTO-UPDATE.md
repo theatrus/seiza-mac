@@ -12,14 +12,12 @@ contains:
 - `SUFeedURL`, which points to our copy of the feed on updates.seiza.fyi;
 - `SUPublicEDKey`, which verifies each release ZIP and the feed itself;
 - `SURequireSignedFeed` and `SUVerifyUpdateBeforeExtraction`, which make
-  Sparkle refuse a feed or ZIP that this key did not sign; and
-- `SUEnableInstallerLauncherService`, which lets the sandboxed app install an
-  update.
+  Sparkle refuse a feed or ZIP that this key did not sign.
 
-`App/Seiza.entitlements` grants outbound network access and the two Sparkle
-installer service names required by a sandboxed app. Seiza already needs
-outbound access for catalog setup, so it does not enable Sparkle's separate
-downloader service.
+The app runs outside the App Sandbox, so Sparkle installs updates directly and
+needs neither its installer launcher service nor its downloader service.
+Releases up to 0.10 were sandboxed and used the launcher service; they install
+the first unsandboxed release that way, and it then updates itself directly.
 
 The app menu includes **Check for Updates…**. Settings exposes automatic checks
 and automatic download and install. Sparkle stores these choices in the app's

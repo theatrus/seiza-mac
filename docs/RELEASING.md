@@ -57,9 +57,10 @@ same Developer ID Application identity and the shared
 `QuickLook/SeizaQuickLook.entitlements` file, then signs the containing
 `fyi.seiza.mac` app with `App/Seiza.entitlements`.
 
-The current entitlements only enable the App Sandbox and user-selected
-read-only files, so this Developer ID distribution does not require a separate
-provisioning profile. If either extension later adopts a restricted capability
+The extensions' entitlements only enable the App Sandbox and user-selected
+read-only files. The app has no entitlements: it runs outside the sandbox (see
+[ARCHITECTURE.md](ARCHITECTURE.md)). So this Developer ID distribution does not
+require a separate provisioning profile. If either extension later adopts a restricted capability
 such as iCloud, push notifications, or an application group, add the matching
 App ID/capability and Developer ID provisioning profile at that time.
 

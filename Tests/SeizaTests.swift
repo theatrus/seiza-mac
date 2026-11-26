@@ -51,7 +51,8 @@ final class UpdateConfigurationTests: XCTestCase {
             UpdateFeedSelection.fallbackFeedURL,
             "https://github.com/theatrus/seiza-mac/releases/latest/download/appcast.xml"
         )
-        XCTAssertEqual(info["SUEnableInstallerLauncherService"] as? Bool, true)
+        // Only a sandboxed app needs Sparkle's installer launcher service.
+        XCTAssertNil(info["SUEnableInstallerLauncherService"])
         XCTAssertEqual(info["SURequireSignedFeed"] as? Bool, true)
         XCTAssertEqual(info["SUVerifyUpdateBeforeExtraction"] as? Bool, true)
 
@@ -68,6 +69,109 @@ final class UpdateConfigurationTests: XCTestCase {
             sparkleBundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
             "2.9.6"
         )
+    }
+}
+
+final class SandboxMigrationTests: XCTestCase {
+    private var root: URL!
+    private var defaults: UserDefaults!
+    private var suite = ""
+
+    override func setUpWithError() throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        suite = "SandboxMigration-\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suite)
+    }
+
+    override func tearDownWithError() throws {
+        defaults.removePersistentDomain(forName: suite)
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    private var paths: SandboxMigration.Paths {
+        SandboxMigration.Paths(container: root.appendingPathComponent("Container/Data", isDirectory: true),
+                               applicationSupport: root.appendingPathComponent("Support", isDirectory: true),
+                               bundleIdentifier: "fyi.seiza.mac")
+    }
+
+    private func write(_ text: String, to relative: String, under base: URL) throws {
+        let url = base.appendingPathComponent(relative)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(text.utf8).write(to: url)
+    }
+
+    private func read(_ relative: String, under base: URL) -> String? {
+        (try? Data(contentsOf: base.appendingPathComponent(relative))).map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    func testMovesPreferencesAndSeizaFoldersOnce() throws {
+        let preferences: [String: Any] = ["catalogDirectory": "/catalogs", "rcAstroExecutablePath": "/tools/rc-astro",
+                                          "catalogBookmark": Data([1, 2, 3]), "useGpuForStacking": false]
+        let plist = try PropertyListSerialization.data(fromPropertyList: preferences, format: .binary, options: 0)
+        let preferencesURL = paths.container.appendingPathComponent("Library/Preferences/fyi.seiza.mac.plist")
+        try FileManager.default.createDirectory(at: preferencesURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try plist.write(to: preferencesURL)
+        let oldSupport = paths.container.appendingPathComponent("Library/Application Support/Seiza", isDirectory: true)
+        try write("master", to: "CalibrationMasters/lib/index.json", under: oldSupport)
+        try write("session", to: "LiveStacks/night/session.json", under: oldSupport)
+        let oldCore = paths.container.appendingPathComponent("Library/Application Support/fyi.Seiza.seiza", isDirectory: true)
+        try write("stars", to: "catalogs/catalog.bin", under: oldCore)
+        try write("weights", to: "models/denoise.onnx", under: oldCore)
+        // Another product's folder outside the container must survive as is.
+        let newSupport = paths.applicationSupport.appendingPathComponent("Seiza", isDirectory: true)
+        try write("plugin", to: "Photoshop/plugin.txt", under: newSupport)
+        let newCore = paths.applicationSupport.appendingPathComponent("fyi.Seiza.seiza", isDirectory: true)
+        // A stale value from an earlier unsandboxed build loses to the container's.
+        defaults.set("/stale", forKey: "catalogDirectory")
+        defaults.set("kept", forKey: "onlyOutside")
+
+        try SandboxMigration.run(paths: paths, defaults: defaults)
+
+        XCTAssertEqual(defaults.string(forKey: "catalogDirectory"), "/catalogs")
+        XCTAssertEqual(defaults.string(forKey: "rcAstroExecutablePath"), "/tools/rc-astro")
+        XCTAssertEqual(defaults.data(forKey: "catalogBookmark"), Data([1, 2, 3]))
+        XCTAssertEqual(defaults.object(forKey: "useGpuForStacking") as? Bool, false)
+        XCTAssertEqual(defaults.string(forKey: "onlyOutside"), "kept")
+        XCTAssertTrue(defaults.bool(forKey: SandboxMigration.doneKey))
+        XCTAssertEqual(read("CalibrationMasters/lib/index.json", under: newSupport), "master")
+        XCTAssertEqual(read("LiveStacks/night/session.json", under: newSupport), "session")
+        XCTAssertEqual(read("Photoshop/plugin.txt", under: newSupport), "plugin")
+        XCTAssertEqual(read("catalogs/catalog.bin", under: newCore), "stars")
+        XCTAssertEqual(read("models/denoise.onnx", under: newCore), "weights")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldSupport.appendingPathComponent("LiveStacks").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: preferencesURL.path), "The container stays for a downgrade")
+
+        // A second launch changes nothing, even if the container has changed.
+        defaults.set("/chosen-later", forKey: "catalogDirectory")
+        try SandboxMigration.run(paths: paths, defaults: defaults)
+        XCTAssertEqual(defaults.string(forKey: "catalogDirectory"), "/chosen-later")
+    }
+
+    func testKeepsExistingFolderOutsideTheContainer() throws {
+        // The command-line tool already installed catalogs outside the sandbox.
+        let oldCore = paths.container.appendingPathComponent("Library/Application Support/fyi.Seiza.seiza", isDirectory: true)
+        let newCore = paths.applicationSupport.appendingPathComponent("fyi.Seiza.seiza", isDirectory: true)
+        try write("old", to: "catalogs/catalog.bin", under: oldCore)
+        try write("new", to: "catalogs/catalog.bin", under: newCore)
+
+        try SandboxMigration.run(paths: paths, defaults: defaults)
+
+        XCTAssertEqual(read("catalogs/catalog.bin", under: newCore), "new")
+        XCTAssertEqual(read("catalogs/catalog.bin", under: oldCore), "old", "Nothing is overwritten or lost")
+        XCTAssertTrue(defaults.bool(forKey: SandboxMigration.doneKey))
+    }
+
+    func testFreshInstallWithNoContainerJustRecordsItRan() throws {
+        try SandboxMigration.run(paths: paths, defaults: defaults)
+        XCTAssertTrue(defaults.bool(forKey: SandboxMigration.doneKey))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.applicationSupport.path))
+    }
+
+    func testUnreadablePreferencesLeaveTheFlagUnsetToRetry() throws {
+        try write("not a plist", to: "Library/Preferences/fyi.seiza.mac.plist", under: paths.container)
+        XCTAssertThrowsError(try SandboxMigration.run(paths: paths, defaults: defaults))
+        XCTAssertFalse(defaults.bool(forKey: SandboxMigration.doneKey))
     }
 }
 

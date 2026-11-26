@@ -405,8 +405,7 @@ seiza download-data prebuilt --output /path/to/catalogs
 ```
 
 If you created a catalog directory on the command line, choose that directory
-in Seiza's Settings. The sandbox permission is retained as a security-scoped
-bookmark. The main object catalog supplies named-star and deep-sky overlays,
+in Seiza's Settings. Seiza remembers it as a security-scoped bookmark. The main object catalog supplies named-star and deep-sky overlays,
 `transients.bin` supplies dated transient overlays, and `minor-bodies.bin`
 supplies comet and asteroid positions at the image acquisition time. Solving and
 catalogue loading begin only when requested by Solve or a video operation. If

@@ -66,9 +66,19 @@ final class RcAstroSettings: ObservableObject {
                                relativeTo: nil, bookmarkDataIsStale: &stale)
              return (url, stale)
          },
-         isExecutable: @escaping (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }) {
+         isExecutable: @escaping (String) -> Bool = RcAstroSettings.isRunnableFile) {
         self.defaults = defaults; self.makeBookmark = makeBookmark
         self.readBookmark = readBookmark; self.isExecutable = isExecutable
+    }
+
+    /// A regular file with an execute bit set. The App Sandbox answers
+    /// `access(X_OK)`, and so `FileManager.isExecutableFile`, with "no" for
+    /// every user-selected file, so read the mode bits instead. Unlike
+    /// `access`, this also refuses directories such as an `.app` bundle.
+    nonisolated static func isRunnableFile(atPath path: String) -> Bool {
+        var info = stat()
+        guard stat(path, &info) == 0 else { return false }
+        return info.st_mode & S_IFMT == S_IFREG && info.st_mode & 0o111 != 0
     }
 
     var displayPath: String { defaults.string(forKey: pathKey) ?? "" }
@@ -76,7 +86,9 @@ final class RcAstroSettings: ObservableObject {
     func save(_ url: URL) throws {
         let scope = ParallaxScopedURL(url)
         try withExtendedLifetime(scope) {
-            guard isExecutable(url.path) else { throw SeizaCoreError.message("Choose an executable rc-astro command.") }
+            guard isExecutable(url.path) else {
+                throw SeizaCoreError.message("Choose the rc-astro command itself, not a folder or app. It must be marked executable.")
+            }
             let data = try makeBookmark(url)
             defaults.set(data, forKey: bookmarkKey)
             defaults.set(url.path, forKey: pathKey)

@@ -610,8 +610,8 @@ loader rejected stripped host proc-macro dylibs with a misaligned LINKEDIT strin
 pool. Xcode still controls stripping the final app. Both Rust architecture targets
 are required for the universal build.
 
-Release QA still needs the real licensed StarXTerminator executable from a
-signed sandboxed app, signed-sandbox bookmark behavior, Intel runtime/software encoding,
+Release QA still needs the real licensed StarXTerminator executable from the
+signed app, signed bookmark behavior, Intel runtime/software encoding,
 unsupported codecs, larger-image memory characterization, wider astronomical footage,
 faint gradients, saturated stars, galaxies, and moving labels. The optional
 separator UI does not establish its signed distribution feasibility.
